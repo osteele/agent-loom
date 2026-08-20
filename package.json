@@ -10,7 +10,7 @@
   "scripts": {
     "check": "biome check src/ && tsc --noEmit",
     "fix": "biome check --write src/",
-    "test": "bun test",
+    "test": "sh scripts/test.sh",
     "build": "tsc -p tsconfig.build.json",
     "prepare": "tsc -p tsconfig.build.json"
   },

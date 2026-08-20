@@ -1,0 +1,4 @@
+[test]
+# Redirect HOME before any test module loads, so suites cannot write into the
+# developer's real ~/.claude/agent-mail. See src/testPreload.ts.
+preload = ["./src/testPreload.ts"]
