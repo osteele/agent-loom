@@ -91,6 +91,7 @@ import {
   type Registration,
   capabilityLabels,
   listLive,
+  processInfo,
   setInboundPolicy,
   setMuted,
 } from "./registry.ts";
@@ -177,6 +178,8 @@ const SRC_DIR = dirname(SELF);
 // wrote point at a file that a package install does not contain.
 const ENTRY_EXT = extname(SELF);
 const DAEMON_ENTRY = join(SRC_DIR, `daemon${ENTRY_EXT}`);
+/** Enough of the daemon's command line to tell it from a recycled pid. */
+const DAEMON_ENTRY_NAME = `daemon${ENTRY_EXT}`;
 const CHANNEL_ENTRY = join(SRC_DIR, `channel${ENTRY_EXT}`);
 const NATIVE_AUDIT_ENTRY = join(SRC_DIR, `nativeAudit${ENTRY_EXT}`);
 const PLIST_PATH = join(
@@ -233,16 +236,26 @@ function repeatedFlagValues(args: string[], name: string): string[] {
 
 // --- daemon process management ----------------------------------------------
 
+/** The running daemon's pid, or null.
+ *
+ * Liveness needs identity, the same rule the registry follows: pids are
+ * recycled, so `process.kill(pid, 0)` on a stale pidfile can report a daemon
+ * that exited days ago and whose number now belongs to something unrelated.
+ * The command column settles it -- only the daemon entry point counts. */
 function daemonPid(): number | null {
   if (!existsSync(PID_PATH)) return null;
   const pid = Number(readFileSync(PID_PATH, "utf8").trim());
   if (!Number.isFinite(pid)) return null;
   try {
     process.kill(pid, 0);
-    return pid;
   } catch {
     return null;
   }
+  const info = processInfo([pid]).get(pid);
+  // No scan is not a negative: `ps` can fail, and reporting "stopped" for a
+  // daemon that is serving would send the reader to restart it for nothing.
+  if (!info) return pid;
+  return info.command.includes(DAEMON_ENTRY_NAME) ? pid : null;
 }
 
 function launchdInstalled(): boolean {
@@ -250,7 +263,16 @@ function launchdInstalled(): boolean {
 }
 
 function launchctl(...args: string[]): string {
-  return execFileSync("launchctl", args, { encoding: "utf8" });
+  // stderr piped rather than inherited: a failure here is not always a
+  // failure to the caller (an already-bootstrapped service is the normal way
+  // `start` finds a running daemon), and launchd's own complaint printing
+  // underneath a "daemon already running" line reads as a contradiction.
+  // Node folds the captured stderr into the thrown error's message, so a
+  // genuine failure still says why.
+  return execFileSync("launchctl", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function guiDomain(): string {
@@ -258,13 +280,39 @@ function guiDomain(): string {
   return `gui/${uid}`;
 }
 
-function cmdStart(): void {
+/** Whether a daemon answers on the configured port, whatever the pidfile says.
+ * The authority for "is one already running" when the pidfile is untrustworthy. */
+async function daemonServing(): Promise<boolean> {
+  const config = loadConfig();
+  try {
+    const resp = await fetch(`http://127.0.0.1:${config.port}/health`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function cmdStart(): Promise<void> {
   if (daemonPid() !== null) {
     console.log(`daemon already running (pid ${daemonPid()})`);
     return;
   }
   if (launchdInstalled()) {
-    launchctl("bootstrap", guiDomain(), PLIST_PATH);
+    try {
+      launchctl("bootstrap", guiDomain(), PLIST_PATH);
+    } catch (error) {
+      // Already bootstrapped is the common case here, and launchd reports it
+      // as an errno rather than anything parseable. Ask the daemon itself
+      // instead of the pidfile: a stale pidfile is exactly how someone ends up
+      // running `start` against a daemon that is already serving.
+      if (await daemonServing()) {
+        console.log("daemon already running (launchd)");
+        return;
+      }
+      throw error;
+    }
     console.log("daemon started via launchd");
   } else {
     ensureDirs();
@@ -296,7 +344,7 @@ function cmdStop(): void {
   console.log(`daemon stopped (pid ${pid})`);
 }
 
-function cmdRestart(): void {
+async function cmdRestart(): Promise<void> {
   if (launchdInstalled() && daemonPid() !== null) {
     launchctl("kickstart", "-k", `${guiDomain()}/${LAUNCHD_LABEL}`);
     console.log("daemon restarted (launchd kickstart)");
@@ -305,7 +353,7 @@ function cmdRestart(): void {
   cmdStop();
   // brief pause for the port to free
   sleepSync(500);
-  cmdStart();
+  await cmdStart();
 }
 
 function cmdGraceful(): void {
@@ -1927,13 +1975,13 @@ switch (cmd) {
     cmdCoordination(flags, rest);
     break;
   case "start":
-    cmdStart();
+    await cmdStart();
     break;
   case "stop":
     cmdStop();
     break;
   case "restart":
-    cmdRestart();
+    await cmdRestart();
     break;
   case "graceful":
   case "reload":

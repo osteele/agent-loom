@@ -100,7 +100,6 @@ function json(data: unknown, status = 200): Response {
 }
 
 ensureDirs();
-writeFileSync(PID_PATH, String(process.pid));
 
 const server = await serve({
   port: config.port,
@@ -229,6 +228,12 @@ const server = await serve({
     return json({ error: "not found" }, 404);
   },
 });
+
+// Claimed only once the port is ours. Written before the bind, a second
+// daemon losing the race for the port would overwrite the pidfile with its own
+// pid and then exit, leaving the file pointing at a dead process while the
+// real daemon kept running -- which reads downstream as "daemon: stopped".
+writeFileSync(PID_PATH, String(process.pid));
 
 log(`daemon started pid=${process.pid} port=${config.port}`);
 

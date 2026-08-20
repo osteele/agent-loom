@@ -807,3 +807,48 @@ test("a daemon duplicate is read by reason, not just by status", async () => {
     rmSync(project, { recursive: true });
   }
 });
+
+test("status trusts the daemon pidfile only when the pid is still the daemon", async () => {
+  // A pidfile is a claim about a number, and numbers get reused. A daemon that
+  // exited days ago left 85066 behind; something unrelated later held that pid
+  // and `status` reported a daemon that was not there. Identity, not liveness.
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-daemonpid-"));
+  const home = join(root, "home");
+  const data = join(home, ".claude", "agent-mail");
+  mkdirSync(data, { recursive: true });
+  const cli = join(import.meta.dir, "cli.ts");
+  const env = { ...process.env, HOME: home };
+
+  const runStatus = async (): Promise<string> => {
+    const child = Bun.spawn([process.execPath, cli, "status"], {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const text = await new Response(child.stdout).text();
+    await child.exited;
+    return text;
+  };
+
+  // A live pid that is not the daemon: this test process itself.
+  writeFileSync(join(data, "daemon.pid"), String(process.pid));
+  expect(await runStatus()).toContain("daemon: stopped");
+
+  // A live pid whose command *is* the daemon entry point. Named to match what
+  // `ps` will show, since that is the whole signal.
+  const stand_in = join(root, "daemon.ts");
+  writeFileSync(stand_in, "await new Promise((r) => setTimeout(r, 30_000));\n");
+  const daemon = Bun.spawn([process.execPath, stand_in], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  try {
+    writeFileSync(join(data, "daemon.pid"), String(daemon.pid));
+    expect(await runStatus()).toContain(`daemon: running (pid ${daemon.pid})`);
+  } finally {
+    daemon.kill();
+    await daemon.exited;
+    rmSync(root, { recursive: true, force: true });
+  }
+  // Two CLI spawns, each paying module load plus a health probe.
+}, 30_000);
