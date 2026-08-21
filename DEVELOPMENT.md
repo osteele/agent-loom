@@ -7,17 +7,22 @@ which executes the TypeScript sources directly:
 git clone https://github.com/osteele/agent-mail
 cd agent-mail
 bun install
-bun link
-agent-mail install
+bun src/cli.ts install --replace-claude --replace-codex
 ```
 
-[`bun link`](https://bun.com/docs/pm/cli/link) points the `agent-mail` command
-at the checkout instead of the installed package; make sure Bun's global binary
-directory, usually `~/.bun/bin`, is on `PATH`.
+Run checkout commands as `bun src/cli.ts <command>`. The installer records the
+runtime that invoked it, so the command above registers the TypeScript entry
+points with Bun and runs the development daemon under Bun. The replacement
+flags matter when a package-style Node registration already exists.
+
+`bun link` is still useful for exercising the package command from a checkout,
+but it does not select Bun as the runtime: the package's `agent-mail` bin points
+at built `dist/cli.js`, whose shebang selects Node. Use the explicit source
+command when the Bun development path is what you intend to test.
 
 ```bash
 bun run check    # biome + tsc --noEmit
-bun test
+bun run test     # isolated HOME; do not invoke the Bun test runner directly
 bun run build    # emit dist/, as the published package ships
 ```
 

@@ -30,7 +30,7 @@
  *   agent-mail start | stop | restart | graceful | status | logs [-f]
  *
  * Setup:
- *   agent-mail install     LaunchAgent (boot start) + Claude mcpServers entry
+ *   agent-mail install     LaunchAgent (boot start) + Claude/Codex MCP entries
  *   agent-mail uninstall
  */
 
@@ -201,6 +201,31 @@ const CLAUDE_SETTINGS = join(
  * so an install never hardcodes a runtime the user may not have. */
 function runtimePath(): string {
   return process.execPath;
+}
+
+interface InstallPlan {
+  schemaVersion: 1;
+  runtime: string;
+  entries: {
+    daemon: string;
+    mcp: string;
+    nativeAudit: string;
+  };
+  launchAgent: string;
+}
+
+/** Paths and runtime that a real install will persist. */
+function installPlan(): InstallPlan {
+  return {
+    schemaVersion: 1,
+    runtime: runtimePath(),
+    entries: {
+      daemon: DAEMON_ENTRY,
+      mcp: CHANNEL_ENTRY,
+      nativeAudit: NATIVE_AUDIT_ENTRY,
+    },
+    launchAgent: PLIST_PATH,
+  };
 }
 
 // --- argument parsing --------------------------------------------------------
@@ -1593,6 +1618,16 @@ function uninstallNativeAuditHook(): void {
 }
 
 function cmdInstall(flags: Record<string, string | boolean>): void {
+  if (flags["dry-run"] === true) {
+    console.log(JSON.stringify(installPlan(), null, 2));
+    return;
+  }
+  if (process.platform !== "darwin") {
+    console.error(
+      "agent-mail install configures a macOS launchd service. On Linux, register the MCP server as shown in the README and run `agent-mail start` for a bare daemon.",
+    );
+    process.exit(1);
+  }
   ensureDirs();
   if (!existsSync(CONFIG_PATH)) {
     const configTemplate = [
@@ -1912,9 +1947,11 @@ Daemon (launchd-aware):
 Setup:
   mcp                   Run the MCP server on stdio. This is what an agent's
                         config launches; you do not run it by hand.
-  install [--native-audit] [--no-codex] [--replace-claude] [--replace-codex]
+  install [--dry-run] [--native-audit] [--no-codex]
+          [--replace-claude] [--replace-codex]
                         Install daemon and Claude/Codex MCP entries; optionally
-                        audit native Claude SendMessage traffic
+                        audit native Claude SendMessage traffic. macOS only;
+                        --dry-run prints the versioned install plan anywhere.
   uninstall             Remove integrations owned by this checkout
 
 Config: ~/.config/agent-mail/config.toml  (port, Slack webhook/bot token)`;

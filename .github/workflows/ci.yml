@@ -31,11 +31,22 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - name: The checkout installer keeps sources on Bun and TypeScript
+        run: |
+          plan=$(bun src/cli.ts install --dry-run)
+          echo "$plan"
+          test "$(echo "$plan" | jq -r .schemaVersion)" = 1
+          test "$(echo "$plan" | jq -r .runtime)" = "$(command -v bun)"
+          echo "$plan" | jq -e '
+            [.entries.daemon, .entries.mcp, .entries.nativeAudit]
+            | all(endswith(".ts"))
+          '
+
       - name: Lint and typecheck
         run: bun run check
 
       - name: Test
-        run: bun test
+        run: bun run test
 
   # Installs the way the README tells a user to, and runs what they would run.
   # The suite above cannot catch this class of fault: it exercises the sources
@@ -76,6 +87,18 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/consumer"
           ./node_modules/.bin/agent-mail --help
+
+      - name: The installer keeps the distribution on Node and built JavaScript
+        run: |
+          cd "$RUNNER_TEMP/consumer"
+          plan=$(./node_modules/.bin/agent-mail install --dry-run)
+          echo "$plan"
+          test "$(echo "$plan" | jq -r .schemaVersion)" = 1
+          test "$(echo "$plan" | jq -r .runtime)" = "$(command -v node)"
+          echo "$plan" | jq -e '
+            [.entries.daemon, .entries.mcp, .entries.nativeAudit]
+            | all(endswith(".js"))
+          '
 
       # Through `agent-mail mcp`, which is what the README's add-mcp line
       # configures a client to run — not the server file behind it.

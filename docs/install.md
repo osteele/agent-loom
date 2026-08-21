@@ -5,6 +5,10 @@ conflict that can silently disable channel push. The
 [README](../README.md#updating-and-restarting) covers the normal
 install and update flow.
 
+The installer is macOS-only because it provisions a launchd service.
+`agent-mail install --dry-run` is available on every platform and prints the
+runtime and entry points it would persist without changing anything.
+
 ## Existing entries
 
 The installer uses `codex mcp add` when no Codex entry exists. It preserves an

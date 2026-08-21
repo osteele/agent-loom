@@ -22,8 +22,9 @@ Sessions address each other by stable names across project directories.
 
 - **Durable delivery.** A message waits in the project's inbox and is read
   when a session next attaches. Receipts record what happened to it.
-- **Any endpoint.** Claude Code and Codex sessions get the same tools and
-  inboxes; the CLI, an HTTP client, or a tool such as
+- **Any endpoint.** agent-mail speaks standard MCP over stdio, so any MCP
+  client can use the same tools and inboxes. Setup is tested with Claude Code
+  and Codex; the CLI, an HTTP client, or a tool such as
   [weft](https://github.com/osteele/weft) reporting a finished job can send
   too.
 - **Push into Claude Code.** With the channel enabled, mail arrives in a
@@ -67,7 +68,7 @@ project, so a session in any directory stays reachable.
 
 Requires Node 22.18 or later. Restart existing sessions afterward.
 
-### Adding the daemon
+### Adding the daemon on macOS
 
 An optional daemon adds [Slack echo](#connecting-to-slack), the
 presence snapshot that keeps the [status line](#claude-code-status-line) fast,
@@ -80,19 +81,22 @@ agent-mail status
 ```
 
 Mail is delivered with or without it: when no daemon answers, a session writes
-to the project's spool itself. The daemon is a background service, currently
-macOS launchd, and nothing about delivery depends on it.
+to the project's spool itself. On macOS, the daemon runs as a launchd service.
+Nothing about delivery depends on it.
 
 `agent-mail install` also registers agent-mail with Claude Code and Codex, so
 it can replace the one-liner. Running both is harmless (an entry that
 already points somewhere else is reported and left alone), but there is no
 reason to.
 
-**Platforms.** macOS and Linux are tested in CI. Windows is unsupported:
+On Linux, the CLI and MCP server work, and `agent-mail start` starts a detached
+bare-mode daemon; agent-mail does not install a Linux boot service.
+
+**Platforms.** The CLI and MCP server are tested on macOS and Linux. The
+daemon installer is macOS-only. Windows is unsupported:
 session liveness is read from `ps`, and without it the registry cannot prune
 sessions or expire claims. See
-[docs/decisions/0005](docs/decisions/0005-no-windows-support.md). Version
-0.1.0, built for its author's machine first.
+[docs/decisions/0005](docs/decisions/0005-no-windows-support.md).
 
 ### Enabling channel push in Claude Code
 

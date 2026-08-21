@@ -18,3 +18,4 @@ names the one it supersedes.
 | [0003](0003-addressing-automation-notifications.md) | Automation notifications are addressed to the submitting session | 2026-08-16 |
 | [0004](0004-authority-forced-recovery.md) | A declared authority can force recovery; it is recorded, not verified | 2026-08-16 |
 | [0005](0005-no-windows-support.md) | Windows is unsupported, and stays out of CI | 2026-08-19 |
+| [0006](0006-bun-checkout-node-distribution.md) | Use Bun for checkout sources and Node for distributions | 2026-08-21 |

@@ -401,17 +401,21 @@ direct spool append when no daemon answers.
 ### `install`
 
 ```
-agent-mail install [--native-audit] [--no-codex] [--replace-claude] [--replace-codex]
+agent-mail install [--dry-run] [--native-audit] [--no-codex]
+                   [--replace-claude] [--replace-codex]
 ```
 
-Writes the config template if missing, installs the LaunchAgent and
+On macOS, writes the config template if missing, installs the LaunchAgent and
 bootstraps the daemon to start at boot, and registers agent-mail with Claude
 Code and Codex. Existing registrations that match this install are preserved;
 ones that point elsewhere are left unchanged unless `--replace-claude` or
 `--replace-codex` is passed. `--no-codex` skips Codex registration, and
 `--native-audit` adds a Claude hook that audits native SendMessage traffic.
-[install.md](install.md) covers the edge cases, including the plugin
-registration conflict that silently disables channel push.
+
+`--dry-run` is available on every platform and makes no changes. It prints a
+versioned JSON object containing the runtime and entry points that an install
+would persist. [install.md](install.md) covers the edge cases, including the
+plugin registration conflict that silently disables channel push.
 
 ### `uninstall`
 
