@@ -104,8 +104,8 @@ last two minutes), or `[idle <age>]`, flagged `stale?` after a day. Recency uses
 the latest of Claude Code's session-activity timestamp, the session's last
 agent-mail tool call, and its registration time. Treat long-idle sessions as
 probably vacant rather than as active agents. The same recency rule decides the
-peer count the [status line](../README.md#claude-code-status-line) reports. A peer idle past
-a day no longer counts as company.
+peer count the [status line](../README.md#status-lines) reports. A peer idle
+past a day no longer counts as company.
 
 Channel-enabled sessions receive push delivery. Running sessions without the
 flag can arm a Monitor on their spool file. Other sessions read the spool on

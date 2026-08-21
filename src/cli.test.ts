@@ -105,6 +105,50 @@ test("status-line prints nothing and exits 0 with no session to name", async () 
   }
 });
 
+test("status-line accepts Kimi cwd payload and launcher session id", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-kimi-statusline-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const cli = join(import.meta.dir, "cli.ts");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(project, { recursive: true });
+
+  const env = {
+    ...process.env,
+    HOME: home,
+    AGENT_SESSION_ID: "kimi-launcher-session",
+    CLAUDE_CODE_SESSION_ID: undefined,
+    CODEX_THREAD_ID: undefined,
+  };
+
+  try {
+    const child = Bun.spawn([process.execPath, cli, "status-line", "--debug"], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env,
+    });
+    child.stdin.write(
+      JSON.stringify({
+        model: "K3",
+        cwd: project,
+        sessionId: "kimi-native-session",
+        contextUsage: 0.25,
+      }),
+    );
+    child.stdin.end();
+
+    expect(await child.exited).toBe(0);
+    expect((await new Response(child.stdout).text()).trim()).not.toBe("");
+    const debug = await new Response(child.stderr).text();
+    expect(debug).toContain(`project: ${realpathSync(project)}`);
+    expect(debug).toContain("session: kimi-launcher-session");
+    expect(debug).not.toContain("session: kimi-native-session");
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
 test("listeners --no-sync emits snapshot JSON without pruning registry", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-listeners-"));
   const home = join(root, "home");

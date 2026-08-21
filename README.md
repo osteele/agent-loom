@@ -71,7 +71,7 @@ Requires Node 22.18 or later. Restart existing sessions afterward.
 ### Adding the daemon on macOS
 
 An optional daemon adds [Slack echo](#connecting-to-slack), the
-presence snapshot that keeps the [status line](#claude-code-status-line) fast,
+presence snapshot that keeps the [status line](#status-lines) fast,
 and pruning of dead sessions without waiting for someone to run a command:
 
 ```bash
@@ -258,12 +258,12 @@ Environment-variable equivalents are `AGENT_MAIL_SLACK_BOT_TOKEN` and
 agent-mail slack-dashboard
 ```
 
-### Claude Code status line
+### Status lines
 
 `agent-mail status-line` prints this session's display name, whether or not
 anyone else is in the project. The name is the session's address: agents in
 other projects refer to it by that name. It prints nothing only when the
-payload carries no session id.
+command cannot resolve a session ID.
 
 `--fields` prints one tab-separated line instead: the name, peer count, unread
 messages, `push`/`pull` for whether mail reaches this session on its own, and
@@ -271,6 +271,8 @@ unprocessed weft jobs this session submitted. A status line can then show all
 five from a single invocation, rather than reimplementing agent-mail's
 registry and spool semantics in shell. Fields are only ever appended, so a
 consuming script can split positionally.
+
+#### Claude Code
 
 It reads Claude Code's [statusLine](https://code.claude.com/docs/en/statusline)
 JSON payload on stdin, taking the session ID and project directory from it. Add
@@ -305,9 +307,48 @@ Then point `statusLine` at it in `~/.claude/settings.json`:
 { "statusLine": { "type": "command", "command": "bash ~/.claude/statusline.sh" } }
 ```
 
+#### Kimi Code
+
+Kimi Code supports an external status-line command through `[status_line]` in
+`~/.kimi-code/tui.toml`. Its native `sessionId` is not the identity registered
+by the agent-mail MCP process. Launch Kimi through a wrapper that exports a
+fresh `AGENT_SESSION_ID`; the MCP server and status-line command inherit that
+same value. Without it, the example omits agent-mail identity and mailbox
+fields instead of joining unrelated IDs.
+
+Copy the checked-in formatter from a clone of this repository:
+
+```bash
+install -m 755 examples/status-lines/kimi.sh ~/.kimi-code/statusline.sh
+```
+
+Then configure Kimi:
+
+```toml
+[status_line]
+command = "bash ~/.kimi-code/statusline.sh"
+```
+
+Run `/reload-tui` or restart Kimi. The formatter shows the agent-mail name,
+delivery mode, unread messages, unprocessed weft jobs, and peers:
+
+```
+Quiet Lantern ↻ · 2 unread · 3 unprocessed · 1 peer
+```
+
+Kimi renders only the first stdout line. It caps the command at 300 ms and
+falls back to its built-in footer on failure, so the example uses only one
+external process.
+
+#### Clients without an external status command
+
+OpenCode, Codex, and Gemini can run the agent-mail MCP server, but their native
+footers do not currently accept an external command or custom agent-mail field.
+Gemini and Codex can show their own session identifiers; those identifiers are
+not substitutes for the agent-mail display name or mailbox fields.
+
 [docs/status-line.md](docs/status-line.md) specifies the `--fields` output and
-collects advice for the script itself: the timing budget, multi-row output,
-sizing with `$COLUMNS`, and what the push/pull and weft-jobs fields mean.
+the separate Claude Code and Kimi Code payload and rendering constraints.
 
 ## Dashboards
 
@@ -386,8 +427,8 @@ without replacing other hooks.
 - [docs/cli.md](docs/cli.md) — every subcommand and flag. `agent-mail help`
   prints a compact version of the same listing.
 - [docs/configuration.md](docs/configuration.md) — every config key.
-- [docs/status-line.md](docs/status-line.md) — the `--fields` output, the
-  timing budget, and multi-row status lines.
+- [docs/status-line.md](docs/status-line.md) — status-line client adapters,
+  `--fields` output, and timing constraints.
 - [docs/http-api.md](docs/http-api.md) — the daemon's HTTP endpoints, for
   automations that should not shell out to the CLI.
 - [docs/automation.md](docs/automation.md) — the read-only machine-readable

@@ -780,18 +780,22 @@ function cmdListeners(flags: Record<string, string | boolean>): void {
 
 // --- status line -------------------------------------------------------------
 
-/** The part of Claude Code's statusLine payload this command reads. */
+/** Status-line payload fields this command consumes.
+ *
+ * Claude Code supplies session_id plus workspace paths. Kimi supplies cwd;
+ * its agent-mail identity comes from the launcher-minted AGENT_SESSION_ID,
+ * because Kimi's payload sessionId belongs to a different namespace. */
 interface StatusLinePayload {
   session_id?: string;
   cwd?: string;
   workspace?: { current_dir?: string; project_dir?: string };
 }
 
-/** Read the statusLine payload from stdin when there is one.
+/** Read a client status-line payload from stdin when there is one.
  *
- * The tty guard matters: Claude Code pipes the payload in, but someone running
- * this by hand has an interactive stdin and would otherwise hang waiting for
- * input that never comes. */
+ * The tty guard matters: supported clients pipe the payload in, but someone
+ * running this by hand has an interactive stdin and would otherwise hang
+ * waiting for input that never comes. */
 async function readStatusLinePayload(): Promise<StatusLinePayload | undefined> {
   if (process.stdin.isTTY) return undefined;
   try {
@@ -1933,10 +1937,10 @@ Dashboards:
                         Post / refresh the editable Slack dashboard
 
 Status line:
-  status-line [--project <dir>] [--session <id>] [--debug]
-                        Print this session's display name when another live
-                        session shares the project, nothing when alone. Reads
-                        Claude Code's statusLine JSON payload on stdin.
+  status-line [--project <dir>] [--session <id>] [--fields] [--debug]
+                        Print this session's display name, or tab-separated
+                        identity fields with --fields. Reads a supported client
+                        payload on stdin and falls back to session-id env vars.
 
 Daemon (launchd-aware):
   start | stop | restart   Manage the daemon process
