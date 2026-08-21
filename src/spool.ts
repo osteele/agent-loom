@@ -3,6 +3,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { withFileLock } from "./lock.ts";
 import {
   INBOX_DIR,
   ensureDirs,
@@ -242,9 +243,11 @@ function recentMessages(project: string, limit = 1000): Message[] {
   return out;
 }
 
-/** Best-effort idempotency and loop protection around the append-only spool.
- * The daemon serializes normal calls; direct fallback appenders can still race,
- * but O_APPEND keeps the log intact and downstream message ids remain unique. */
+/** Idempotency and loop protection around the append-only spool.
+ *
+ * The daemon and a timed-out sender's direct fallback are separate processes.
+ * Their admission read and append must be one filesystem transaction: if both
+ * read before either appends, the same attempt token can otherwise land twice. */
 export function appendMessageGuarded(
   msg: Message,
   options: AdmissionOptions,
@@ -262,14 +265,16 @@ export function appendMessageGuarded(
           ).toISOString(),
         }),
   };
-  const decision = admissionDecision(
-    recentMessages(msg.project),
-    prepared,
-    options,
-    nowMs,
-  );
-  if (decision.status !== "accept") return decision;
-  return { status: "spooled", id, path: appendMessage(prepared) };
+  return withFileLock(`${spoolPath(msg.project)}.lock`, () => {
+    const decision = admissionDecision(
+      recentMessages(msg.project),
+      prepared,
+      options,
+      nowMs,
+    );
+    if (decision.status !== "accept") return decision;
+    return { status: "spooled", id, path: appendMessage(prepared) };
+  });
 }
 
 export function appendReceipt(

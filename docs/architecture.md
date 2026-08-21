@@ -53,6 +53,9 @@ generated session identity has two forms:
 Pass a session's full name, display name, or session ID as `session` to reach it
 specifically. Use `list_sessions` to discover these values. A display name is
 matched without regard to case and must be unambiguous in the target project.
+These names belong to agent-mail; they are not aliases for the separate agent
+IDs returned by Claude's native `ListAgents`, and must not be passed to native
+`SendMessage`.
 Claude Code supplies its ID in `CLAUDE_CODE_SESSION_ID`; current Codex supplies
 `CODEX_THREAD_ID`. Older hosts that expose neither receive a generated ID when
 their MCP server starts. A deliberate Claude `/rename` is preserved verbatim as
@@ -154,9 +157,11 @@ counts any recipients whose channel push cannot reach them.
 
 Use the `delivery_status` MCP tool or `agent-mail receipts` to inspect the
 append-only state changes. A `spooled` receipt confirms durable local storage.
-Later receipts are per receiving session. This is observability rather than
-exactly-once delivery: direct fallback writers can race, and a process can fail
-after receiving a push but before recording its receipt.
+Later receipts are per receiving session. Admission is serialized per project,
+so a daemon request and its timed-out direct fallback cannot append the same
+attempt concurrently. Delivery receipts remain observability rather than proof
+of attention: a process can fail after receiving a push but before recording
+its receipt.
 
 ## Threads
 

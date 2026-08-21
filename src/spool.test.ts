@@ -1,12 +1,23 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { projectSlug } from "./paths.ts";
+import { withFileLock } from "./lock.ts";
+import { projectSlug, spoolPath } from "./paths.ts";
+import { sleepSync } from "./runtime.ts";
 import {
   type AdmissionOptions,
   type Message,
   admissionDecision,
+  appendMessage,
+  type appendMessageGuarded,
   isExpired,
   messageVisibleToSession,
   shouldEchoMessageToSlack,
@@ -132,6 +143,67 @@ test("zero disables body deduplication and rate limiting", () => {
       now,
     ),
   ).toEqual({ status: "accept" });
+});
+
+test("guarded admission serializes a daemon and direct fallback", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-spool-race-"));
+  const project = join(root, "project");
+  const marker = join(root, "child-started");
+  const script = join(root, "append.ts");
+  mkdirSync(project);
+  const msg: Message = {
+    ...base,
+    ts: new Date().toISOString(),
+    project,
+    attemptKey: "same-delivery-attempt",
+  };
+  const spoolModule = join(import.meta.dir, "spool.ts");
+  writeFileSync(
+    script,
+    `
+      import { writeFileSync } from "node:fs";
+      import { appendMessageGuarded } from ${JSON.stringify(spoolModule)};
+      writeFileSync(${JSON.stringify(marker)}, "ready");
+      const result = appendMessageGuarded(
+        ${JSON.stringify(msg)},
+        ${JSON.stringify(admission)},
+      );
+      console.log(JSON.stringify(result));
+    `,
+  );
+
+  const lockPath = `${spoolPath(project)}.lock`;
+  try {
+    const child = withFileLock(lockPath, () => {
+      const subprocess = Bun.spawn([process.execPath, script], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(marker) && Date.now() < deadline) sleepSync(10);
+      expect(existsSync(marker)).toBe(true);
+      // The child writes the marker immediately before guarded admission. Give
+      // it time to reach the held lock, then let the daemon-side append win.
+      sleepSync(50);
+      appendMessage({ ...msg, id: "daemon-copy" });
+      return subprocess;
+    });
+
+    expect(await child.exited).toBe(0);
+    const result = JSON.parse(
+      await new Response(child.stdout).text(),
+    ) as ReturnType<typeof appendMessageGuarded>;
+    expect(result).toEqual({
+      status: "duplicate",
+      id: "daemon-copy",
+      reason: "attempt-key",
+    });
+    expect(
+      readFileSync(spoolPath(project), "utf8").trim().split("\n"),
+    ).toHaveLength(1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("audit and expired messages are not visible to a receiving session", () => {

@@ -334,7 +334,10 @@ Claude Code ships two things that overlap with agent-mail.
 **[Cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging)**
 (`ListAgents` and `SendMessage`, Claude Code 2.1.224) sends a message to a
 named, running Claude session on the same machine. It needs no daemon and no
-configuration. For a direct message to a live Claude session, use it.
+configuration. For a direct message to a live Claude session, use it with the
+name or id returned by `ListAgents`. Agent-mail display names such as `Quiet
+Lantern` are a separate namespace and resolve through `list_sessions` and
+`send_mail`, not native `SendMessage`.
 
 **[Agent teams](https://code.claude.com/docs/en/agent-teams)** (experimental,
 off by default) let one session spawn teammates that share a task list and
