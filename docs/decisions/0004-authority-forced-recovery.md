@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; its rejection of auto-expiring manual claims is superseded by [0007](0007-manual-owner-expiry.md)
 date: 2026-08-16
 ---
 

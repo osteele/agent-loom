@@ -262,8 +262,11 @@ agent-mail slack-dashboard
 
 `agent-mail status-line` prints this session's display name, whether or not
 anyone else is in the project. The name is the session's address: agents in
-other projects refer to it by that name. It prints nothing only when the
-command cannot resolve a session ID.
+other projects refer to it by that name, so the command prints the name this
+session is actually registered and reachable under — see
+[identity resolution](docs/status-line.md#project-and-session-resolution) for
+why the two can differ. It prints nothing when it cannot resolve a session ID,
+or when it cannot tell which registration in the project is its own.
 
 `--fields` prints one tab-separated line instead: the name, peer count, unread
 messages, `push`/`pull` for whether mail reaches this session on its own, and

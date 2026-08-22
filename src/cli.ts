@@ -58,6 +58,7 @@ import {
   coordinationConflictAdvice,
   ownerStatus as coordinationOwnerStatus,
   describeCoordination,
+  isDisplaceable,
   listCoordination,
   recoverCoordination,
 } from "./coordination.ts";
@@ -81,9 +82,11 @@ import {
   ensureDirs,
 } from "./paths.ts";
 import {
+  hostAncestorPids,
   liveInProject,
   peersInProject,
   readListenerSnapshot,
+  sessionAddress,
   statusLineName,
 } from "./presence.ts";
 import {
@@ -900,24 +903,43 @@ async function cmdStatusLine(
         : (payload?.session_id ?? sessionIdFromEnv());
     const sessions = liveInProject(project);
     const names = claudeSessions();
-    const name = statusLineName(project, sessionId, names);
+    // Claude mints a new session id on `/clear` without respawning MCP servers,
+    // so the payload id can differ from the one this session is registered and
+    // addressable under. Resolve the routable identity once and key every field
+    // off it — a name, unread count, or job list attached to an unreachable id
+    // describes a session that, as far as every peer is concerned, is not there.
+    const hostPids = hostAncestorPids();
+    const now = Date.now();
+    // Deliberately not falling back to the payload id: a session that cannot
+    // identify its own registration has no address, and every field below
+    // already reports nothing rather than guessing. Falling back would let it
+    // claim counts belonging to an id no peer can reach.
+    const address = sessionAddress(sessions, sessionId, names, now, hostPids);
+    const name = statusLineName(
+      project,
+      sessionId,
+      names,
+      sessions,
+      hostPids,
+      now,
+    );
     if (flags.fields === true) {
       // One spawn, every field the status line wants. A shell script that
       // wanted these separately would have to either call this command four
       // times or reimplement agent-mail's semantics against the registry and
       // spool — the second is how a display layer starts owning facts it does
       // not compute.
-      const peers = peersInProject(sessions, sessionId, names, Date.now());
+      const peers = peersInProject(sessions, sessionId, names, now, hostPids);
       console.log(
         [
           name,
           peers.length,
-          sessionId ? unreadForSession(project, sessionId) : 0,
-          pushDeliveryFor(sessions, sessionId),
+          address ? unreadForSession(project, address) : 0,
+          pushDeliveryFor(sessions, address),
           // Appended, never inserted: the consuming shell script splits
           // positionally and lives outside this repo, so reordering silently
           // mislabels every field after the one that moved.
-          weftJobsField(sessionId),
+          weftJobsField(address),
         ].join("\t"),
       );
       return;
@@ -925,9 +947,18 @@ async function cmdStatusLine(
     if (debug) {
       console.error(`project: ${project}`);
       console.error(`session: ${sessionId ?? "(no session id)"}`);
-      for (const r of sessions) {
+      // A blank name and a wrong-looking peer count have the same cause often
+      // enough to be worth naming outright: the host rotated its session id and
+      // the channel server is still registered under the old one.
+      if (address !== sessionId) {
         console.error(
-          `  ${r.sessionId ?? "-"} pid ${r.pid} [${sessionActivity(r, names)}]`,
+          `address: ${address ?? "(unresolved)"} — host reports a different session id than this session is registered under; restart it to re-sync`,
+        );
+      }
+      for (const r of sessions) {
+        const self = address !== undefined && r.sessionId === address;
+        console.error(
+          `  ${r.sessionId ?? "-"} pid ${r.pid} [${sessionActivity(r, names)}]${self ? " <- this session" : ""}`,
         );
       }
     }
@@ -1217,9 +1248,18 @@ function describeWork(lease: WorkLease, live = listLive()): string {
     ? `${lease.resource.label} (${lease.resource.type}:${lease.resource.key})`
     : `${lease.resource.type}:${lease.resource.key}`;
   const activity = lease.activity ? ` — ${lease.activity}` : "";
-  const ownerStatus =
-    coordinationOwnerStatus(lease.owner, live, lease.createdAt) !== "offline"
-      ? ""
+  const status = coordinationOwnerStatus(
+    lease.owner,
+    live,
+    lease.createdAt,
+    undefined,
+    true,
+    lease.updatedAt,
+  );
+  const ownerStatus = !isDisplaceable(status)
+    ? ""
+    : status === "expired"
+      ? " [owner expired]"
       : " [owner offline]";
   return `${lease.id} ${displayName(lease.project)}/${label} — ${lease.owner.label} [${lease.state}]${activity} [updated ${lease.updatedAt}]${ownerStatus}`;
 }
@@ -1282,11 +1322,16 @@ function cmdWork(
           activity:
             typeof flags.activity === "string" ? flags.activity : undefined,
           ownerIsLive: (candidate, existing) =>
-            coordinationOwnerStatus(
-              candidate,
-              listLive(),
-              existing.createdAt,
-            ) !== "offline",
+            !isDisplaceable(
+              coordinationOwnerStatus(
+                candidate,
+                listLive(),
+                existing.createdAt,
+                undefined,
+                true,
+                existing.updatedAt,
+              ),
+            ),
         },
       ),
     );

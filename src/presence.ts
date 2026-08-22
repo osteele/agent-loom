@@ -23,7 +23,12 @@
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { PRESENCE_SNAPSHOT_PATH, canonicalProject } from "./paths.ts";
-import { type Registration, listLive, listLiveInProject } from "./registry.ts";
+import {
+  type Registration,
+  listLive,
+  listLiveInProject,
+  scanParentPids,
+} from "./registry.ts";
 import {
   type ClaudeSessionMeta,
   isStaleSession,
@@ -148,27 +153,79 @@ export function liveInProject(
   return snapshot.sessions.filter((r) => canonicalProject(r.cwd) === canon);
 }
 
-/** Live, non-stale sessions other than `sessionId`, from a set already scoped
- * to one project. Pure: no filesystem, no clock. */
+export interface SelfResolution {
+  /** Live, non-stale sessions in the project. */
+  present: Registration[];
+  /** This session's own registration, when it could be identified. */
+  self: Registration | undefined;
+}
+
+/** Which of `sessions` is the caller — the one question the status line and the
+ * peer count both have to answer, and used to answer separately.
+ *
+ * The subtlety is that a session has two identities that can drift apart.
+ * Claude Code injects `CLAUDE_CODE_SESSION_ID` into an MCP server's spawn
+ * environment and never updates it, but mints a *new* session id on `/clear`
+ * without respawning MCP servers. From then on the channel server is registered
+ * under the old id while the status-line payload carries the new one, and they
+ * never reconcile on their own.
+ *
+ * That matters beyond cosmetics: a session's full name IS its address, derived
+ * from whichever id you feed it. Naming the payload id invents an identity that
+ * exists in the name store and in no routing table — peers asked to deliver to
+ * it correctly report that no such session exists. So identity is resolved
+ * once, here, and both surfaces consume the result.
+ *
+ * `hostPids` are the caller's process ancestors (see `hostAncestorPids`). The
+ * status-line process and the channel server are both children of the same host
+ * agent process, so a registration whose `parentPid` is among them is ours even
+ * when the session ids disagree. Pure: no filesystem, no clock. */
+export function resolveSelf(
+  sessions: Registration[],
+  sessionId: string | undefined,
+  meta: Map<string, ClaudeSessionMeta>,
+  nowMs: number,
+  hostPids: readonly number[] = [],
+): SelfResolution {
+  const present = sessions.filter((r) => {
+    const m = r.sessionId ? meta.get(r.sessionId) : undefined;
+    return !isStaleSession(m?.status, lastActivityMs(r, m), nowMs);
+  });
+  const byId = sessionId
+    ? present.find((r) => r.sessionId === sessionId)
+    : undefined;
+  if (byId) return { present, self: byId };
+  if (hostPids.length > 0) {
+    const hosts = new Set(hostPids);
+    const shared = present.filter(
+      (r) => r.parentPid !== undefined && hosts.has(r.parentPid),
+    );
+    // Exactly one, or this is not an identification. Two registrations under one
+    // host pid would mean guessing, and guessing an address is the bug.
+    if (shared.length === 1) return { present, self: shared[0] };
+  }
+  return { present, self: undefined };
+}
+
+/** Live, non-stale sessions other than the caller, from a set already scoped to
+ * one project. Pure: no filesystem, no clock. */
 export function peersInProject(
   sessions: Registration[],
   sessionId: string | undefined,
   meta: Map<string, ClaudeSessionMeta>,
   nowMs: number,
+  hostPids: readonly number[] = [],
 ): Registration[] {
-  const present = sessions.filter((r) => {
-    const m = r.sessionId ? meta.get(r.sessionId) : undefined;
-    return !isStaleSession(m?.status, lastActivityMs(r, m), nowMs);
-  });
-  const self = sessionId
-    ? present.find((r) => r.sessionId === sessionId)
-    : undefined;
+  const { present, self } = resolveSelf(
+    sessions,
+    sessionId,
+    meta,
+    nowMs,
+    hostPids,
+  );
   if (self) return present.filter((r) => r !== self);
-  // No entry matches this session id. Happens after `/clear`: Claude mints a new
-  // session id without respawning MCP servers, so the registry still holds the
-  // old one. Assume one of these entries is us and discount it — erring toward
-  // hiding the name is right, since the name only earns its space when it
-  // disambiguates.
+  // Unidentified: assume one of these entries is us and discount it, so the
+  // count stays right even when the name cannot be recovered.
   return present.slice(0, Math.max(0, present.length - 1));
 }
 
@@ -185,7 +242,67 @@ export function statusLineName(
   project: string,
   sessionId: string | undefined,
   meta: Map<string, ClaudeSessionMeta>,
+  sessions: Registration[] = [],
+  hostPids: readonly number[] = [],
+  nowMs = Date.now(),
 ): string {
-  if (!sessionId) return "";
-  return sessionDisplayName(sessionId, meta.get(sessionId), project);
+  const address = sessionAddress(sessions, sessionId, meta, nowMs, hostPids);
+  if (!address) return "";
+  return sessionDisplayName(address, meta.get(address), project);
+}
+
+/** The session id other agents can actually route to, which is the one its
+ * channel server registered under — not necessarily the one the host reports
+ * now. Everything the status line shows about "this session" (its name, its
+ * unread count, its pending jobs) keys off this, so a rotated id cannot make a
+ * surface describe a session nobody can reach.
+ *
+ * Undefined when the caller has a registration it cannot pick out: with no
+ * routable address there is nothing honest to show, and a name that peers
+ * reject is worse than no name. With no registrations at all there is nothing
+ * to contradict, so the host's own id stands. Pure: no filesystem. */
+export function sessionAddress(
+  sessions: Registration[],
+  sessionId: string | undefined,
+  meta: Map<string, ClaudeSessionMeta>,
+  nowMs: number,
+  hostPids: readonly number[] = [],
+): string | undefined {
+  const { present, self } = resolveSelf(
+    sessions,
+    sessionId,
+    meta,
+    nowMs,
+    hostPids,
+  );
+  if (self?.sessionId) return self.sessionId;
+  return present.length === 0 ? sessionId : undefined;
+}
+
+/** How far up the process tree to look for the host agent. The status-line
+ * command runs as `claude -> sh -> agent-mail` today; the slack allows for a
+ * wrapper or two without inviting a walk to pid 1. */
+const HOST_ANCESTOR_DEPTH = 4;
+
+/** This process's ancestor pids, nearest first.
+ *
+ * Impure and the only process inspection on the status-line path, so it stays
+ * bounded: at most `HOST_ANCESTOR_DEPTH` single-pid `ps` queries (~4ms each on
+ * Darwin). Returns what it has if the walk is cut short — a partial chain still
+ * identifies the host in the common case, and `resolveSelf` treats an empty one
+ * as simply having no ancestry evidence. */
+export function hostAncestorPids(
+  startPid: number = process.ppid,
+  depth = HOST_ANCESTOR_DEPTH,
+): number[] {
+  const chain: number[] = [];
+  let pid = startPid;
+  for (let i = 0; i < depth; i++) {
+    if (!Number.isInteger(pid) || pid <= 1) break;
+    chain.push(pid);
+    const parent = scanParentPids([pid]).get(pid);
+    if (parent === undefined) break;
+    pid = parent;
+  }
+  return chain;
 }

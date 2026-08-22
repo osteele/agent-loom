@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -10,7 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaimStore } from "./claims.ts";
 import {
+  MANUAL_OWNER_TTL_MS,
   coordinationConflictAdvice,
+  isDisplaceable,
   listCoordination,
   ownerStatus,
   recordForcedRecovery,
@@ -388,4 +391,127 @@ test("the store liveness gate is what a forced recovery stands down", () => {
   const released = claimStore.recover(project, claim.id, () => false);
   expect(released.id).toBe(claim.id);
   expect(claimStore.list(project)).toHaveLength(0);
+});
+
+// --- manual owners expire -----------------------------------------------------
+//
+// A manual owner has no recorded process, so it can never be proven dead and
+// used to be held until an operator broke it by hand. Containerized agents left
+// these behind routinely. Time is the only available bound, since identity is
+// not.
+
+const MANUAL = { id: "cli:codex-root", label: "codex-root" };
+
+test("a fresh manual owner still holds its resource", () => {
+  const created = "2026-08-13T00:00:00.000Z";
+  const now = Date.parse(created) + MANUAL_OWNER_TTL_MS - 60_000;
+  const status = ownerStatus(
+    MANUAL,
+    [],
+    created,
+    undefined,
+    true,
+    undefined,
+    now,
+  );
+  expect(status).toBe("manual");
+  expect(isDisplaceable(status)).toBe(false);
+});
+
+test("a manual owner past the TTL becomes displaceable", () => {
+  const created = "2026-08-13T00:00:00.000Z";
+  const now = Date.parse(created) + MANUAL_OWNER_TTL_MS;
+  const status = ownerStatus(
+    MANUAL,
+    [],
+    created,
+    undefined,
+    true,
+    undefined,
+    now,
+  );
+  expect(status).toBe("expired");
+  expect(isDisplaceable(status)).toBe(true);
+});
+
+test("a manual owner that renews keeps its resource", () => {
+  // Renewal is the escape hatch that makes the TTL safe for long work: an owner
+  // still on the job updates the record and the clock restarts.
+  const created = "2026-08-13T00:00:00.000Z";
+  const renewed = "2026-08-20T00:00:00.000Z";
+  const now = Date.parse(renewed) + 60_000;
+  expect(ownerStatus(MANUAL, [], created, undefined, true, renewed, now)).toBe(
+    "manual",
+  );
+});
+
+test("expiry never applies to an owner with a real process identity", () => {
+  // The TTL is a fallback for records that cannot be checked, not a cap on how
+  // long a live session may hold something.
+  const old = "2026-01-01T00:00:00.000Z";
+  const registration = {
+    cwd: "/proj",
+    pid: 42,
+    sessionId: "s",
+    procStart: "same process",
+    started: old,
+  };
+  expect(
+    ownerStatus(
+      {
+        id: "s",
+        label: "Live",
+        sessionId: "s",
+        pid: 42,
+        procStart: "same process",
+      },
+      [registration],
+      old,
+      undefined,
+      true,
+      undefined,
+      Date.parse(old) + 400 * 24 * 3600_000,
+    ),
+  ).toBe("live");
+});
+
+test("an expired manual owner is reported as recoverable", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-expired-"));
+  temporaryDirectories.push(root);
+  const project = join(root, "project");
+  mkdirSync(project);
+  const workStore = new WorkStore(join(root, "work"));
+  const lease = workStore.acquire(
+    project,
+    { type: "task", key: "abandoned" },
+    MANUAL,
+  );
+  // Backdate the lease past the TTL the way an abandoned container would.
+  const stale = new Date(
+    Date.now() - MANUAL_OWNER_TTL_MS - 60_000,
+  ).toISOString();
+  // Locate the lease rather than assume the store's on-disk layout.
+  const workRoot = join(root, "work");
+  const path = readdirSync(workRoot, { recursive: true })
+    .map((entry) => join(workRoot, String(entry)))
+    .find((candidate) => candidate.endsWith(`${lease.id}.json`));
+  if (!path) throw new Error(`lease file for ${lease.id} not found`);
+  writeFileSync(
+    path,
+    JSON.stringify({
+      ...JSON.parse(readFileSync(path, "utf8")),
+      createdAt: stale,
+      updatedAt: stale,
+    }),
+  );
+  const entry = listCoordination({
+    project,
+    registrations: [],
+    processes: { processes: new Map(), reliable: true },
+    claimStore: new ClaimStore(join(root, "claims")),
+    workStore: new WorkStore(join(root, "work")),
+  })[0];
+  expect(entry.ownerStatus).toBe("expired");
+  expect(entry.condition).toBe("owner-expired");
+  expect(entry.recoverable).toBe(true);
 });

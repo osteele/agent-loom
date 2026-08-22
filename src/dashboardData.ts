@@ -3,7 +3,11 @@
  * Reads the spools and the live registry directly — no daemon dependency, so a
  * dashboard works even when the daemon is down. */
 
-import { type CoordinationEntry, listCoordination } from "./coordination.ts";
+import {
+  type CoordinationEntry,
+  isDisplaceable,
+  listCoordination,
+} from "./coordination.ts";
 import { canonicalProject, displayName } from "./paths.ts";
 import { readListenerSnapshot } from "./presence.ts";
 import { readProcessSnapshot } from "./processSnapshot.ts";
@@ -123,7 +127,7 @@ function activeWork(entries: CoordinationEntry[]): WorkEntry[] {
       sourcePath: entry.sourcePaths[0],
       owner: entry.owner.label,
       ownerSessionId: entry.owner.sessionId,
-      ownerLive: entry.ownerStatus !== "offline",
+      ownerLive: !isDisplaceable(entry.ownerStatus),
       state: entry.state ?? "working",
       activity: entry.activity,
       updatedAt: entry.updatedAt,

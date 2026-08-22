@@ -6,8 +6,10 @@ this page specifies identity resolution, `--fields`, and each client's
 rendering constraints.
 
 The name prints whether or not anyone else is in the project. It is the
-session's address, so it stays visible even when no peers are present. The
-command prints nothing only when it cannot resolve a session ID.
+session's address, so it stays visible even when no peers are present — and
+because it is the address, it is always one that resolves. The command prints
+nothing when it cannot resolve a session ID, and when it can resolve one but
+cannot tell which registration is its own (see below).
 
 ## Project and session resolution
 
@@ -30,6 +32,27 @@ supplies `cwd`, while a launcher supplies `AGENT_SESSION_ID`. Kimi's native
 `sessionId` is deliberately ignored: it belongs to a different namespace from
 the identity inherited by the agent-mail MCP process. Treating the two as the
 same would display a plausible but incorrect address.
+
+The resolved ID is then reconciled against the registry, because the two can
+drift. Claude Code injects `CLAUDE_CODE_SESSION_ID` into an MCP server's spawn
+environment and never updates it, but mints a new session ID on `/clear` without
+respawning MCP servers. From then on the channel server is registered under the
+old ID while the payload carries the new one. Since the name is the address,
+naming the payload ID would advertise an identity that exists in no registry and
+that peers cannot deliver to.
+
+So the command reports the ID the session is registered and addressable under:
+
+1. the registration whose session ID matches, if there is one;
+2. otherwise the registration spawned by the same host agent process, which the
+   status-line process and the channel server share as a parent;
+3. otherwise nothing, unless no registration exists at all — with nothing to
+   contradict, the resolved ID stands.
+
+Every `--fields` value keys off that address, not the payload ID, so a rotated
+session cannot report another session's unread count or weft jobs. An empty
+name where one is expected means the session could not be identified in its own
+project; restarting it re-syncs the two IDs.
 
 ## `--fields`
 

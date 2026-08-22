@@ -234,7 +234,9 @@ agent owns. Non-overlapping siblings can be claimed independently.
 owned by the current session. Claims held by an MCP session are released on a
 normal session shutdown. A new path acquisition automatically removes a
 conflicting claim only when agent-mail proves that its exact owner process is
-dead. It never displaces an idle, live, or manually registered owner.
+dead. It never displaces an idle or live owner. A manual owner (`cli:<label>`,
+which has no process to test) is displaced only after it has gone 24 hours
+without renewal — see "Manual owner expiry" below.
 
 A missing claimed path is not by itself stale: agents may claim a file before
 creating it. If a session crashes, use `list_coordination` to inspect its owner,
@@ -266,8 +268,10 @@ activity. `release_work` relinquishes responsibility.
 Coordination CLI commands run from a registered Claude Code or Codex shell use
 that host's session identity, so their leases and claims have the same liveness
 and shutdown behavior as MCP tool calls. CLI commands outside a registered
-agent session require an `--owner` label and create deliberately durable manual
-ownership. Release those records explicitly when the operator's work ends.
+agent session require an `--owner` label and create manual ownership, which
+persists across process exits rather than being released at shutdown. Release
+those records explicitly when the operator's work ends; a manual record that is
+neither released nor renewed expires after 24 hours.
 
 `list_work` defaults to the current project. Pass `all_projects: true` for a
 cross-project view, or filter by resource type or owner. `list_sessions` also
@@ -283,10 +287,12 @@ The current path is optional provenance, not identity.
 `list_coordination` combines work leases, path claims, and experiment-number
 reservations in one project or cross-project view. Each record has a condition:
 
-- `healthy` — its session owner is live, or it has a deliberately durable
-  manual owner. The listing reports the owner status separately.
+- `healthy` — its session owner is live, or it has a manual owner that is
+  within its expiry window. The listing reports the owner status separately.
 - `owner-offline` — the recorded session and process identity is definitively
   dead; the record is eligible for agent recovery.
+- `owner-expired` — a manual owner has not renewed within 24 hours; the record
+  is eligible for agent recovery without a declared authority.
 - `owner-unverifiable` — the caller cannot obtain reliable process evidence.
   The record remains protected; this is distinct from deliberate `manual`
   ownership.
@@ -299,16 +305,17 @@ reservations in one project or cross-project view. Each record has a condition:
   and its owner should release it.
 
 `recover_coordination` revalidates liveness and releases another session's
-record only when that exact owner process is dead. Live and manual owners remain
-protected by default. Before
+record when that exact owner process is dead, or when a manual owner has
+expired. Live owners, unverifiable owners, and manual owners still inside their
+expiry window remain protected by default. Before
 recovering an experiment reservation whose file is absent, inspect jobs and
 artifacts that may already use its ID. Normal owner release remains
 `release_claim` or `release_work`.
 
-To release a record whose owner is live, manual, or unverifiable — the common
-case being a manually registered CLI owner (`cli:<label>`) whose session has
-ended, which has no process to revalidate and so is otherwise unrecoverable —
-pass an `authority`:
+To release a record whose owner is live, unverifiable, or a manual owner that
+has not yet expired — the last being a CLI owner (`cli:<label>`) whose session
+ended less than 24 hours ago, which has no process to revalidate — pass an
+`authority`:
 
 ```bash
 agent-mail coordination recover --id <coordination-id> \
@@ -333,6 +340,27 @@ separate: it changes only on `acquire_work` or `update_work`. Legacy CLI records
 that contain a PID but no session ID are process-owned rather than manual;
 agent-mail uses process start time to reject a recycled PID and makes the record
 recoverable once the original process is gone.
+
+### Manual owner expiry
+
+A manual owner records no process, so agent-mail cannot prove it dead and, until
+2026-08-21, held its resource until an operator broke the lock by hand. That is
+how containerized agents left claims behind: the container exits, the label it
+registered under identifies nothing, and the record outlives every process that
+knew about it.
+
+Elapsed time is the only bound available when identity is not. A manual record
+that has gone 24 hours without an update classifies as `expired`, which makes it
+displaceable by the next acquisition and recoverable without a declared
+authority. The window is deliberately long: it is far past any interactive edit
+set, so expiry means abandoned rather than slow.
+
+The clock runs from the record's last update, not its creation, so an operator
+who is genuinely still working renews by working — `update_work` restarts it.
+The bound applies *only* to owners with no recorded process. A session-owned
+lease is classified by process identity however long it has been held; expiry is
+a fallback for records that cannot be checked, not a cap on how long a live
+session may hold something.
 
 Sandboxed clients that cannot invoke `ps` use the daemon's fresh, PID-scoped
 process-evidence snapshot. The snapshot lists every inspected owner PID and is

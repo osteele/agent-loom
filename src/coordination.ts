@@ -25,10 +25,42 @@ import {
 } from "./work.ts";
 
 export type CoordinationKind = "work" | "path-claim" | "experiment-claim";
-export type OwnerStatus = "live" | "offline" | "manual" | "unverifiable";
+export type OwnerStatus =
+  | "live"
+  | "offline"
+  | "manual"
+  | "expired"
+  | "unverifiable";
+
+/** How long a manual owner holds a resource without renewing it.
+ *
+ * A manual owner is one with no recorded process — a `--owner <label>` CLI
+ * acquisition from outside a registered session. There is nothing to test for
+ * liveness, so such a record can never be proven dead and, before this, was
+ * held until an operator broke it by hand. Real ones outlived their creator
+ * routinely: a containerized agent claiming this way leaves the claim behind
+ * when the container exits, and the label it left is not an identity anything
+ * can check.
+ *
+ * A time bound is the only mechanism available, since identity is not. It is a
+ * weaker guarantee than the process check the session-owned path gets, and it
+ * is deliberately long: 24h is far past any interactive edit set, so expiry
+ * means abandoned rather than slow. An owner that is genuinely still working
+ * renews by updating the record. */
+export const MANUAL_OWNER_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Whether an acquisition may take this resource from its current owner
+ * without operator authority.
+ *
+ * The one predicate every acquisition, recovery, and display path consults, so
+ * that "can this be taken" cannot drift between them. */
+export function isDisplaceable(status: OwnerStatus): boolean {
+  return status === "offline" || status === "expired";
+}
 export type CoordinationCondition =
   | "healthy"
   | "owner-offline"
+  | "owner-expired"
   | "owner-unverifiable"
   | "source-missing"
   | "target-absent"
@@ -62,6 +94,8 @@ export function ownerStatus(
   createdAt?: string,
   processEvidence?: Map<number, ProcessInfo> | ProcessScan,
   registrationsReliable = true,
+  lastActivityAt?: string,
+  nowMs = Date.now(),
 ): OwnerStatus {
   if (owner.sessionId && owner.pid !== undefined) {
     const registration = registrations.find(
@@ -87,7 +121,15 @@ export function ownerStatus(
     }
     return "live";
   }
-  if (owner.pid === undefined) return "manual";
+  if (owner.pid === undefined) {
+    // No process was ever recorded, so liveness is unknowable and only elapsed
+    // time can distinguish a working owner from an abandoned record.
+    const since = Date.parse(lastActivityAt ?? createdAt ?? "");
+    if (Number.isFinite(since) && nowMs - since >= MANUAL_OWNER_TTL_MS) {
+      return "expired";
+    }
+    return "manual";
+  }
 
   const scan =
     processEvidence instanceof Map
@@ -155,10 +197,9 @@ function claimEntry(
     processes,
     registrationsReliable,
   );
-  const registration =
-    status === "offline"
-      ? undefined
-      : ownerRegistration(claim.owner, registrations);
+  const registration = isDisplaceable(status)
+    ? undefined
+    : ownerRegistration(claim.owner, registrations);
   const ownerActivity = {
     ...(registration?.lastSeen ? { ownerLastSeen: registration.lastSeen } : {}),
     ...(registration?.started ? { ownerStartedAt: registration.started } : {}),
@@ -177,15 +218,16 @@ function claimEntry(
       owner: claim.owner,
       ownerStatus: status,
       ...ownerActivity,
-      condition:
-        status === "offline"
-          ? "owner-offline"
-          : status === "unverifiable"
-            ? "owner-unverifiable"
-            : files.length
-              ? "materialized"
-              : "awaiting-materialization",
-      recoverable: status === "offline",
+      condition: isDisplaceable(status)
+        ? status === "expired"
+          ? "owner-expired"
+          : "owner-offline"
+        : status === "unverifiable"
+          ? "owner-unverifiable"
+          : files.length
+            ? "materialized"
+            : "awaiting-materialization",
+      recoverable: isDisplaceable(status),
       createdAt: claim.createdAt,
       updatedAt: claim.createdAt,
     };
@@ -205,15 +247,16 @@ function claimEntry(
     owner: claim.owner,
     ownerStatus: status,
     ...ownerActivity,
-    condition:
-      status === "offline"
-        ? "owner-offline"
-        : status === "unverifiable"
-          ? "owner-unverifiable"
-          : paths.some((path) => !existsSync(path))
-            ? "target-absent"
-            : "healthy",
-    recoverable: status === "offline",
+    condition: isDisplaceable(status)
+      ? status === "expired"
+        ? "owner-expired"
+        : "owner-offline"
+      : status === "unverifiable"
+        ? "owner-unverifiable"
+        : paths.some((path) => !existsSync(path))
+          ? "target-absent"
+          : "healthy",
+    recoverable: isDisplaceable(status),
     createdAt: claim.createdAt,
     updatedAt: claim.createdAt,
   };
@@ -231,11 +274,13 @@ function workEntry(
     lease.createdAt,
     processes,
     registrationsReliable,
+    // A manual owner renews by updating its lease, so the TTL runs from the
+    // last update rather than from creation.
+    lease.updatedAt,
   );
-  const registration =
-    status === "offline"
-      ? undefined
-      : ownerRegistration(lease.owner, registrations);
+  const registration = isDisplaceable(status)
+    ? undefined
+    : ownerRegistration(lease.owner, registrations);
   const sources = lease.resource.sourcePath ? [lease.resource.sourcePath] : [];
   return {
     id: lease.id,
@@ -250,15 +295,16 @@ function workEntry(
     ownerStatus: status,
     ...(registration?.lastSeen ? { ownerLastSeen: registration.lastSeen } : {}),
     ...(registration?.started ? { ownerStartedAt: registration.started } : {}),
-    condition:
-      status === "offline"
-        ? "owner-offline"
-        : status === "unverifiable"
-          ? "owner-unverifiable"
-          : sources.some((path) => !existsSync(path))
-            ? "source-missing"
-            : "healthy",
-    recoverable: status === "offline",
+    condition: isDisplaceable(status)
+      ? status === "expired"
+        ? "owner-expired"
+        : "owner-offline"
+      : status === "unverifiable"
+        ? "owner-unverifiable"
+        : sources.some((path) => !existsSync(path))
+          ? "source-missing"
+          : "healthy",
+    recoverable: isDisplaceable(status),
     state: lease.state,
     activity: lease.activity,
     createdAt: lease.createdAt,
@@ -344,6 +390,9 @@ export function describeCoordination(entry: CoordinationEntry): string {
 export function coordinationConflictAdvice(entry: CoordinationEntry): string {
   if (entry.ownerStatus === "offline") {
     return `owner is offline; retry acquisition or run agent-mail coordination recover --id ${entry.id}`;
+  }
+  if (entry.ownerStatus === "expired") {
+    return `owner is manual and has not renewed in ${Math.round(MANUAL_OWNER_TTL_MS / 3_600_000)}h; retry acquisition or run agent-mail coordination recover --id ${entry.id}`;
   }
   if (entry.ownerStatus === "unverifiable") {
     return `owner liveness is unverifiable in this sandbox; inspect from a normal terminal, then run agent-mail coordination recover --id ${entry.id} if it reports owner-offline`;
@@ -440,7 +489,16 @@ export function recoverCoordination(
   ): boolean =>
     forced
       ? false
-      : ownerStatus(owner, listLive(), record.createdAt) !== "offline";
+      : !isDisplaceable(
+          ownerStatus(
+            owner,
+            listLive(),
+            record.createdAt,
+            undefined,
+            true,
+            "updatedAt" in record ? record.updatedAt : undefined,
+          ),
+        );
 
   if (forced) {
     // Write the audit record BEFORE the destructive delete: if the process dies

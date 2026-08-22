@@ -44,6 +44,7 @@ import { loadConfig } from "./config.ts";
 import {
   coordinationConflictAdvice,
   describeCoordination,
+  isDisplaceable,
   listCoordination,
   ownerStatus,
   recoverCoordination,
@@ -696,8 +697,11 @@ function workOwnerIsLive(
   owner: WorkOwner,
   registrations = listLive(),
   createdAt?: string,
+  updatedAt?: string,
 ): boolean {
-  return ownerStatus(owner, registrations, createdAt) !== "offline";
+  return !isDisplaceable(
+    ownerStatus(owner, registrations, createdAt, undefined, true, updatedAt),
+  );
 }
 
 function describeWork(lease: WorkLease, registrations = listLive()): string {
@@ -1177,7 +1181,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         claimOwner,
         {
           ownerIsLive: (owner, claim) =>
-            ownerStatus(owner, listLive(), claim.createdAt) !== "offline",
+            !isDisplaceable(ownerStatus(owner, listLive(), claim.createdAt)),
         },
       ),
     );
@@ -1456,6 +1460,7 @@ mcp.oninitialized = () => {
       config.inboundPolicy,
       ownerProcStart,
       ownerInstanceId,
+      process.ppid,
     );
   }
 };
@@ -1473,6 +1478,7 @@ register(
   config.inboundPolicy,
   ownerProcStart,
   ownerInstanceId,
+  process.ppid,
 );
 
 // --- Spool watcher: push lines appended after startup -----------------------

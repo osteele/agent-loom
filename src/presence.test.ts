@@ -18,6 +18,8 @@ import {
   peersInProject,
   readListenerSnapshot,
   readPresenceSnapshot,
+  resolveSelf,
+  sessionAddress,
   statusLineName,
   writePresenceSnapshot,
 } from "./presence.ts";
@@ -259,4 +261,80 @@ test("legacy and canonical spellings of one directory collapse to one project", 
   const meta = metaMap({ self: { status: "busy", name: "Self Name" } });
   expect(statusLineName(canon, "self", meta)).toBe("Self Name");
   if (existsSync(root)) rmSync(root, { recursive: true, force: true });
+});
+
+// --- identity after the host rotates its session id --------------------------
+//
+// Claude Code mints a new session id on `/clear` but does not respawn MCP
+// servers, so the channel server stays registered under the id it was spawned
+// with. The session's full name IS its address, so naming the rotated id would
+// advertise an identity no peer can route to — the failure that sent mail to a
+// "Glad Badger" that existed in the name store and in no registry.
+
+test("a rotated session id still resolves to the registered identity", () => {
+  const sessions = [reg({ pid: 10, sessionId: "spawned", parentPid: 99 })];
+  const meta = metaMap({
+    spawned: { status: "busy", name: "Registered Name" },
+    rotated: { status: "busy", name: "Rotated Name" },
+  });
+  // Same host process, different session id: this is us.
+  const { self } = resolveSelf(sessions, "rotated", meta, NOW, [50, 99]);
+  expect(self?.sessionId).toBe("spawned");
+  expect(sessionAddress(sessions, "rotated", meta, NOW, [99])).toBe("spawned");
+  expect(statusLineName("/proj", "rotated", meta, sessions, [99], NOW)).toBe(
+    "Registered Name",
+  );
+});
+
+test("a rotated session id is not counted as its own peer", () => {
+  const sessions = [
+    reg({ pid: 10, sessionId: "spawned", parentPid: 99 }),
+    peer("other", 0, 11),
+  ];
+  const meta = metaMap({ spawned: { status: "busy", name: "Registered" } });
+  // Identified, so the peer list is exact rather than the discount guess.
+  const peers = peersInProject(sessions, "rotated", meta, NOW, [99]);
+  expect(peers.map((p) => p.sessionId)).toEqual(["other"]);
+});
+
+test("an unidentifiable session shows no name rather than an unroutable one", () => {
+  // Registrations exist but none is attributable to this caller: there is no
+  // address to show, and a name peers reject is worse than no name.
+  const sessions = [
+    reg({ pid: 10, sessionId: "a", parentPid: 1 }),
+    reg({ pid: 11, sessionId: "b", parentPid: 2 }),
+  ];
+  const meta = metaMap({ rotated: { status: "busy", name: "Rotated Name" } });
+  expect(sessionAddress(sessions, "rotated", meta, NOW, [77])).toBeUndefined();
+  expect(statusLineName("/proj", "rotated", meta, sessions, [77], NOW)).toBe(
+    "",
+  );
+});
+
+test("two registrations under one host pid is not an identification", () => {
+  // Guessing between them would be guessing an address, which is the bug.
+  const sessions = [
+    reg({ pid: 10, sessionId: "a", parentPid: 99 }),
+    reg({ pid: 11, sessionId: "b", parentPid: 99 }),
+  ];
+  const meta = metaMap({});
+  expect(
+    resolveSelf(sessions, "rotated", meta, NOW, [99]).self,
+  ).toBeUndefined();
+});
+
+test("with no registrations the host's own id still names the session", () => {
+  // Nothing to contradict: a session whose channel server has not registered
+  // yet should not blank its own name.
+  const meta = metaMap({ fresh: { status: "busy", name: "Fresh Name" } });
+  expect(sessionAddress([], "fresh", meta, NOW, [99])).toBe("fresh");
+  expect(statusLineName("/proj", "fresh", meta, [], [99], NOW)).toBe(
+    "Fresh Name",
+  );
+});
+
+test("an exact session-id match wins without consulting ancestry", () => {
+  const sessions = [reg({ pid: 10, sessionId: "self", parentPid: 42 })];
+  const meta = metaMap({ self: { status: "busy", name: "Self Name" } });
+  expect(sessionAddress(sessions, "self", meta, NOW, [])).toBe("self");
 });

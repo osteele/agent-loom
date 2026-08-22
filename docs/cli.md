@@ -16,7 +16,8 @@ Two conventions apply everywhere below.
   `claim-path`, `work acquire`, `coordination request-transfer`,
   `coordination respond-transfer`) take their owner from the calling session's
   environment when run inside a registered agent shell. Outside one, they
-  require `--owner <label>` and create explicit manual ownership.
+  require `--owner <label>` and create explicit manual ownership, which expires
+  24 hours after its last update.
 
 ## Messaging
 
@@ -249,8 +250,9 @@ agent-mail coordination list [--project <dir> | --all] [--kind <kind>]
 ```
 
 Lists every active coordination record with its owner status and recovery
-condition: `healthy`, `owner-offline`, `owner-unverifiable`, `source-missing`,
-`target-absent`, `awaiting-materialization`, or `materialized`. `--kind`
+condition: `healthy`, `owner-offline`, `owner-expired`, `owner-unverifiable`,
+`source-missing`, `target-absent`, `awaiting-materialization`, or
+`materialized`. `--kind`
 filters to `work`, `path-claim`, or `experiment-claim`; `--owner` and
 `--condition` filter further. `--json` prints a versioned object.
 
@@ -260,9 +262,10 @@ filters to `work`, `path-claim`, or `experiment-claim`; `--owner` and
 agent-mail coordination recover --id <coordination-id> [--authority <text>]
 ```
 
-Releases a stale work lease or claim after revalidating that the owning
-process is definitively dead. A live or manually registered owner is left in
-place. `--authority <text>` skips the liveness proof and force-releases; the
+Releases a stale work lease or claim after revalidating that the owning process
+is definitively dead, or that a manual owner has gone 24 hours without renewal.
+A live owner, an unverifiable one, or a manual owner still inside that window is
+left in place. `--authority <text>` skips the liveness proof and force-releases; the
 text is recorded verbatim in an append-only audit log at
 `~/.claude/agent-mail/forced-recoveries.jsonl` and never verified, so pass it
 only on explicit operator instruction.

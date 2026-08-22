@@ -33,6 +33,11 @@ export interface Registration {
   // live for 10 days because a system daemon had inherited its pid)
   instanceId?: string; // random identity of this channel process; distinguishes
   // restarts even when process inspection is temporarily unavailable
+  parentPid?: number; // host agent process that spawned this channel server
+  // (Claude Code, Codex, ...). Recorded because `sessionId` is frozen at spawn
+  // while Claude's live session id rotates on `/clear` — the host pid is then
+  // the only thing tying this registration to the terminal the user is looking
+  // at. See `resolveSelf` in presence.ts.
 
   sessionId?: string; // host session id (Claude Code's; a random uuid under Codex)
   name?: string; // session name snapshot at register time; NOT used for display
@@ -328,6 +333,7 @@ export function register(
   defaultInboundPolicy: InboundPolicy = "accept",
   knownProcStart?: string,
   knownInstanceId?: string,
+  parentPid?: number,
 ): string {
   ensureDirs();
   preserveRegisteredSessionNames();
@@ -369,6 +375,11 @@ export function register(
       pid,
       ...(procStart ? { procStart } : {}),
       ...(knownInstanceId ? { instanceId: knownInstanceId } : {}),
+      ...(parentPid !== undefined
+        ? { parentPid }
+        : preserved?.parentPid !== undefined
+          ? { parentPid: preserved.parentPid }
+          : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(name ? { name } : {}),
       ...(client ? { client } : {}),
@@ -579,4 +590,40 @@ export function listLiveInProject(project: string): Registration[] {
     readEntries((entry) => canonicalProject(entry.cwd) === canon),
     false,
   );
+}
+
+/** Parent pid per requested pid. Separate from `scanProcesses` on purpose: that
+ * one's `-o pid=,lstart=,command=` parse is position-sensitive (lstart is five
+ * tokens), and threading a sixth field through it would put a well-tested
+ * parser at risk for one caller. Two integers need no such care.
+ *
+ * Same single-pid-loop discipline as `scanProcesses` — see the note there on
+ * why a multi-row `-p` query is never issued. A pid absent from the result has
+ * no discoverable parent (gone, or the inspector failed). */
+export function scanParentPids(
+  pids: number[],
+  executable = PS_EXECUTABLE,
+): Map<number, number> {
+  const parents = new Map<number, number>();
+  const wanted = new Set(pids);
+  if (wanted.size === 0) return parents;
+  const queries =
+    wanted.size <= PS_LOOP_MAX
+      ? [...wanted].map((pid) => ["-ww", "-p", String(pid)])
+      : [["-ww", "-A"]];
+  for (const query of queries) {
+    const res = spawnSync(executable, [...query, "-o", "pid=,ppid="], {
+      encoding: "utf8",
+    });
+    if (res.error || res.signal) continue;
+    for (const line of (res.stdout ?? "").split("\n")) {
+      const tokens = line.trim().split(/\s+/);
+      if (tokens.length < 2) continue;
+      const pid = Number(tokens[0]);
+      const ppid = Number(tokens[1]);
+      if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue;
+      if (wanted.has(pid)) parents.set(pid, ppid);
+    }
+  }
+  return parents;
 }
