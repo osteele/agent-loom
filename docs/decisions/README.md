@@ -22,3 +22,4 @@ was decided when it was decided.
 | [0005](0005-no-windows-support.md) | Windows is unsupported, and stays out of CI | 2026-08-19 |
 | [0006](0006-bun-checkout-node-distribution.md) | Use Bun for checkout sources and Node for distributions | 2026-08-21 |
 | [0007](0007-manual-owner-expiry.md) | Manual coordination owners expire after 24 hours | 2026-08-21 |
+| [0008](0008-hook-reminder-trust-limits.md) | Hook reminders announce only: no receipts, no peer text, no Stop-blocking | 2026-08-22 |

@@ -136,6 +136,24 @@ back to the session identity environment variables. It always exits 0.
 [status-line.md](status-line.md) specifies the field order and the Claude Code
 and Kimi Code adapters.
 
+### `remind`
+
+```
+agent-mail remind --format codex|kimi|gemini [--event <name>] [--session <id>] [--project <dir>]
+```
+
+Prints an unread-mail reminder for a harness hook, or nothing. Harnesses
+without channel push (Codex, Kimi, Gemini) run this command from their hooks
+and inject its stdout into the model's context. The answer comes from the
+daemon's unread-summary snapshot: the command edge-triggers on a new newest
+message and re-reminds after 15 minutes while the same mail stays unread. It
+always exits 0 and keeps stdout machine-clean; a stale or missing snapshot
+prints nothing and appends a rate-limited line to
+`~/.claude/agent-mail/remind-diagnostics.log`. The session id resolves from
+`--session`, then the stdin hook payload's `session_id`, then
+`GEMINI_SESSION_ID`, then the session identity environment variables.
+[reminders.md](reminders.md) covers the mechanism and the invariants.
+
 ## Coordination claims
 
 Claims are filesystem transactions under `~/.claude/agent-mail/claims/`,
@@ -407,19 +425,41 @@ direct spool append when no daemon answers.
 ```
 agent-mail install [--dry-run] [--native-audit] [--no-codex]
                    [--replace-claude] [--replace-codex]
+                   [--replace-kimi] [--replace-gemini] [--replace-opencode]
 ```
 
 On macOS, writes the config template if missing, installs the LaunchAgent and
 bootstraps the daemon to start at boot, and registers agent-mail with Claude
-Code and Codex. Existing registrations that match this install are preserved;
-ones that point elsewhere are left unchanged unless `--replace-claude` or
-`--replace-codex` is passed. `--no-codex` skips Codex registration, and
-`--native-audit` adds a Claude hook that audits native SendMessage traffic.
+Code and Codex. It also registers Kimi Code, Gemini CLI, and OpenCode when their
+user config directories exist. Existing registrations that match this install are
+preserved; ones that point elsewhere are left unchanged unless the matching
+`--replace-claude`, `--replace-codex`, `--replace-kimi`, `--replace-gemini`, or
+`--replace-opencode` flag is passed. `--no-codex` skips Codex registration, and `--native-audit`
+adds a Claude hook that audits native SendMessage traffic.
 
 `--dry-run` is available on every platform and makes no changes. It prints a
 versioned JSON object containing the runtime and entry points that an install
 would persist. [install.md](install.md) covers the edge cases, including the
 plugin registration conflict that silently disables channel push.
+
+### `hooks`
+
+```
+agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+```
+
+Installs, removes, or reports the unread-mail reminder hooks for pull-only
+harnesses. With no harness flag, install and uninstall apply to every harness
+whose config directory exists (`~/.codex`, `~/.kimi-code`, `~/.gemini`). Codex
+gains a synchronous `UserPromptSubmit` hook and an asynchronous `PostToolUse`
+hook in `~/.codex/hooks.json`; Kimi gains a marker-delimited `[[hooks]]`
+`UserPromptSubmit` block in `~/.kimi-code/config.toml`; Gemini gains a
+`BeforeAgent` hook in `~/.gemini/settings.json`. `--gemini-after-tool`
+additionally installs Gemini's `AfterTool` hook, which is opt-in because
+Gemini waits for each hook to finish. `status` prints, per harness, whether
+the hooks are installed and on which events. The transforms are additive and
+idempotent, preserve neighboring hooks, and are fully removed by `uninstall`.
+[reminders.md](reminders.md) covers setup and verification.
 
 ### `uninstall`
 
@@ -427,6 +467,7 @@ plugin registration conflict that silently disables channel push.
 agent-mail uninstall
 ```
 
-Boots out the LaunchAgent, removes its plist, and removes the Claude and Codex
-registrations and the native audit hook owned by this install. Registrations
-belonging to a different checkout are reported and left in place.
+Boots out the LaunchAgent, removes its plist, and removes the Claude, Codex,
+Kimi, Gemini, and OpenCode registrations and the native audit hook owned by
+this install. Registrations belonging to a different checkout are reported and
+left in place.

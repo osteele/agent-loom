@@ -9,14 +9,26 @@ The installer is macOS-only because it provisions a launchd service.
 `agent-mail install --dry-run` is available on every platform and prints the
 runtime and entry points it would persist without changing anything.
 
-## Existing entries
+## Client detection and existing entries
 
-The installer uses `codex mcp add` when no Codex entry exists. It preserves an
-entry that already matches this installation. If either client already uses the
-name for a different one, the installer leaves it unchanged. Inspect the
-Codex entry with `codex mcp get agent-mail --json`. Use `--replace-codex` or
-`--replace-claude` to replace an entry deliberately. Use `--no-codex` to skip
+Claude Code and Codex are the installer's primary targets. Kimi Code, Gemini
+CLI, and OpenCode are also registered when their user config directories
+(`~/.kimi-code`, `~/.gemini`, and `~/.config/opencode`) exist; the installer
+does not create those directories merely to declare a client present.
+
+The installer uses `codex mcp add` when no Codex entry exists, merges Kimi and
+Gemini entries into each client's documented `mcpServers` map, and edits
+OpenCode's JSONC-aware `mcp` map. It recognizes both the OpenCode 1.x and 2.x
+schemas and preserves comments and neighboring settings. Existing matching
+entries are preserved. If a client already uses the name for a different
+command, the installer reports the conflict and leaves it unchanged. Use
+`--replace-claude`, `--replace-codex`, `--replace-kimi`, `--replace-gemini`, or
+`--replace-opencode` to replace one deliberately. Use `--no-codex` to skip
 Codex registration.
+
+Gemini's optional `mcp.allowed` and `mcp.excluded` lists remain user-owned. The
+installer reports when either list would hide agent-mail, but does not broaden
+an allowlist or override an exclusion.
 
 ## Plugin versus user-scope registration
 
@@ -33,3 +45,19 @@ Claude sessions afterward.
 
 Each session's MCP server log records this at startup when push cannot land,
 naming the identity it would push under and the channels the host authorized.
+
+## Reminder hooks for pull-only clients
+
+`agent-mail install` registers MCP servers but not reminder hooks; those are
+a separate, platform-neutral step:
+
+```bash
+agent-mail hooks install [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+```
+
+With no harness flag, install applies to every harness whose config directory
+exists. The edits are additive and removable (`agent-mail hooks uninstall`),
+and `agent-mail hooks status` reports what is in place. Restart the harness
+sessions afterward; hooks are read at launch.
+[reminders.md](reminders.md) covers what each harness gets and how to verify
+it reaches the model.

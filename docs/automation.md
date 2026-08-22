@@ -55,3 +55,21 @@ poll again. For a message already sent, `agent-mail receipts --id <message-id>`
 distinguishes `pushed` (channel delivery or an inbox pull) from `read` (an
 explicit mark-read); neither status proves that the recipient completed the
 requested work.
+
+## The unread summary and reminder state
+
+The daemon writes `~/.claude/agent-mail/unread-summary.json` on the same
+10-second tick as the presence snapshot: per-session unread counts with the
+newest visible message id and timestamp, omitting muted sessions, under a
+30-second TTL. It is a presentation cache with the same rule as
+`presence.json`: never a routing input. Its intended consumer is
+`agent-mail remind`, which treats a missing or stale snapshot as unknown
+rather than as zero unread. See [reminders.md](reminders.md).
+
+Reminder bookkeeping lives in
+`~/.claude/agent-mail/announced/<slug>-<sessionId>.json` and records which
+newest-message id a session was last reminded about, plus a reminder count
+and timestamps. Announced state is not a delivery receipt: a reminder
+delivers nothing, so `announced/` never feeds `receipts/`, and `pushed`
+continues to mean channel delivery or an inbox pull only. Automation that
+needs delivery evidence keeps reading `receipts/`.

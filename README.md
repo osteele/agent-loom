@@ -84,10 +84,10 @@ Mail is delivered with or without it: when no daemon answers, a session writes
 to the project's spool itself. On macOS, the daemon runs as a launchd service.
 Nothing about delivery depends on it.
 
-`agent-mail install` also registers agent-mail with Claude Code and Codex, so
-it can replace the one-liner. Running both is harmless (an entry that
-already points somewhere else is reported and left alone), but there is no
-reason to.
+`agent-mail install` also registers agent-mail with Claude Code and Codex. If
+Kimi Code, Gemini CLI, or OpenCode has a user config directory, it registers
+with those clients too. Running both setup paths is harmless: a matching entry
+is a no-op, and an entry that points somewhere else is reported and left alone.
 
 On Linux, the CLI and MCP server work, and `agent-mail start` starts a detached
 bare-mode daemon; agent-mail does not install a Linux boot service.
@@ -150,13 +150,32 @@ agent-mail notify --project "$PWD" --from cli --message "agent-mail is ready"
 agent-mail inbox --project "$PWD"
 ```
 
+### Unread-mail reminders for pull-only clients
+
+Codex, Kimi Code, and Gemini CLI have no channel push, so they see mail only
+when they call `check_inbox`. Reminder hooks close that gap: the harness runs
+`agent-mail remind` on each turn, and unread counts enter the model's context
+when there is mail waiting. This needs the daemon, which computes the
+per-session unread summary.
+
+```bash
+agent-mail hooks install
+agent-mail hooks status
+```
+
+With no flag, install covers every harness whose config directory exists;
+pass `--codex`, `--kimi`, or `--gemini` to pick one. Restart the harness
+sessions afterward. [docs/reminders.md](docs/reminders.md) covers the
+mechanism, per-harness details, and verifying the hooks reach the model.
+
 ### Updating and restarting
 
 Installing the package puts the `agent-mail` command on `PATH`;
 `agent-mail install` is the separate step that creates the launchd service and
-registers agent-mail with Claude Code and Codex. It registers whichever copy
-you ran it from, and with whichever runtime ran it, so the same command works
-from an installed package and from a development checkout. `agent-mail
+registers agent-mail with Claude Code and Codex, plus Kimi Code, Gemini CLI,
+and OpenCode when their user config directories exist. It registers whichever
+copy you ran it from, and with whichever runtime ran it, so the same command
+works from an installed package and from a development checkout. `agent-mail
 uninstall` removes only the audit hook and MCP registrations that belong to
 this installation.
 
@@ -164,9 +183,9 @@ this installation.
 existing entry is preserved, replaced, or left alone, and the plugin versus
 user-scope registration conflict that silently discards channel pushes.
 
-Restart every existing Claude Code and Codex session after an integration
-change or an agent-mail code update. Each session owns a long-running MCP
-process, so it does not load new tool schemas or server code automatically.
+Restart every existing agent session after an integration change or an
+agent-mail code update. Each session owns a long-running MCP process, so it
+does not load new tool schemas or server code automatically.
 Restart the daemon after changing daemon code:
 
 ```bash
@@ -350,6 +369,11 @@ footers do not currently accept an external command or custom agent-mail field.
 Gemini and Codex can show their own session identifiers; those identifiers are
 not substitutes for the agent-mail display name or mailbox fields.
 
+Codex and Gemini (and Kimi, alongside its status line) can still learn about
+unread mail without polling: `agent-mail hooks install` registers a per-turn
+hook that injects unread counts into the model's context.
+[docs/reminders.md](docs/reminders.md) covers setup.
+
 [docs/status-line.md](docs/status-line.md) specifies the `--fields` output and
 the separate Claude Code and Kimi Code payload and rendering constraints.
 
@@ -395,8 +419,9 @@ Use agent-mail when the shape is different in one of these ways:
   lead and teammates for the lead's lifetime, one team per session. agent-mail
   addresses peers that started independently, in their own projects, with no
   hierarchy and nothing to promote or transfer.
-- **Not every endpoint is Claude Code.** Codex sessions use the same tools and
-  the same inboxes. So do the CLI, weft, and any HTTP client.
+- **Not every endpoint is Claude Code.** Codex, Kimi Code, and Gemini CLI
+  sessions use the same tools and inboxes. So do the CLI, weft, and any HTTP
+  client.
 - **The recipient may not exist yet.** A message, whether addressed to one
   session or broadcast to the whole project, waits in the project's inbox and
   is read when a session next attaches. A team's config is removed when its
