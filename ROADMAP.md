@@ -3,6 +3,44 @@
 Planned and in-progress work. Shipped items are removed from this file (the
 git log is the record of what's done).
 
+## Additional coding agents
+
+- Add MCP registration adapters for other mainstream coding agents as their
+  config formats stabilize. Each adapter needs presence detection, additive
+  install and ownership-safe uninstall, conflict diagnostics, schema fixtures,
+  and documentation of any session-identity or notification limitations.
+
+## OpenCode push delivery
+
+OpenCode is the one pull-only harness with a real out-of-band path into a live
+session: `opencode serve` exposes `POST /session/:id/prompt_async` (the TUI
+itself runs such a server, on a random port unless configured). That is much
+closer to Claude's channel push than the hook reminders shipped for Codex,
+Kimi, and Gemini — if the delivery semantics hold up.
+
+- **Spike first.** Verify what `prompt_async` actually does to a running
+  session: does the prompt land mid-turn, queue to the next turn, or require
+  an idle session? Does it work against the TUI's own server, and what does
+  `opencode run --attach` change? The design below assumes the spike answers
+  "queues a turn against the live session"; revisit if it doesn't.
+- **Endpoint registration.** A pinned port collides with concurrent OpenCode
+  processes, so `agent-command-guards`' launcher needs dynamic port allocation
+  plus registration of the endpoint in the agent-mail registry (alongside
+  `capabilities`/`inboundPolicy`), or a shared long-lived server that sessions
+  attach to.
+- **Auth is mandatory.** A localhost endpoint that injects prompts into a live
+  session is an attack surface; registration must carry a credential, not just
+  a port.
+- **Fixed system-authored payload only.** `prompt_async` creates something
+  resembling a user prompt, so peer-authored mail text sent through it would
+  be upgraded into user authority. Push only a fixed "you have unread
+  agent-mail; call `check_inbox`" notification — the same
+  harness-owned-facts-only rule as the hook reminders (decision 0008).
+- **Fallback:** an OpenCode lifecycle plugin
+  (`experimental.chat.system.transform`) if push proves unworkable; plugin
+  hooks still cannot inject AI-visible messages directly
+  (anomalyco/opencode#17412).
+
 ## Storage evolution
 
 The filesystem store remains suitable at the current scale. Append-only JSONL
