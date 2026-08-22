@@ -11,6 +11,9 @@
  *   transfers/              auditable work-lease transfer requests
  *   presence.json          daemon snapshot of the live registry
  *   processes.json         daemon snapshot of coordination-owner processes
+ *   unread-summary.json    daemon snapshot of per-session unread counts
+ *   announced/<slug>-<id>.json per-session reminder bookkeeping (NOT receipts)
+ *   remind-diagnostics.log rate-limited stale-summary diagnostics from remind
  *   daemon.pid, daemon.log daemon state
  * Config:     ~/.config/agent-mail/config.toml
  */
@@ -40,6 +43,18 @@ export const SLACK_DASHBOARD_PATH = join(STATE_DIR, "slack-dashboard.json");
 export const PRESENCE_SNAPSHOT_PATH = join(STATE_DIR, "presence.json");
 export const PROCESS_SNAPSHOT_PATH = join(STATE_DIR, "processes.json");
 export const WEFT_JOBS_SNAPSHOT_PATH = join(STATE_DIR, "weft-jobs.json");
+/** Per-session unread counts the daemon publishes for hook reminders. Same
+ * presentation-cache rules as presence.json: never a delivery input. */
+export const UNREAD_SUMMARY_PATH = join(STATE_DIR, "unread-summary.json");
+/** Per-session reminder bookkeeping for hook-driven harnesses. Deliberately
+ * separate from receipts/: a reminder delivers nothing. */
+export const ANNOUNCED_DIR = join(STATE_DIR, "announced");
+/** Rate-limited diagnostics from `agent-mail remind` (stale/missing summary).
+ * Appended to, never read by code; stdout of the hook stays machine-clean. */
+export const REMIND_DIAGNOSTICS_PATH = join(
+  STATE_DIR,
+  "remind-diagnostics.log",
+);
 /** Append-only JSONL record of authority-forced coordination recoveries. A
  * forced recovery bypasses the liveness proof, so the declared authority is the
  * only trace of why an owner's record was taken; keep it durable and outside
@@ -63,6 +78,7 @@ export function ensureDirs(): void {
     CLAIMS_DIR,
     WORK_DIR,
     TRANSFERS_DIR,
+    ANNOUNCED_DIR,
     CONFIG_DIR,
   ]) {
     mkdirSync(dir, { recursive: true });

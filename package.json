@@ -15,7 +15,8 @@
     "prepare": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

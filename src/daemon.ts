@@ -37,6 +37,10 @@ import {
 } from "./spool.ts";
 import { flushTransferNotifications, transfers } from "./transfers.ts";
 import {
+  computeUnreadSummary,
+  writeUnreadSummarySnapshot,
+} from "./unreadSummary.ts";
+import {
   WEFT_JOBS_REFRESH_MS,
   countBySession,
   writeWeftJobsSnapshot,
@@ -255,6 +259,10 @@ function tickPresence(): void {
   try {
     const snapshot = writePresenceSnapshot();
     writeProcessSnapshot();
+    // Pure filesystem work over the live set just computed, so it rides this
+    // tick rather than getting a timer of its own. Reminder hooks for
+    // pull-only harnesses read the snapshot; muted sessions get no entry.
+    writeUnreadSummarySnapshot(computeUnreadSummary(snapshot.sessions));
     flushTransferNotifications();
     for (const request of transfers.settleExpired()) {
       log(`coordination transfer ${request.id}: ${request.status}`);

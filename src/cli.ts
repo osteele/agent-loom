@@ -25,17 +25,22 @@
  * Status line:
  *   agent-mail status-line [--project <dir>] [--session <id>] [--debug]
  *
+ * Reminders (hook-driven, for pull-only harnesses):
+ *   agent-mail remind --format codex|kimi|gemini [--event <name>] [--session <id>] [--project <dir>]
+ *   agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+ *
  * Daemon management (launchd-aware: uses launchctl when the LaunchAgent is
  * installed, bare pidfile mode otherwise):
  *   agent-mail start | stop | restart | graceful | status | logs [-f]
  *
  * Setup:
- *   agent-mail install     LaunchAgent (boot start) + Claude/Codex MCP entries
+ *   agent-mail install     LaunchAgent (boot start) + installed-client MCP entries
  *   agent-mail uninstall
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -45,6 +50,14 @@ import {
 import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  type ParseError,
+  applyEdits,
+  modify,
+  parse,
+  printParseErrorCode,
+} from "jsonc-parser";
+import { readAnnouncedState, writeAnnouncedState } from "./announced.ts";
 import { describeChannelSetup, inspectChannelSetup } from "./channelSetup.ts";
 import {
   type Claim,
@@ -66,17 +79,31 @@ import { openBrowser, serveDashboard } from "./dashboard.ts";
 import { buildReadOnlyState } from "./dashboardData.ts";
 import { classifyFallback, withAttemptKey } from "./delivery.ts";
 import {
+  KIMI_REMIND_BEGIN_MARKER,
   addNativeAuditHook,
+  addReminderHookCodex,
+  addReminderHookGemini,
+  addReminderHookKimi,
   claudeRegistrationMatches,
   codexRegistrationMatches,
+  codexReminderHookEvents,
   enabledAgentMailPlugin,
+  geminiReminderHookEvents,
   removeNativeAuditHook,
+  removeOpenCodeMcpRegistration,
+  removeReminderHookCodex,
+  removeReminderHookGemini,
+  removeReminderHookKimi,
+  removeStdioMcpRegistration,
+  upsertOpenCodeMcpRegistration,
+  upsertStdioMcpRegistration,
 } from "./integrations.ts";
 import {
   CONFIG_PATH,
   LAUNCHD_LABEL,
   LOG_PATH,
   PID_PATH,
+  REMIND_DIAGNOSTICS_PATH,
   canonicalProject,
   displayName,
   ensureDirs,
@@ -98,6 +125,13 @@ import {
   setInboundPolicy,
   setMuted,
 } from "./registry.ts";
+import {
+  decideReminder,
+  diagnosticDue,
+  formatReminder,
+  nextAnnouncedState,
+  reminderText,
+} from "./remind.ts";
 import { readStdinText, sleepSync } from "./runtime.ts";
 import {
   activityTag,
@@ -117,7 +151,6 @@ import {
   knownProjects,
   markAllMessagesRead,
   markMessagesRead,
-  messageVisibleToSession,
   readMessages,
   readReceipts,
 } from "./spool.ts";
@@ -126,6 +159,8 @@ import {
   flushTransferNotifications,
   transfers,
 } from "./transfers.ts";
+import { unreadVisibleForSession } from "./unread.ts";
+import { readUnreadSummarySnapshot } from "./unreadSummary.ts";
 import { weftJobsForSession } from "./weftJobs.ts";
 import { type WorkLease, type WorkState, work } from "./work.ts";
 import { WorkConflictError } from "./work.ts";
@@ -196,6 +231,18 @@ const CLAUDE_SETTINGS = join(
   process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
   "settings.json",
 );
+const CODEX_HOOKS_PATH = join(homedir(), ".codex", "hooks.json");
+const KIMI_CONFIG_PATH = join(homedir(), ".kimi-code", "config.toml");
+const KIMI_MCP_PATH = join(homedir(), ".kimi-code", "mcp.json");
+const GEMINI_SETTINGS_PATH = join(homedir(), ".gemini", "settings.json");
+const OPENCODE_CONFIG_DIR = join(homedir(), ".config", "opencode");
+
+function openCodeConfigPath(): string {
+  const jsonc = join(OPENCODE_CONFIG_DIR, "opencode.jsonc");
+  if (existsSync(jsonc)) return jsonc;
+  const json = join(OPENCODE_CONFIG_DIR, "opencode.json");
+  return existsSync(json) ? json : jsonc;
+}
 
 /** The runtime binary to launch agent-mail's other entry points with.
  *
@@ -825,11 +872,10 @@ async function readStatusLinePayload(): Promise<StatusLinePayload | undefined> {
  * that re-runs several times a second. */
 /** Messages this session has not read, counting only those it can see: a
  * project spool is shared, and read state with it, but a session does not see
- * its own sends or another session's directed mail. */
+ * its own sends or another session's directed mail, and a message it refused
+ * or let expire no longer counts. */
 function unreadForSession(project: string, sessionId: string): number {
-  return readMessages(project, { limit: 0, unreadOnly: true }).filter((msg) =>
-    messageVisibleToSession(msg, sessionId),
-  ).length;
+  return unreadVisibleForSession(project, sessionId).length;
 }
 
 /** Whether mail reaches this session on its own: "push", "pull", or "" when
@@ -966,6 +1012,275 @@ async function cmdStatusLine(
   } catch (error) {
     if (debug) console.error(`status-line failed: ${error}`);
   }
+}
+
+// --- reminders (hook-driven, pull-only harnesses) ----------------------------
+
+/** Print an unread-mail reminder for a harness hook, or nothing at all.
+ *
+ * Codex, Kimi, and Gemini never learn about unread mail unless they ask, so
+ * their hooks run this command on harness events and inject whatever it
+ * prints into the model's context. The answer comes from the daemon's
+ * unread-summary snapshot — a hook fires per turn and cannot afford a spool
+ * scan per event.
+ *
+ * Always exits 0, including on error, and stdout is machine-clean: a
+ * non-zero exit or a stray stdout line can break the harness's hook
+ * parsing (Gemini treats any non-JSON stdout as a protocol error), and a
+ * reminder must never block the harness. "Nothing to say" and "something
+ * failed" are deliberately indistinguishable on stdout; failures and stale
+ * snapshots leave a rate-limited line in the diagnostics log instead. */
+async function cmdRemind(
+  flags: Record<string, string | boolean>,
+): Promise<void> {
+  try {
+    const format = flags.format;
+    if (format !== "codex" && format !== "kimi" && format !== "gemini") {
+      // Operator error, not a hook event: stderr is safe, stdout stays clean.
+      console.error("agent-mail remind: --format codex|kimi|gemini required");
+      return;
+    }
+    const payload = await readStatusLinePayload();
+    const project = canonicalProject(
+      typeof flags.project === "string"
+        ? flags.project
+        : (payload?.workspace?.project_dir ??
+            payload?.workspace?.current_dir ??
+            payload?.cwd ??
+            process.cwd()),
+    );
+    // Session id resolution order: explicit flag, the hook payload, Gemini's
+    // exported env var, then the usual chain (AGENT_SESSION_ID covers Kimi).
+    const sessionId =
+      typeof flags.session === "string"
+        ? flags.session
+        : (payload?.session_id ??
+          (process.env.GEMINI_SESSION_ID || undefined) ??
+          sessionIdFromEnv());
+    const nowMs = Date.now();
+    const snapshot = readUnreadSummarySnapshot(nowMs);
+    const entry = sessionId ? snapshot?.bySession[sessionId] : undefined;
+    const announced = sessionId
+      ? readAnnouncedState(project, sessionId)
+      : undefined;
+    const decision = decideReminder({
+      sessionId,
+      entry,
+      snapshotStale: snapshot === undefined,
+      announced,
+      nowMs,
+    });
+    if (decision === "remind" && entry && sessionId) {
+      const text = reminderText(entry.unread, entry.newestTs ?? "");
+      console.log(
+        formatReminder(
+          format,
+          text,
+          typeof flags.event === "string" ? flags.event : undefined,
+        ),
+      );
+      writeAnnouncedState(
+        nextAnnouncedState(announced, entry, sessionId, project, nowMs),
+      );
+    } else if (decision === "stale" && sessionId) {
+      if (diagnosticDue(announced?.lastDiagAt, nowMs)) {
+        // State first: its write creates the state root the log lives under.
+        writeAnnouncedState({
+          ...(announced ?? {
+            version: 1 as const,
+            sessionId,
+            project,
+            lastUnread: 0,
+            announcedAt: 0,
+            remindCount: 0,
+          }),
+          lastDiagAt: nowMs,
+        });
+        appendFileSync(
+          REMIND_DIAGNOSTICS_PATH,
+          `[${new Date(nowMs).toISOString()}] unread summary missing or stale (session ${sessionId}, project ${project}); daemon not ticking?\n`,
+        );
+      }
+    }
+    // "silent": nothing on stdout, nothing stamped.
+  } catch {
+    // Hooks must never block the harness: any failure leaves stdout empty
+    // and exits 0, same as "nothing to say".
+  }
+}
+
+// --- harness hook installation (agent-mail hooks) ------------------------------
+
+type HookHarness = "codex" | "kimi" | "gemini";
+
+const HOOK_CONFIG_PATHS: Record<HookHarness, string> = {
+  codex: CODEX_HOOKS_PATH,
+  kimi: KIMI_CONFIG_PATH,
+  gemini: GEMINI_SETTINGS_PATH,
+};
+
+/** The command a harness hook runs. Same entry-path pattern as installPlan:
+ * the current runtime plus this module, so the installed hook works from a
+ * checkout (.ts) and from the published package (.js) alike. */
+function remindCommandBase(format: HookHarness): string {
+  return `${runtimePath()} ${SELF} remind --format ${format}`;
+}
+
+function remindCommand(format: HookHarness, event: string): string {
+  return `${remindCommandBase(format)} --event ${event}`;
+}
+
+function readJsonDocument(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new TypeError(`${path} must contain a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Harnesses the command targets: the ones flagged, or — with no flag — every
+ * harness whose config directory exists. The directory is the signal that the
+ * harness is in use; a config file is only ever created inside an existing
+ * directory, never a directory itself. */
+function hookTargets(flags: Record<string, string | boolean>): HookHarness[] {
+  const all: HookHarness[] = ["codex", "kimi", "gemini"];
+  const flagged = all.filter((harness) => flags[harness] === true);
+  if (flagged.length > 0) return flagged;
+  return all.filter((harness) =>
+    existsSync(dirname(HOOK_CONFIG_PATHS[harness])),
+  );
+}
+
+function hookEventsInstalled(harness: HookHarness, path: string): string[] {
+  if (harness === "kimi") {
+    if (!existsSync(path)) return [];
+    return readFileSync(path, "utf8").includes(KIMI_REMIND_BEGIN_MARKER)
+      ? ["UserPromptSubmit"]
+      : [];
+  }
+  const document = readJsonDocument(path);
+  return harness === "codex"
+    ? codexReminderHookEvents(document, remindCommandBase("codex"))
+    : geminiReminderHookEvents(document, remindCommandBase("gemini"));
+}
+
+function installHooks(harness: HookHarness, geminiAfterTool: boolean): void {
+  const path = HOOK_CONFIG_PATHS[harness];
+  if (!existsSync(dirname(path))) {
+    console.log(`${harness}: skipped (no ${dirname(path)} directory)`);
+    return;
+  }
+  if (harness === "kimi") {
+    const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+    const result = addReminderHookKimi(
+      text,
+      remindCommand("kimi", "UserPromptSubmit"),
+    );
+    if (!result.changed) {
+      console.log("kimi: reminder hook already installed");
+      return;
+    }
+    writeFileSync(path, result.document);
+    console.log(`kimi: installed UserPromptSubmit hook in ${path}`);
+    return;
+  }
+  const document = readJsonDocument(path);
+  if (harness === "codex") {
+    const result = addReminderHookCodex(document, remindCommandBase("codex"));
+    if (!result.changed) {
+      console.log("codex: reminder hooks already installed");
+      return;
+    }
+    writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
+    console.log(
+      `codex: installed UserPromptSubmit + PostToolUse hooks in ${path}`,
+    );
+    return;
+  }
+  const result = addReminderHookGemini(document, remindCommandBase("gemini"), {
+    afterTool: geminiAfterTool,
+  });
+  if (!result.changed) {
+    console.log("gemini: reminder hook already installed");
+    return;
+  }
+  writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
+  console.log(
+    `gemini: installed BeforeAgent${geminiAfterTool ? " + AfterTool" : ""} hook in ${path}`,
+  );
+}
+
+function uninstallHooks(harness: HookHarness): void {
+  const path = HOOK_CONFIG_PATHS[harness];
+  if (!existsSync(path)) {
+    console.log(`${harness}: nothing to remove (no ${path})`);
+    return;
+  }
+  if (harness === "kimi") {
+    const result = removeReminderHookKimi(readFileSync(path, "utf8"));
+    if (!result.changed) {
+      console.log("kimi: no reminder hook installed");
+      return;
+    }
+    writeFileSync(path, result.document);
+    console.log(`kimi: removed reminder hook from ${path}`);
+    return;
+  }
+  const document = readJsonDocument(path);
+  const result =
+    harness === "codex"
+      ? removeReminderHookCodex(document, remindCommandBase("codex"))
+      : removeReminderHookGemini(document, remindCommandBase("gemini"));
+  if (!result.changed) {
+    console.log(`${harness}: no reminder hook installed`);
+    return;
+  }
+  writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
+  console.log(`${harness}: removed reminder hooks from ${path}`);
+}
+
+/** agent-mail hooks install|uninstall|status — register the hook commands
+ * that make pull-only harnesses run `agent-mail remind` per turn. */
+function cmdHooks(
+  flags: Record<string, string | boolean>,
+  args: string[],
+): void {
+  const subcommand = args[0];
+  const targets = hookTargets(flags);
+  if (subcommand === "status") {
+    for (const harness of targets) {
+      const events = hookEventsInstalled(harness, HOOK_CONFIG_PATHS[harness]);
+      console.log(
+        events.length > 0
+          ? `${harness}: installed (${events.join(", ")})`
+          : `${harness}: not installed`,
+      );
+    }
+    if (targets.length === 0) {
+      console.log("no harness config directories found");
+    }
+    return;
+  }
+  if (subcommand === "install" || subcommand === "uninstall") {
+    if (targets.length === 0) {
+      console.log(
+        "no harness config directories found (~/.codex, ~/.kimi-code, ~/.gemini)",
+      );
+      return;
+    }
+    for (const harness of targets) {
+      if (subcommand === "install") {
+        installHooks(harness, flags["gemini-after-tool"] === true);
+      } else {
+        uninstallHooks(harness);
+      }
+    }
+    return;
+  }
+  throw new Error(
+    "usage: agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemini-after-tool]",
+  );
 }
 
 // --- coordination claims -----------------------------------------------------
@@ -1625,6 +1940,200 @@ function unregisterCodex(): void {
   }
 }
 
+type JsonMcpClient = "Kimi" | "Gemini";
+
+/** Warn when Gemini's global MCP policy would hide a successfully registered
+ * server. Registration does not broaden an explicit user allowlist or override
+ * an exclusion. */
+function diagnoseGeminiMcpPolicy(document: Record<string, unknown>): void {
+  if (document.mcp === undefined) return;
+  if (
+    typeof document.mcp !== "object" ||
+    document.mcp === null ||
+    Array.isArray(document.mcp)
+  ) {
+    console.error(
+      `${GEMINI_SETTINGS_PATH} has a non-object mcp setting; Gemini may reject it`,
+    );
+    return;
+  }
+  const mcp = document.mcp as Record<string, unknown>;
+  if (Array.isArray(mcp.allowed) && !mcp.allowed.includes("agent-mail")) {
+    console.error(
+      `Gemini MCP registration is present, but mcp.allowed in ${GEMINI_SETTINGS_PATH} does not include agent-mail`,
+    );
+  }
+  if (Array.isArray(mcp.excluded) && mcp.excluded.includes("agent-mail")) {
+    console.error(
+      `Gemini MCP registration is present, but mcp.excluded in ${GEMINI_SETTINGS_PATH} contains agent-mail`,
+    );
+  }
+}
+
+/** Register a stdio server in clients that use a top-level JSON mcpServers
+ * map. The config directory is the presence signal, matching hooks install. */
+function registerJsonMcpClient(
+  client: JsonMcpClient,
+  path: string,
+  replace: boolean,
+): void {
+  if (!existsSync(dirname(path))) return;
+  let result: ReturnType<typeof upsertStdioMcpRegistration>;
+  try {
+    result = upsertStdioMcpRegistration(
+      readJsonDocument(path),
+      runtimePath(),
+      CHANNEL_ENTRY,
+      replace,
+    );
+  } catch (error) {
+    if (!(error instanceof SyntaxError) && !(error instanceof TypeError)) {
+      throw error;
+    }
+    console.error(
+      `could not inspect ${client} MCP config ${path}: ${error.message}`,
+    );
+    return;
+  }
+  if (result.status === "conflict") {
+    console.error(
+      `${client} already has a different agent-mail MCP entry; leaving it unchanged ` +
+        `(pass --replace-${client.toLocaleLowerCase()} to replace it)`,
+    );
+    return;
+  }
+  if (result.status === "matching") {
+    console.log(`${client} MCP registration already matches this checkout`);
+  } else {
+    writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
+    console.log(`registered agent-mail in ${path} mcpServers`);
+  }
+  if (client === "Gemini") diagnoseGeminiMcpPolicy(result.document);
+}
+
+function unregisterJsonMcpClient(client: JsonMcpClient, path: string): void {
+  if (!existsSync(path)) return;
+  let result: ReturnType<typeof removeStdioMcpRegistration>;
+  try {
+    result = removeStdioMcpRegistration(
+      readJsonDocument(path),
+      runtimePath(),
+      CHANNEL_ENTRY,
+    );
+  } catch (error) {
+    if (!(error instanceof SyntaxError) && !(error instanceof TypeError)) {
+      throw error;
+    }
+    console.error(
+      `could not inspect ${client} MCP config ${path}: ${error.message}`,
+    );
+    return;
+  }
+  if (result.status === "foreign") {
+    console.error(
+      `${client} agent-mail entry belongs to a different checkout; leaving it unchanged`,
+    );
+    return;
+  }
+  if (result.status !== "removed") return;
+  writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
+  console.log(`removed agent-mail from ${client} MCP servers`);
+}
+
+function readJsoncDocument(path: string): {
+  document: Record<string, unknown>;
+  text: string;
+} {
+  const text = existsSync(path) ? readFileSync(path, "utf8") : "{}\n";
+  const errors: ParseError[] = [];
+  const parsed = parse(text, errors, {
+    allowTrailingComma: true,
+    disallowComments: false,
+  }) as unknown;
+  if (errors.length > 0) {
+    const detail = errors
+      .map(
+        (error) =>
+          `${printParseErrorCode(error.error)} at offset ${error.offset}`,
+      )
+      .join(", ");
+    throw new SyntaxError(detail);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new TypeError(`${path} must contain a JSON object`);
+  }
+  return { document: parsed as Record<string, unknown>, text };
+}
+
+function registerOpenCode(replace: boolean): void {
+  if (!existsSync(OPENCODE_CONFIG_DIR)) return;
+  const configPath = openCodeConfigPath();
+  try {
+    const { document, text } = readJsoncDocument(configPath);
+    const result = upsertOpenCodeMcpRegistration(
+      document,
+      runtimePath(),
+      CHANNEL_ENTRY,
+      replace,
+    );
+    if (result.status === "conflict") {
+      console.error(
+        "OpenCode already has a different agent-mail MCP entry; leaving it unchanged " +
+          "(pass --replace-opencode to replace it)",
+      );
+      return;
+    }
+    if (result.status === "matching") {
+      console.log("OpenCode MCP registration already matches this checkout");
+      return;
+    }
+    const edits = modify(text, [...result.path], result.value, {
+      formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+    });
+    writeFileSync(configPath, applyEdits(text, edits));
+    console.log(`registered agent-mail in ${configPath}`);
+  } catch (error) {
+    if (!(error instanceof SyntaxError) && !(error instanceof TypeError)) {
+      throw error;
+    }
+    console.error(
+      `could not inspect OpenCode MCP config ${configPath}: ${error.message}`,
+    );
+  }
+}
+
+function unregisterOpenCode(): void {
+  const configPath = openCodeConfigPath();
+  if (!existsSync(configPath)) return;
+  try {
+    const { document, text } = readJsoncDocument(configPath);
+    const result = removeOpenCodeMcpRegistration(
+      document,
+      runtimePath(),
+      CHANNEL_ENTRY,
+    );
+    if (result.status === "foreign") {
+      console.error(
+        "OpenCode agent-mail entry belongs to a different checkout; leaving it unchanged",
+      );
+      return;
+    }
+    if (result.status !== "removed") return;
+    const edits = modify(text, [...result.path], undefined, {
+      formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+    });
+    writeFileSync(configPath, applyEdits(text, edits));
+    console.log("removed agent-mail from OpenCode MCP servers");
+  } catch (error) {
+    if (!(error instanceof SyntaxError) && !(error instanceof TypeError)) {
+      throw error;
+    }
+    console.error(
+      `could not inspect OpenCode MCP config ${configPath}: ${error.message}`,
+    );
+  }
+}
+
 function readClaudeSettings(): Record<string, unknown> {
   if (!existsSync(CLAUDE_SETTINGS)) return {};
   const parsed = JSON.parse(readFileSync(CLAUDE_SETTINGS, "utf8")) as unknown;
@@ -1721,6 +2230,13 @@ function cmdInstall(flags: Record<string, string | boolean>): void {
   if (flags["no-codex"] !== true) {
     registerCodex(flags["replace-codex"] === true);
   }
+  registerJsonMcpClient("Kimi", KIMI_MCP_PATH, flags["replace-kimi"] === true);
+  registerJsonMcpClient(
+    "Gemini",
+    GEMINI_SETTINGS_PATH,
+    flags["replace-gemini"] === true,
+  );
+  registerOpenCode(flags["replace-opencode"] === true);
   if (flags["native-audit"] === true) installNativeAuditHook();
   // Post-check: report the observed channel opt-in state. Instructions printed
   // here go stale; the state cannot (see channelSetup.ts).
@@ -1767,6 +2283,9 @@ function cmdUninstall(): void {
     }
   }
   unregisterCodex();
+  unregisterJsonMcpClient("Kimi", KIMI_MCP_PATH);
+  unregisterJsonMcpClient("Gemini", GEMINI_SETTINGS_PATH);
+  unregisterOpenCode();
   uninstallNativeAuditHook();
 }
 
@@ -1908,7 +2427,7 @@ channel, then add to ${CONFIG_PATH}:
   }
 }
 
-const HELP = `agent-mail — durable coordination for Claude Code and Codex agents
+const HELP = `agent-mail — durable coordination between coding-agent sessions
 
 Usage: agent-mail <command> [options]
 
@@ -1987,6 +2506,23 @@ Status line:
                         identity fields with --fields. Reads a supported client
                         payload on stdin and falls back to session-id env vars.
 
+Reminders (hook-driven, for pull-only harnesses):
+  remind --format codex|kimi|gemini [--event <name>] [--session <id>]
+         [--project <dir>]
+                        Print an unread-mail reminder for a harness hook, or
+                        nothing when there is nothing new to say. Reads the
+                        daemon's unread summary; always exits 0 and keeps
+                        stdout machine-clean.
+  hooks install [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+  hooks uninstall [--codex] [--kimi] [--gemini]
+  hooks status [--codex] [--kimi] [--gemini]
+                        Register, remove, or inspect the harness hooks that
+                        run "agent-mail remind". With no harness flag, targets
+                        every harness whose config directory exists
+                        (~/.codex, ~/.kimi-code, ~/.gemini). Gemini's
+                        AfterTool hook is synchronous, so it installs only
+                        with --gemini-after-tool.
+
 Daemon (launchd-aware):
   start | stop | restart   Manage the daemon process
   graceful                 Reload config (SIGHUP) without a restart
@@ -1997,8 +2533,10 @@ Setup:
   mcp                   Run the MCP server on stdio. This is what an agent's
                         config launches; you do not run it by hand.
   install [--dry-run] [--native-audit] [--no-codex]
-          [--replace-claude] [--replace-codex]
-                        Install daemon and Claude/Codex MCP entries; optionally
+          [--replace-claude] [--replace-codex] [--replace-kimi]
+          [--replace-gemini] [--replace-opencode]
+                        Install daemon and MCP entries for Claude, Codex, and
+                        installed Kimi, Gemini, and OpenCode clients; optionally
                         audit native Claude SendMessage traffic. macOS only;
                         --dry-run prints the versioned install plan anywhere.
   uninstall             Remove integrations owned by this checkout
@@ -2032,6 +2570,12 @@ switch (cmd) {
     break;
   case "status-line":
     await cmdStatusLine(flags);
+    break;
+  case "remind":
+    await cmdRemind(flags);
+    break;
+  case "hooks":
+    cmdHooks(flags, rest);
     break;
   case "mute":
     cmdSetMuted(flags, true);
