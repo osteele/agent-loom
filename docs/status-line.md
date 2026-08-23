@@ -5,11 +5,11 @@
 this page specifies identity resolution, `--fields`, and each client's
 rendering constraints.
 
-The name prints whether or not anyone else is in the project. It is the
-session's address, so it stays visible even when no peers are present — and
-because it is the address, it is always one that resolves. The command prints
-nothing when it cannot resolve a session ID, and when it can resolve one but
-cannot tell which registration is its own (see below).
+The display name prints whether or not anyone else is in the project and can be
+used as an address when it is unique there. The full name and session ID from
+`list_sessions` disambiguate collisions. The command prints nothing when it
+cannot resolve a session ID, and when it can resolve one but cannot tell which
+registration is its own (see below).
 
 ## Project and session resolution
 

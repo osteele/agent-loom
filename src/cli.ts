@@ -2191,7 +2191,7 @@ function cmdInstall(flags: Record<string, string | boolean>): void {
     const configTemplate = [
       "# agent-mail config",
       `port = ${loadConfig().port}`,
-      '# slack_webhook = "https://hooks.slack.com/services/..." (falls back to ~/.config/weft/config)',
+      '# slack_webhook = "https://hooks.slack.com/services/..."',
       '# slack_echo = "all"  # or "none"',
       "# Short aliases for long project bases in session labels (comma list):",
       '# session_aliases = "llm-performance-models=augur, dependency-routing=deproute"',

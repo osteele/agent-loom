@@ -15,6 +15,7 @@ port = 8377
 # message_rate_limit_per_minute = 60  # 0 disables rate limiting
 # default_message_ttl_seconds = 0     # 0 means no default expiry
 # held_message_limit = 100
+# dashboard = true                    # serve the HTTP dashboard; default false
 ```
 
 The Slack settings are introduced, with their environment-variable
@@ -32,3 +33,8 @@ base, and a deliberate Claude `/rename` is kept verbatim. Also settable via
 The `notify --no-slack` flag suppresses the Slack mirror for that message
 only. The message is still appended to the project inbox, and other messages
 continue to use the configured `slack_echo` policy.
+
+`dashboard` controls whether the daemon and `agent-mail dashboard` expose the
+read-only web dashboard. It is off by default. Set it to `true` and run
+`agent-mail graceful` to enable it. `AGENT_MAIL_DASHBOARD=1` enables the
+standalone dashboard command for one invocation when the daemon is down.

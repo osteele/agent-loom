@@ -7,21 +7,24 @@ different tools. One of them finishes something another is waiting on. You
 copy text from one session and paste it into another.
 
 agent-mail is a local message bus for those sessions. A message lands in a
-project's on-disk inbox (its spool) whether or not anyone is listening, and
-reaches a Claude Code session in context when one is.
+project's on-disk inbox (its spool) whether or not anyone is listening. A
+running Claude Code session can receive it in context when channel push is
+enabled.
 
 ```mermaid
 graph LR
     QL["Quiet Lantern<br/>a Claude Code session"] -->|send_mail| IN[("the project's inbox")]
     AUTO["CLI · weft · HTTP"] --> IN
-    IN -->|"push, or read on check_inbox"| SO["Silver Otter<br/>a Codex session"]
+    IN -->|"read on check_inbox"| SO["Silver Otter<br/>a Codex session"]
     IN -.->|echo| SLACK["Slack"]
 ```
 
 Sessions address each other by stable names across project directories.
 
-- **Durable delivery.** A message waits in the project's inbox and is read
-  when a session next attaches. Receipts record what happened to it.
+- **Durable delivery.** A message waits in the project's inbox until an
+  intended recipient retrieves it with `check_inbox`, unless it expires. A
+  running Claude Code session with channel push can receive it automatically.
+  Receipts distinguish spooled, pushed, read, held, refused, and expired mail.
 - **Any endpoint.** agent-mail speaks standard MCP over stdio, so any MCP
   client can use the same tools and inboxes. Setup is tested with Claude Code
   and Codex; the CLI, an HTTP client, or a tool such as
@@ -68,11 +71,40 @@ project, so a session in any directory stays reachable.
 
 Requires Node 22.18 or later. Restart existing sessions afterward.
 
+### Send the first message
+
+The MCP tools are enough for a complete exchange. In one registered session,
+ask the agent:
+
+> Use agent-mail to send "ping" to the project
+> `/absolute/path/to/the/receiving/project`.
+
+In a session working in that receiving project, ask:
+
+> Check agent-mail for unread messages, then mark the ping as read.
+
+That sends a project broadcast. To reach one session when several share the
+project, use `list_sessions` to find its full name and pass that name to
+`send_mail`. The target project determines which inbox stores the message; the
+optional session name limits who can see it.
+
+### Install only what you need
+
+| Component | What it adds | Setup |
+| --- | --- | --- |
+| MCP registration | `send_mail`, `check_inbox`, session discovery, and coordination | The `npx add-mcp` command above |
+| Local CLI | Shell automation, status commands, daemon management, and dashboards | `npm install -g github:osteele/agent-mail` |
+| Daemon | Slack echo, fast presence status, automatic dead-session cleanup, later-arrival reminder data, and a persistent dashboard | `agent-mail install` on macOS; `agent-mail start` on Linux |
+| Claude Code channel | Automatic message push into a running Claude session | Add and configure the plugin below |
+| Reminder hooks | Unread counts on later turns in pull-only clients | `agent-mail hooks install` |
+| Web dashboard | Local read-only traffic and coordination view | Set `dashboard = true`; requires the local CLI |
+
 ### Adding the daemon on macOS
 
-An optional daemon adds [Slack echo](#connecting-to-slack), the
-presence snapshot that keeps the [status line](#status-lines) fast,
-and pruning of dead sessions without waiting for someone to run a command:
+An optional daemon adds [Slack echo](#connecting-to-slack), cached presence
+data that keeps the [status line](#status-lines) fast, and automatic cleanup of
+dead sessions. It also supplies later-arrival reminder data and serves the
+persistent dashboard when that dashboard is enabled:
 
 ```bash
 npm install -g github:osteele/agent-mail
@@ -103,16 +135,14 @@ sessions or expire claims. See
 The MCP tools and the durable inbox work as soon as the server is registered.
 Channel push is a separate opt-in with three parts, all of which must line up.
 
-It also needs a clone, unlike everything above: the plugin marketplace is a
-directory in this repository, and `claude plugin marketplace add` takes a
-local path.
+The marketplace lives in this repository and can be added directly from
+GitHub. A clone is only needed for local development or testing.
 
 1. **The marketplace added and the plugin installed**, which `agent-mail
    install` does not do for you:
 
    ```bash
-   git clone https://github.com/osteele/agent-mail
-   claude plugin marketplace add ./agent-mail
+   claude plugin marketplace add osteele/agent-mail
    claude plugin install agent-mail@osteele-local
    ```
 
@@ -143,7 +173,8 @@ Run `agent-mail status` to see what is actually in place, and `agent-mail
 listeners` to see which live sessions were launched with the channel: one whose
 host was not is tagged `{channel:host-not-loaded}`.
 
-Send a smoke-test message to the current project:
+To test from another registered agent, use the `send_mail` exchange above. If
+you installed the local CLI, the equivalent shell smoke test is:
 
 ```bash
 agent-mail notify --project "$PWD" --from cli --message "agent-mail is ready"
@@ -177,8 +208,8 @@ registers agent-mail with Claude Code and Codex, plus Kimi Code, Gemini CLI,
 and OpenCode when their user config directories exist. It registers whichever
 copy you ran it from, and with whichever runtime ran it, so the same command
 works from an installed package and from a development checkout. `agent-mail
-uninstall` removes only the audit hook and MCP registrations that belong to
-this installation.
+uninstall` unloads and removes the launchd service, then removes the audit hook
+and MCP registrations that belong to this installation.
 
 [docs/install.md](docs/install.md) covers the installer's edge cases: when an
 existing entry is preserved, replaced, or left alone, and the plugin versus
@@ -193,17 +224,20 @@ Restart the daemon after changing daemon code:
 agent-mail restart
 ```
 
-Daemon configuration changes do not require a process restart. Reload them
-with `agent-mail graceful`.
+Most daemon configuration changes can be reloaded with `agent-mail graceful`.
+Changing the port requires `agent-mail restart` because the listening socket is
+bound when the process starts.
 
 ## How delivery works
 
 Claude Code, Codex, and any other MCP client load the same MCP server and use
 the same tools and spools, and every sender (a session, the CLI, weft, an HTTP
-client) is delivered the same way. The receiving client determines how soon a
-message enters its context: a Claude Code session with channel push enabled
-receives it unasked, and otherwise reads it on the next `check_inbox`; a Codex
-session always reads on `check_inbox`, because Codex has no channel push.
+client) is delivered the same way. Under the default `accept` inbound policy,
+the receiving client determines how soon a message enters its context: a
+Claude Code session with channel push enabled receives it unasked, and
+otherwise reads it on the next `check_inbox`; a Codex session always reads on
+`check_inbox`, because Codex has no channel push. Per-session `hold` and
+`refuse` policies delay or suppress entry into context.
 Codex's MCP tools still register the session, send mail, inspect peers, read
 and mark inbox messages, and manage claims. Messages remain available in the
 project spool after delivery.
@@ -222,9 +256,11 @@ daemon state:
 - **Experiment numbers** (`EXP-NNN`) are allocated atomically against a lab
   notebook, counting both existing files and outstanding reservations.
 
-`list_coordination` shows all three together, with owners and conditions. When
-an owning session dies, `recover_coordination` releases its record — but only
-after agent-mail proves that exact process is gone.
+`list_coordination` shows all three together, with owners and conditions.
+`recover_coordination` releases a record after revalidating that its owning
+process is dead or that a manual owner has expired. An explicit, user-supplied
+`authority` can force recovery when the owner is live or cannot be verified;
+agent-mail records that action in an audit log.
 [docs/architecture.md](docs/architecture.md#coordination-claims) specifies the
 conflict rules, recovery, and transferring a lease between live sessions.
 
@@ -251,9 +287,8 @@ slack_webhook = "https://hooks.slack.com/services/..."
 slack_echo = "all"
 ```
 
-`AGENT_MAIL_SLACK_WEBHOOK` can supply the URL instead. agent-mail also falls
-back to `SLACK_WEBHOOK` in `~/.config/weft/config` when neither setting is
-present. Reload the daemon and send a test message:
+`AGENT_MAIL_SLACK_WEBHOOK` can supply the URL instead. Reload the daemon and
+send a test message:
 
 ```bash
 agent-mail graceful
@@ -281,19 +316,21 @@ agent-mail slack-dashboard
 ### Status lines
 
 `agent-mail status-line` prints this session's display name, whether or not
-anyone else is in the project. The name is the session's address: agents in
-other projects refer to it by that name, so the command prints the name this
+anyone else is in the project. Agents can use the display name as an address
+when it is unique in the target project; `list_sessions` also reports the full
+name and session ID for unambiguous routing. The command prints the name this
 session is actually registered and reachable under — see
 [identity resolution](docs/status-line.md#project-and-session-resolution) for
 why the two can differ. It prints nothing when it cannot resolve a session ID,
 or when it cannot tell which registration in the project is its own.
 
 `--fields` prints one tab-separated line instead: the name, peer count, unread
-messages, `push`/`pull` for whether mail reaches this session on its own, and
-unprocessed weft jobs this session submitted. A status line can then show all
-five from a single invocation, rather than reimplementing agent-mail's
-registry and spool semantics in shell. Fields are only ever appended, so a
-consuming script can split positionally.
+messages, delivery mode, and unprocessed weft jobs this session submitted. The
+delivery field is `push`, `pull`, `unknown`, or empty when no registered session
+can be identified. A status line can then show all five from a single
+invocation, rather than reimplementing agent-mail's registry and spool
+semantics in shell. Fields are only ever appended, so a consuming script can
+split positionally.
 
 #### Claude Code
 
@@ -380,10 +417,15 @@ the separate Claude Code and Kimi Code payload and rendering constraints.
 
 ## Dashboards
 
-The daemon serves a read-only dashboard at `http://127.0.0.1:8377/`: live
-sessions, coordination health, sender-to-recipient traffic, and a flight log.
-`agent-mail dashboard --open` opens it, and starts a filesystem-backed fallback
-server when the daemon is down. `agent-mail slack-dashboard` posts the same
+The read-only dashboard is off by default because it exposes every project's
+session and message metadata to local processes. Both dashboard forms require
+the local CLI and `dashboard = true` in
+`~/.config/agent-mail/config.toml`. Run `agent-mail graceful` if the daemon is
+already running so it picks up that setting. The daemon then serves the
+dashboard at `http://127.0.0.1:8377/`, showing live sessions, coordination
+health, sender-to-recipient traffic, and a flight log. `agent-mail dashboard
+--open` opens it; when the daemon is down, the same command starts a
+filesystem-backed fallback server. `agent-mail slack-dashboard` posts the same
 summary into Slack and edits that message in place on later runs, which needs
 the bot token rather than the webhook.
 [docs/dashboards.md](docs/dashboards.md) covers both.
@@ -423,10 +465,11 @@ Use agent-mail when the shape is different in one of these ways:
 - **Not every endpoint is Claude Code.** Codex, Kimi Code, and Gemini CLI
   sessions use the same tools and inboxes. So do the CLI, weft, and any HTTP
   client.
-- **The recipient may not exist yet.** A message, whether addressed to one
-  session or broadcast to the whole project, waits in the project's inbox and
-  is read when a session next attaches. A team's config is removed when its
-  session ends.
+- **The recipient can be offline.** Unless it expires, a project broadcast
+  waits in the inbox for a future session to retrieve with `check_inbox`. A
+  message addressed to a known session remains available to that same session
+  ID if it disconnects and later resumes, unless it expires. A team's config is
+  removed when its session ends.
 - **The unit of coordination is a file or a plan, not a task.** Path
   claims express edit exclusion, work leases express who is responsible for a
   logical unit, and the two are deliberately separate.
