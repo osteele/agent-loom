@@ -68,6 +68,7 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
 
   try {
     await client.connect(transport);
+    expect(client.getInstructions()).not.toContain("Agent-mail backlog:");
     const tools = await client.listTools();
     const claimTool = tools.tools.find((tool) => tool.name === "claim_path");
     expect(claimTool?.inputSchema.properties).toHaveProperty("paths");
@@ -109,6 +110,110 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     });
     const empty = await client.callTool({ name: "list_claims" });
     expect(textContent(empty)).toBe("no active claims");
+  } finally {
+    await client.close();
+  }
+});
+
+test("initial MCP instructions report the session's unread backlog only", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-backlog-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
+  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  mkdirSync(inboxDirectory, { recursive: true });
+  const messages = [
+    {
+      id: "broadcast",
+      ts: "2026-08-22T12:00:00.000Z",
+      from: "secret-sender",
+      project: canonical,
+      message: "SECRET BROADCAST BODY",
+    },
+    {
+      id: "direct",
+      ts: "2026-08-22T12:01:00.000Z",
+      from: "secret-sender",
+      project: canonical,
+      message: "SECRET DIRECT BODY",
+      meta: { toSession: "recipient-session" },
+    },
+    {
+      id: "for-someone-else",
+      ts: "2026-08-22T12:02:00.000Z",
+      from: "secret-sender",
+      project: canonical,
+      message: "SECRET OTHER BODY",
+      meta: { toSession: "other-session" },
+    },
+    {
+      id: "self-authored",
+      ts: "2026-08-22T12:03:00.000Z",
+      from: canonical,
+      project: canonical,
+      message: "SECRET SELF BODY",
+      meta: { sessionId: "recipient-session" },
+    },
+  ];
+  writeFileSync(
+    join(inboxDirectory, `${slug}.jsonl`),
+    `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`,
+  );
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "recipient-session",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+
+  try {
+    await client.connect(transport);
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).toContain(
+      "Agent-mail backlog: 2 unread messages are waiting for this session. " +
+        "Call check_inbox to read them.",
+    );
+    expect(instructions).not.toContain("secret-sender");
+    expect(instructions).not.toContain("SECRET");
+
+    // A following request establishes that the server handled the initialized
+    // notification and stamped announcement state without writing a receipt.
+    await client.listTools();
+    const announced = JSON.parse(
+      readFileSync(
+        join(
+          home,
+          ".claude",
+          "agent-mail",
+          "announced",
+          `${slug}-recipient-session.json`,
+        ),
+        "utf8",
+      ),
+    ) as { lastUnread: number; lastNewestId?: string; remindCount: number };
+    expect(announced.lastUnread).toBe(2);
+    expect(announced.lastNewestId).toBe("direct");
+    expect(announced.remindCount).toBe(1);
+    expect(
+      readdirSync(join(home, ".claude", "agent-mail", "receipts")),
+    ).toHaveLength(0);
   } finally {
     await client.close();
   }

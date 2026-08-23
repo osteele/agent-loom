@@ -19,12 +19,13 @@ use; this is the reference behind it.
   receipts, policy, presence, and coordination tools. In a channel-enabled
   Claude Code session, it also tails the project spool and pushes new messages
   as `<channel source="agent-mail">` events.
-- **Pull-only clients get hook reminders.** The daemon publishes per-session
-  unread counts to `unread-summary.json` on its presence tick, and a harness
-  hook runs `agent-mail remind` to inject them into context on turn events.
-  The snapshot is a presentation cache, and the reminder bookkeeping under
-  `announced/` is not a delivery receipt: `pushed` keeps meaning channel
-  delivery or an inbox pull.
+- **Startup instructions announce an existing backlog.** Each MCP server scans
+  its session-filtered spool once and adds a fixed-text unread count to the
+  initialization instructions when mail is waiting. Pull-only clients then get
+  hook reminders for later arrivals: the daemon publishes counts to
+  `unread-summary.json`, and `agent-mail remind` injects them on turn events.
+  Snapshot and announcement state are presentation data, not delivery
+  receipts: `pushed` keeps meaning channel delivery or an inbox pull.
 - **The registry tracks attached sessions.** Entries under
   `~/.claude/agent-mail/registry/` record `cwd`, `pid`, `sessionId`, and `name`.
   A listing prunes an entry when the process is gone or its pid belongs to a

@@ -12,7 +12,7 @@
  *   presence.json          daemon snapshot of the live registry
  *   processes.json         daemon snapshot of coordination-owner processes
  *   unread-summary.json    daemon snapshot of per-session unread counts
- *   announced/<slug>-<id>.json per-session reminder bookkeeping (NOT receipts)
+ *   announced/<slug>-<id>.json per-session announcement bookkeeping (NOT receipts)
  *   remind-diagnostics.log rate-limited stale-summary diagnostics from remind
  *   daemon.pid, daemon.log daemon state
  * Config:     ~/.config/agent-mail/config.toml
@@ -46,8 +46,8 @@ export const WEFT_JOBS_SNAPSHOT_PATH = join(STATE_DIR, "weft-jobs.json");
 /** Per-session unread counts the daemon publishes for hook reminders. Same
  * presentation-cache rules as presence.json: never a delivery input. */
 export const UNREAD_SUMMARY_PATH = join(STATE_DIR, "unread-summary.json");
-/** Per-session reminder bookkeeping for hook-driven harnesses. Deliberately
- * separate from receipts/: a reminder delivers nothing. */
+/** Per-session startup/reminder bookkeeping. Deliberately separate from
+ * receipts/: an announcement delivers no message body. */
 export const ANNOUNCED_DIR = join(STATE_DIR, "announced");
 /** Rate-limited diagnostics from `agent-mail remind` (stale/missing summary).
  * Appended to, never read by code; stdout of the hook stays machine-clean. */

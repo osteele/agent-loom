@@ -1,14 +1,23 @@
 # Unread-mail reminders
 
-Codex, Kimi Code, and Gemini CLI run the agent-mail MCP server but receive no
-channel push: they learn about unread mail only when they happen to call
-`check_inbox`. Reminders close that gap. A hook registered with the harness
-runs `agent-mail remind` on turn events, and whatever it prints enters the
-model's context. An idle session gets nothing, because hooks fire only when
-the harness is already doing something.
+Every agent-mail MCP server puts the current session's unread count in its
+initial instructions when mail is already waiting. The count comes directly
+from the authoritative spool, is capped at `99+` in injected text, and the
+block is omitted when the inbox is empty. It contains no sender or message
+content.
 
-Three parts make this work:
+Codex, Kimi Code, and Gemini CLI receive no channel push after startup.
+Reminder hooks close that later-arrival gap: a hook registered with the
+harness runs `agent-mail remind` on turn events, and whatever it prints enters
+the model's context. An idle session gets nothing, because hooks fire only
+when the harness is already doing something.
 
+Four parts make this work:
+
+- `src/channel.ts` scans the session-filtered spool once while constructing
+  the MCP initialization instructions. After the handshake delivers them, it
+  stamps announcement bookkeeping so the first hook does not repeat the same
+  backlog notice.
 - The daemon publishes `~/.claude/agent-mail/unread-summary.json` on its
   10-second presence tick: a per-session unread count with the newest visible
   message id and timestamp. Muted sessions are omitted. The snapshot has a
@@ -41,9 +50,10 @@ These rules are what make reminders safe to install; they are tested in
 2. **Never block Stop for ordinary mail.** Peer mail is untrusted, and
    letting it force continuation is a token-burn and availability attack. No
    Stop hooks are installed.
-3. **Harness-owned facts only.** The payload is a count, a timestamp, and a
-   fixed instruction. Peer-authored text, including sender names, stays out.
-4. **Reminder state is not a receipt.** Bookkeeping lives under
+3. **Harness-owned facts only.** The payload is a capped count, a timestamp,
+   and a fixed instruction. Peer-authored text, including sender names, stays
+   out.
+4. **Announcement state is not a receipt.** Bookkeeping lives under
    `~/.claude/agent-mail/announced/` and records only which newest-message id
    a session was last reminded about. It never touches `receipts/`, and
    `pushed` keeps meaning channel delivery or an inbox pull. See
@@ -140,7 +150,7 @@ them.
   checkout, `bun src/cli.ts restart`.
 - **The reminder already fired for this mail.** The edge trigger fires once
   per newest-message id, then again only after 15 unread minutes. The
-  bookkeeping in `~/.claude/agent-mail/announced/<slug>-<sessionId>.json`
+   bookkeeping in `~/.claude/agent-mail/announced/<slug>-<sessionId>.json`
   records what was announced; deleting the file resets the edge.
 - **The hook printed nothing on a manual run.** Run
   `agent-mail remind --format codex --session <id> --project <dir>` by hand.

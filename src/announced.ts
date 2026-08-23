@@ -1,9 +1,10 @@
-/** Per-session reminder bookkeeping for hook-driven harnesses.
+/** Per-session reminder bookkeeping for startup and hook-driven announcements.
  *
  * One JSON file per (project, session): `announced/<slug>-<sessionId>.json`.
- * It records what the `remind` command last told a session so the next hook
- * event can decide whether anything changed (edge trigger) and bound how
- * often a session is re-reminded about mail it keeps not reading.
+ * It records what the MCP startup instructions or `remind` command last told
+ * a session so the next hook event can decide whether anything changed (edge
+ * trigger) and bound how often a session is re-reminded about mail it keeps
+ * not reading.
  *
  * This is reminder bookkeeping, NOT delivery evidence. A reminder delivers
  * nothing — the message still reaches the session only via channel push or

@@ -5,9 +5,11 @@ import {
   RE_REMINDER_MS,
   decideReminder,
   diagnosticDue,
+  displayedUnreadCount,
   formatReminder,
   nextAnnouncedState,
   reminderText,
+  startupUnreadText,
 } from "./remind.ts";
 import type { UnreadSummaryEntry } from "./unreadSummary.ts";
 
@@ -112,6 +114,24 @@ test("a custom re-reminder interval is honored", () => {
 });
 
 // --- reminderText --------------------------------------------------------------
+
+test("startup text is omitted for zero and reports a fixed-text backlog", () => {
+  expect(startupUnreadText(0)).toBe("");
+  expect(startupUnreadText(1)).toBe(
+    "Agent-mail backlog: 1 unread message is waiting for this session. " +
+      "Call check_inbox to read it.",
+  );
+  expect(startupUnreadText(3)).toBe(
+    "Agent-mail backlog: 3 unread messages are waiting for this session. " +
+      "Call check_inbox to read them.",
+  );
+});
+
+test("injected unread counts are capped while the inbox remains exact", () => {
+  expect(displayedUnreadCount(99)).toBe("99");
+  expect(displayedUnreadCount(100)).toBe("99+");
+  expect(startupUnreadText(100)).toContain("99+ unread messages");
+});
 
 test("reminder text carries count, time, and the fixed instruction only", () => {
   // Build the ISO from local wall-clock fields so the expectation holds in

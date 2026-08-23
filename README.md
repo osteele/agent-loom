@@ -152,11 +152,12 @@ agent-mail inbox --project "$PWD"
 
 ### Unread-mail reminders for pull-only clients
 
-Codex, Kimi Code, and Gemini CLI have no channel push, so they see mail only
-when they call `check_inbox`. Reminder hooks close that gap: the harness runs
-`agent-mail remind` on each turn, and unread counts enter the model's context
-when there is mail waiting. This needs the daemon, which computes the
-per-session unread summary.
+Every agent-mail MCP server reports an existing unread backlog in its initial
+instructions. Codex, Kimi Code, and Gemini CLI have no channel push for mail
+that arrives afterward, so reminder hooks close that gap: the harness runs
+`agent-mail remind` on turn events, and unread counts enter the model's context
+when there is mail waiting. The later-arrival reminders need the daemon, which
+computes the per-session unread summary.
 
 ```bash
 agent-mail hooks install

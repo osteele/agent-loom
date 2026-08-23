@@ -48,8 +48,9 @@ naming the identity it would push under and the channels the host authorized.
 
 ## Reminder hooks for pull-only clients
 
-`agent-mail install` registers MCP servers but not reminder hooks; those are
-a separate, platform-neutral step:
+The installed MCP server's initial instructions report mail already waiting
+when a session starts. To announce mail that arrives later in pull-only
+clients, install reminder hooks as a separate, platform-neutral step:
 
 ```bash
 agent-mail hooks install [--codex] [--kimi] [--gemini] [--gemini-after-tool]
