@@ -188,34 +188,38 @@ reports a rendered display label (`completed ok`, with a space) that is not safe
 to depend on. Migrate the existing daemon snapshot to the same contract rather
 than publishing two numbers that disagree about what "unprocessed" means.
 
-**Disposition is weft's four-value grouped enum, not the per-job `status`.**
-Note what is *not* the reason: the `job_status` view remaps a non-zero exit to
-`failed` before `EffectiveStatus()` sees it, so `counts` and the per-job enum in
-the same envelope do not disagree — measured, zero rows are `completed` with a
-non-zero exit. Do not write a reconciliation check between those two surfaces.
+**Disposition cuts on observables, never on weft's attempt status.** Every value
+below is derived from whether an exit code exists and whether it was zero,
+because that is the part of the record that does not drift:
 
-The distinction that is real lives one level down in `job_attempts`, before the
-view flattens it. View-`failed` merges three different attempt states:
+    completed_ok      exit 0                         bookkeeping
+    completed_error   exit != 0, any attempt status  read the program's output
+    no_exit           no exit code recorded          look at weft or the host
+    dead                                             weft concluded the job is gone
 
-    completed | exit != 0    2960   the command returned non-zero
-    failed    | exit != 0    3685   the attempt itself failed
-    failed    | exit NULL      70   the attempt produced no exit code
+`dead` stays its own line rather than folding into `no_exit`: it never carries
+an exit code, but it means something more specific than "no exit recorded".
 
-Those carry different next actions — read the program's output, versus look at
-weft or the host — so the grouped surface splits them:
+The attempt status is unusable for this. Among non-zero-exit attempts, 6030 of
+6645 have no specific `failure_reason`, and the same queue-runner marked those
+`completed` (2715) and `failed` (2178) over the same 175-day span. The marking
+carries no information for that 91%, so a `failed` line meaning "look at weft or
+the host" would have been unfounded for 83% of the rows it covered — sending
+someone to the host for something their own program did.
 
-    completed_ok      attempt completed, exit 0      -> bookkeeping
-    completed_error   attempt completed, exit != 0   -> read the program output
-    failed                                           -> look at weft or the host
-    dead                                             -> look at weft or the host
+Two traps recorded so they are not re-derived:
 
-`completed_error` reads the raw attempt status, so it is a real ~2960-row class
-rather than an always-zero field.
-
-Open: whether `failed | exit != 0` (3685 rows, the largest class) is genuinely
-attempt failure or contains command failures marked at the attempt level. If it
-mixes them, the `failed` line is not action-uniform and the split does not
-deliver the property it exists for. Confirm before writing the line's wording.
+- **Do not write a reconciliation check between `counts` and the per-job
+  `status`.** They agree. The `job_status` view remaps a non-zero exit to
+  `failed` before `EffectiveStatus()` sees it, so the `StatusCompleted` branch
+  in `IsFailedJob` is unreachable through this path — zero rows, not a
+  discrepancy to guard against.
+- **Do not build an infra-vs-program classifier from `failure_reason`.** The 614
+  specific reasons include `exit_2` and `exit_127`, which are program exit codes
+  in a field that otherwise names infrastructure (`oom`, `disk_full`,
+  `infra_prewarm_download_failed`). "Has a reason" is not an infra predicate.
+  That judgement belongs in weft's triage surfaces, which carry the full
+  `failure_reason`, not in a four-value announcement.
 
 **Report by disposition, never as one integer.** A single count filtered only by
 project and ownership reproduces the defect of the advisory it replaces: a
