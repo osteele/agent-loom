@@ -55,8 +55,7 @@ Do not replace the spools wholesale yet. Evolve the storage layer in stages:
 - **Storage interface:** isolate message, receipt, read-state, registry, and
   claim operations from their on-disk representations.
 - **Filesystem hardening:** make registry updates atomic and safe against
-  concurrent field updates; add explicit retention or compaction before log
-  growth becomes a problem.
+  concurrent field updates. Retention is no longer prospective — see below.
 - **Rebuildable SQLite index:** project the JSONL logs into a disposable SQL
   read model keyed by file and byte offset. Use it for dashboards, threads,
   receipts, history, and aggregate queries. JSONL remains authoritative, so the
@@ -79,6 +78,45 @@ Keep config, PID, and log files outside the database. Leave claims on their
 existing project-scoped filesystem transactions until leases or richer workflow
 state justify moving them. Decide whether read state belongs to a project or to
 each session before defining the SQL schema.
+
+### Spool retention
+
+Inbox spools and receipt logs are append-only with no rotation, pruning, or
+truncation anywhere in the codebase. They are 9.4 MB and 1.0 MB respectively,
+and both grow monotonically for the life of a project.
+
+Per-tick cost no longer scales with them — the poll path reads the archive only
+when something is held, and the receipt log through an incremental cursor — so
+this is now about disk and about one-shot readers (`check_inbox`, dashboards,
+`delivery_status`), which still parse whole logs and get slower forever.
+
+Retention is also the only lever that reaches an already-running listener. A
+listener re-reads from disk each tick, so shrinking a file makes the process
+cheaper immediately, with no session restart. Sessions idle for days never
+restart on their own, so a code fix alone leaves their cost in place.
+
+Constraints, all load-bearing:
+
+- **Daemon-owned**, on its own slow timer rather than the 10s presence tick,
+  taking the same per-project lock as admission. Listeners must not rotate:
+  dozens of them racing on one file is worse than the growth.
+- **Rotate, never delete.** Old lines move to a dated archive file. This is
+  durable mail, and silently destroying it is a worse failure than disk use.
+- **Messages and their receipts move together.** Pruning receipts alone strips
+  a retained message's evidence that it was already delivered, and it gets
+  re-sent.
+- **Design out the offset collision.** A listener treats `size === offset` as
+  "nothing new", so a rotated file whose size coincides with a live listener's
+  offset leaves that listener parsing later appends from a wrong position — a
+  torn read rather than a missed message. Roughly 1-in-filesize, but reachable
+  only once rotation exists, so it has to be handled as part of it.
+
+Re-delivery is already safe: a listener resets its offset when the file shrinks
+and re-reads, but `decideNewMessageDelivery` skips anything already settled for
+that session, and `pushed` is a terminal receipt status.
+
+Retention thresholds warrant a decision record — they are exactly the kind of
+choice a later contributor reverses by mistake.
 
 ## Native Slack threading
 
