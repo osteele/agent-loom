@@ -189,19 +189,33 @@ to depend on. Migrate the existing daemon snapshot to the same contract rather
 than publishing two numbers that disagree about what "unprocessed" means.
 
 **Disposition is weft's four-value grouped enum, not the per-job `status`.**
-`counts` and `status` in the same envelope disagree by design: `IsFailedJob`
-folds `dead` into `failed` *and* counts a `completed` job with a non-zero exit
-as failed, so summing the per-job enum does not reproduce `counts`. Grouping on
-`status` would produce a breakdown that silently disagrees with weft's own
-totals. The grouped surface exposes instead:
+Note what is *not* the reason: the `job_status` view remaps a non-zero exit to
+`failed` before `EffectiveStatus()` sees it, so `counts` and the per-job enum in
+the same envelope do not disagree — measured, zero rows are `completed` with a
+non-zero exit. Do not write a reconciliation check between those two surfaces.
 
-    completed_ok      completed, exit 0      -> bookkeeping
-    completed_error   completed, exit != 0   -> investigate
-    failed                                   -> investigate
-    dead                                     -> investigate
+The distinction that is real lives one level down in `job_attempts`, before the
+view flattens it. View-`failed` merges three different attempt states:
 
-Four fixed keys, each action-uniform. A completed job that exited non-zero needs
-investigation exactly like a failure, which the raw enum cannot express.
+    completed | exit != 0    2960   the command returned non-zero
+    failed    | exit != 0    3685   the attempt itself failed
+    failed    | exit NULL      70   the attempt produced no exit code
+
+Those carry different next actions — read the program's output, versus look at
+weft or the host — so the grouped surface splits them:
+
+    completed_ok      attempt completed, exit 0      -> bookkeeping
+    completed_error   attempt completed, exit != 0   -> read the program output
+    failed                                           -> look at weft or the host
+    dead                                             -> look at weft or the host
+
+`completed_error` reads the raw attempt status, so it is a real ~2960-row class
+rather than an always-zero field.
+
+Open: whether `failed | exit != 0` (3685 rows, the largest class) is genuinely
+attempt failure or contains command failures marked at the attempt level. If it
+mixes them, the `failed` line is not action-uniform and the split does not
+deliver the property it exists for. Confirm before writing the line's wording.
 
 **Report by disposition, never as one integer.** A single count filtered only by
 project and ownership reproduces the defect of the advisory it replaces: a
