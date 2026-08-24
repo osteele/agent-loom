@@ -121,6 +121,29 @@ export async function readFileSlice(
   }
 }
 
+/** Synchronous counterpart to `readFileSlice`.
+ *
+ * The one function here with no Bun fast path: `bun.file().slice()` is async,
+ * and both hosts take the `openSync`/`readSync` route instead. It exists
+ * because the receipt tail is advanced from `recordReceipt`, which is
+ * synchronous and runs inside delivery loops. */
+export function readFileSliceSync(
+  path: string,
+  start: number,
+  end: number,
+): string {
+  const length = end - start;
+  if (length <= 0) return "";
+  const buffer = Buffer.allocUnsafe(length);
+  const fd = openSync(path, "r");
+  try {
+    const read = readSync(fd, buffer, 0, length, start);
+    return buffer.subarray(0, read).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Read all of stdin as UTF-8. Callers are one-shot CLI entry points that are
  * handed a JSON payload on stdin and exit. */
 export async function readStdinText(): Promise<string> {

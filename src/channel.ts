@@ -99,12 +99,14 @@ import {
   appendMessage,
   appendMessageGuarded,
   appendReceipt,
+  emptyReceiptTail,
   findReceipts,
   hasReceipt,
   isExpired,
   markMessagesRead,
   messageVisibleToSession,
   readMessages,
+  readReceiptTail,
   readReceipts,
 } from "./spool.ts";
 import {
@@ -1515,6 +1517,15 @@ register(
 // --- Spool watcher: push lines appended after startup -----------------------
 let offset = existsSync(mySpool) ? statSync(mySpool).size : 0;
 
+/** The poll path's view of the receipt log, advanced incrementally rather than
+ * re-parsed each tick. Tool handlers keep using `readReceipts` for their
+ * one-shot reads; only the 1s tick needs the cursor. */
+const receiptTail = emptyReceiptTail();
+
+function refreshReceipts(): DeliveryReceipt[] {
+  return readReceiptTail(cwd, receiptTail).receipts;
+}
+
 function recordReceipt(
   receipts: DeliveryReceipt[],
   messageId: string,
@@ -1530,7 +1541,15 @@ function recordReceipt(
     ...(detail ? { detail } : {}),
   };
   appendReceipt(cwd, receipt);
-  receipts.push(receipt);
+  if (receipts === receiptTail.receipts) {
+    // The tail is fed only by reads of the file, so ingest the line just
+    // appended rather than pushing it: a local push would be duplicated once
+    // the cursor crossed those bytes. The read also picks up peers' receipts,
+    // which a push cannot.
+    refreshReceipts();
+  } else {
+    receipts.push(receipt);
+  }
 }
 
 async function pushMessage(
@@ -1589,7 +1608,7 @@ async function settleHeld(
 async function poll(): Promise<void> {
   if (isMuted(cwd, process.pid)) return;
   const policy = inboundPolicy(cwd, process.pid);
-  const receipts = readReceipts(cwd);
+  const receipts = refreshReceipts();
   await settleHeld(policy, receipts);
   if (!sessionCapabilities().channelPush) return;
   if (!existsSync(mySpool)) return;

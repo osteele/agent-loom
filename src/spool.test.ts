@@ -10,16 +10,20 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withFileLock } from "./lock.ts";
-import { projectSlug, spoolPath } from "./paths.ts";
+import { ensureDirs, projectSlug, receiptPath, spoolPath } from "./paths.ts";
 import { sleepSync } from "./runtime.ts";
 import {
   type AdmissionOptions,
+  type DeliveryReceipt,
   type Message,
   admissionDecision,
   appendMessage,
   type appendMessageGuarded,
+  appendReceipt,
+  emptyReceiptTail,
   isExpired,
   messageVisibleToSession,
+  readReceiptTail,
   shouldEchoMessageToSlack,
 } from "./spool.ts";
 
@@ -278,3 +282,125 @@ test("findReceipts locates a sent message's receipts in the recipient's project"
     rmSync(root, { recursive: true, force: true });
   }
 }, 20000);
+
+// --- receipt cursor -------------------------------------------------------
+// These pin incrementality by object identity rather than by timing. A full
+// re-read produces fresh objects for lines already ingested, so an accidental
+// return to readReceipts() in the poll path fails these deterministically,
+// where a duration threshold would only flake.
+
+let receiptProjectCounter = 0;
+function receiptProject(): string {
+  ensureDirs();
+  receiptProjectCounter += 1;
+  const project = `/tmp/agent-mail-receipt-tail-${receiptProjectCounter}`;
+  rmSync(receiptPath(project), { force: true });
+  return project;
+}
+
+function receipt(messageId: string, sessionId = "session-1"): DeliveryReceipt {
+  return {
+    messageId,
+    project: "unused",
+    ts: "2026-08-24T00:00:00.000Z",
+    status: "pushed",
+    sessionId,
+  };
+}
+
+test("the receipt cursor parses each appended line exactly once", () => {
+  const project = receiptProject();
+  const tail = emptyReceiptTail();
+  for (const id of ["a", "b", "c"]) appendReceipt(project, receipt(id));
+
+  const first = readReceiptTail(project, tail).receipts;
+  expect(first.map((r) => r.messageId)).toEqual(["a", "b", "c"]);
+  const alreadyParsed = first[0];
+  const offsetAfterFirst = tail.offset;
+
+  appendReceipt(project, receipt("d"));
+  const second = readReceiptTail(project, tail).receipts;
+
+  expect(second.map((r) => r.messageId)).toEqual(["a", "b", "c", "d"]);
+  // The identity check is the regression guard: re-reading the file whole would
+  // replace this object, which is exactly the cost the cursor exists to avoid.
+  expect(second[0]).toBe(alreadyParsed);
+  expect(tail.offset).toBeGreaterThan(offsetAfterFirst);
+});
+
+test("a cursor read with nothing appended does no work", () => {
+  const project = receiptProject();
+  const tail = emptyReceiptTail();
+  appendReceipt(project, receipt("a"));
+
+  const parsed = readReceiptTail(project, tail).receipts[0];
+  const offset = tail.offset;
+  const again = readReceiptTail(project, tail);
+
+  expect(again.receipts).toHaveLength(1);
+  expect(again.receipts[0]).toBe(parsed);
+  expect(again.offset).toBe(offset);
+});
+
+test("the cursor picks up receipts appended by another listener", () => {
+  // One receipt log per project, shared by every listener in it. A cursor that
+  // only accounted for its own writes would silently lose peers' transitions.
+  const project = receiptProject();
+  const tail = emptyReceiptTail();
+  appendReceipt(project, receipt("a", "session-1"));
+  readReceiptTail(project, tail);
+
+  appendReceipt(project, receipt("b", "session-2"));
+
+  expect(
+    readReceiptTail(project, tail).receipts.map((r) => r.sessionId),
+  ).toEqual(["session-1", "session-2"]);
+});
+
+test("a truncated or rotated log restarts the cursor", () => {
+  // Forward compatibility with pruning: rotation shrinks the file under a live
+  // reader, whose offset then points past the end. Reading from there would
+  // return nothing forever.
+  const project = receiptProject();
+  const tail = emptyReceiptTail();
+  for (const id of ["a", "b", "c"]) appendReceipt(project, receipt(id));
+  readReceiptTail(project, tail);
+
+  writeFileSync(
+    receiptPath(project),
+    `${JSON.stringify(receipt("kept"))}\n`,
+    "utf8",
+  );
+
+  expect(
+    readReceiptTail(project, tail).receipts.map((r) => r.messageId),
+  ).toEqual(["kept"]);
+});
+
+test("a torn final append is left for the next read", () => {
+  // Consuming a partial line would advance the offset past bytes that never
+  // formed a record, dropping the receipt permanently once its newline landed.
+  const project = receiptProject();
+  const tail = emptyReceiptTail();
+  appendReceipt(project, receipt("whole"));
+  readReceiptTail(project, tail);
+
+  const partial = JSON.stringify(receipt("torn"));
+  writeFileSync(
+    receiptPath(project),
+    `${JSON.stringify(receipt("whole"))}\n${partial.slice(0, 20)}`,
+    "utf8",
+  );
+  expect(
+    readReceiptTail(project, tail).receipts.map((r) => r.messageId),
+  ).toEqual(["whole"]);
+
+  writeFileSync(
+    receiptPath(project),
+    `${JSON.stringify(receipt("whole"))}\n${partial}\n`,
+    "utf8",
+  );
+  expect(
+    readReceiptTail(project, tail).receipts.map((r) => r.messageId),
+  ).toEqual(["whole", "torn"]);
+});

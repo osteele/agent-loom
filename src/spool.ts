@@ -1,7 +1,13 @@
 /** JSONL message spools: one append-only file per project. */
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
 import { withFileLock } from "./lock.ts";
 import {
@@ -12,6 +18,7 @@ import {
   receiptPath,
   spoolPath,
 } from "./paths.ts";
+import { readFileSliceSync } from "./runtime.ts";
 
 export type MessageOriginKind = "agent" | "automation" | "human";
 
@@ -324,6 +331,60 @@ export function readReceipts(
     }
   }
   return out;
+}
+
+/** Incremental cursor over a project's append-only receipt log. */
+export interface ReceiptTail {
+  receipts: DeliveryReceipt[];
+  offset: number;
+}
+
+export function emptyReceiptTail(): ReceiptTail {
+  return { receipts: [], offset: 0 };
+}
+
+/** Ingest receipts appended since the last read, mutating `tail` in place.
+ *
+ * The log is append-only and shared by every listener in the project, so a tail
+ * read picks up peers' receipts as well as this session's. Reading it whole on
+ * each poll tick made an idle listener's cost grow with the project's lifetime
+ * rather than with its traffic, which is the same defect that made settleHeld
+ * expensive.
+ *
+ * Only whole lines are consumed. A torn final append stays unread until its
+ * newline lands, rather than being parsed as a truncated record and then
+ * skipped forever because the offset had moved past it. */
+export function readReceiptTail(
+  project: string,
+  tail: ReceiptTail,
+): ReceiptTail {
+  const path = receiptPath(project);
+  if (!existsSync(path)) {
+    tail.receipts.length = 0;
+    tail.offset = 0;
+    return tail;
+  }
+  const size = statSync(path).size;
+  if (size < tail.offset) {
+    // Truncated or rotated: the prefix already ingested no longer describes the
+    // file, so the cursor restarts rather than reading from a stale position.
+    tail.receipts.length = 0;
+    tail.offset = 0;
+  }
+  if (size === tail.offset) return tail;
+  const chunk = readFileSliceSync(path, tail.offset, size);
+  const lastNewline = chunk.lastIndexOf("\n");
+  if (lastNewline < 0) return tail;
+  tail.offset += lastNewline + 1;
+  for (const line of chunk.slice(0, lastNewline).split("\n")) {
+    if (!line) continue;
+    try {
+      tail.receipts.push(JSON.parse(line) as DeliveryReceipt);
+    } catch {
+      // A torn receipt does not hide later state transitions.
+    }
+  }
+  return tail;
 }
 
 export function hasReceipt(
