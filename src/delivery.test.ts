@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
-import { classifyFallback, withAttemptKey } from "./delivery.ts";
-import type { Message } from "./spool.ts";
+import {
+  classifyFallback,
+  decideHeldSettlements,
+  pendingHeldIds,
+  withAttemptKey,
+} from "./delivery.ts";
+import type { DeliveryReceipt, Message } from "./spool.ts";
 
 const BASE: Message = {
   ts: "2026-08-17T04:54:46.000Z",
@@ -57,4 +62,63 @@ test("ordinary and rate-limited fallbacks pass through unchanged", () => {
   expect(
     classifyFallback({ status: "rate_limited", retryAfterSeconds: 7 }),
   ).toEqual({ kind: "rate_limited", retryAfterSeconds: 7 });
+});
+
+const receipt = (
+  status: DeliveryReceipt["status"],
+  sessionId = "session-1",
+): DeliveryReceipt => ({
+  messageId: "msg-1",
+  project: BASE.project,
+  ts: BASE.ts,
+  status,
+  sessionId,
+});
+
+const NOW = Date.parse(BASE.ts);
+const ARCHIVE = new Map<string, Message>([["msg-1", BASE]]);
+
+test("nothing pending held means no settlement actions, whatever the archive holds", () => {
+  // channel.ts's settleHeld returns before reading the project archive when
+  // pendingHeldIds is empty. That read ran on every 1s poll tick and scaled with
+  // the project's entire message history, which is what made an idle listener
+  // burn ~3% of a core. The skip is only safe while this equivalence holds: if
+  // decideHeldSettlements ever yields actions with nothing pending, that early
+  // return would drop them silently rather than merely saving work.
+  for (const receipts of [
+    [receipt("pushed")],
+    [receipt("held"), receipt("pushed")],
+  ]) {
+    expect(pendingHeldIds(receipts, "session-1")).toEqual([]);
+    expect(
+      decideHeldSettlements(
+        "session-1",
+        "accept",
+        false,
+        true,
+        ARCHIVE,
+        receipts,
+        NOW,
+      ),
+    ).toEqual([]);
+  }
+});
+
+test("a held message still settles once the session can receive it", () => {
+  // Positive control for the skip above. Without it, a pendingHeldIds that
+  // always returned empty would satisfy the previous test while silently
+  // disabling held delivery altogether.
+  const receipts = [receipt("held")];
+  expect(pendingHeldIds(receipts, "session-1")).toEqual(["msg-1"]);
+  expect(
+    decideHeldSettlements(
+      "session-1",
+      "accept",
+      false,
+      true,
+      ARCHIVE,
+      receipts,
+      NOW,
+    ),
+  ).toEqual([{ type: "push", messageId: "msg-1" }]);
 });

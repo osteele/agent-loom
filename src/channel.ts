@@ -1557,6 +1557,11 @@ async function settleHeld(
   policy: InboundPolicy,
   receipts: DeliveryReceipt[],
 ): Promise<void> {
+  // Nothing held for this session means decideHeldSettlements yields no actions,
+  // so the archive read below is pure cost. It ran on every 1s tick, and the
+  // spool is append-only, which made an idle listener's CPU scale with the
+  // project's entire message history rather than with its traffic.
+  if (pendingHeldIds(receipts, sessionId).length === 0) return;
   const byId = new Map(
     readMessages(cwd, { limit: 0 }).map((msg) => [msg.id, msg]),
   );
