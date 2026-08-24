@@ -164,13 +164,21 @@ is therefore small at rollout rather than total, and the announcement is useful
 from day one.
 
 The basename check is load-bearing and must not be removed as redundant. It is
-*not* corroboration between independent facts: `project` defaults to the
-basename of `working_dir`, so for non-override rows one is a function of the
-other. What the check actually verifies is that `working_dir` was itself the
-repo root and still is one with the same name — which is exactly what rejects
-the two bad cases, an override naming a tree the path does not lead to, and a
-job run in a subdirectory (`project` == "sub" while the root is "repo").
-Dropping it would silently accept every override.
+*not* corroboration between independent facts: `ResolveProjectName` returns
+`filepath.Base(ProjectDir(dir))`, so for non-override rows `project` is a
+function of the same input the derivation walks. What it verifies is that the
+project name recorded at submit time still equals the basename of the repo root
+this job's `working_dir` leads to today.
+
+    rejects  an override, where `project` names a tree the path does not lead to
+    rejects  a path that no longer resolves to a same-named repo root
+    accepts  a job run in a SUBDIRECTORY of its project — `project` was already
+             the repo-root name, never the directory basename (11 such rows)
+
+The subdirectory behaviour is intended, not a leak; do not "fix" it. Dropping
+the check entirely would silently readmit every override. Two repos sharing a
+basename stay safe because the root is derived from this job's own
+`working_dir` rather than looked up by name.
 
 **Source of truth is weft's session-inbox contract**, `weft session unprocessed`
 (versioned envelope, `version: 1`), *not* `weft list jobs --unprocessed`. The
