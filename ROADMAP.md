@@ -118,6 +118,57 @@ that session, and `pushed` is a terminal receipt status.
 Retention thresholds warrant a decision record — they are exactly the kind of
 choice a later contributor reverses by mistake.
 
+## Orphaned weft jobs at session startup
+
+Tell a session, on startup, how many unprocessed weft jobs belong to its project
+and are not assigned to any surviving session. Jobs whose submitter is still
+alive already get a session-addressed notification; the orphans are the ones
+with no owner, and a session starting in that project is the natural inheritor.
+
+**Layer division.** weft supplies job facts (project, submitter session,
+unprocessed status, disposition); agent-mail supplies session liveness; the join
+happens here. weft must *not* model session liveness — it cannot observe it, and
+adding it would make weft a reader of agent-mail's registry, which is exactly
+the private-state coupling that rots. Do not "simplify" this later by asking
+weft to track owners.
+
+**Orphaned** means the submitter session is empty *or* is not live anywhere.
+Live-anywhere rather than live-in-project: a submitter alive in another project
+still receives its own notice, so counting it here would double-report it. An
+empty submitter is unattributable, which for this purpose is the same as
+unowned, and is already how `countBySession` buckets a missing value.
+
+**Report by disposition, never as one integer.** The unprocessed set spans four
+terminal states — sampled 2026-08-24: 12 canceled, 7 completed ok, 1 killed,
+1 failed. A single count filtered only by project and ownership reproduces the
+defect of the advisory this replaces, one layer down: a number dominated by
+canceled jobs with the one genuine failure invisible inside it. The test that
+catches this is whether every item in a count deserves the same response
+latency; canceled is "whenever" and failed is "now", so merging them hides the
+time-sensitive item. Each disposition line is action-uniform and the total still
+reaches zero as jobs are processed.
+
+**Blocked on weft: a canonical project path per job.** Project identity here is
+an absolute realpath, applied at every boundary. weft's two location fields are
+bare names and they disagree — a job reported `project=agent-review` with
+`dir=with-limits`. Neither supports the join, and inferring a name-to-path
+mapping would mean announcing a count derived from a guess.
+
+Two further interface dependencies, both raised with weft: the announcement pins
+the literal `status` values (`canceled`, `completed ok`, `killed`, `failed` —
+note the space, which suggests a display label rather than an enum), and a
+schema version would let a field rename fail loudly instead of miscounting
+silently. Prefer an underlying enum over the display string if one exists; treat
+an unrecognized value as "unknown disposition" rather than dropping the row.
+
+**On this side**, once the path lands: bucket the cached snapshot by canonical
+project and submitter session rather than by session alone, join against live
+registrations at announcement time, and extend the existing startup
+announcement. No extra weft invocations — the daemon already refreshes that
+query every 60s, so the announcement reads the snapshot and never shells out.
+The snapshot keeps the `presence.json` discipline: raw counts, never rendered
+text, and readers degrade when it is stale.
+
 ## Native Slack threading
 
 Threads exist in the mail layer (`replyTo`/`threadId` on every message), and the
