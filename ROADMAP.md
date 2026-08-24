@@ -155,6 +155,36 @@ presence data directly queryable and useful at send time:
   sender knows whether to expect a fast reply. Keep this explicitly advisory:
   the spool, not the snapshot, defines delivery.
 
+### Duplicate listeners under one parent
+
+A single agent process can accumulate several live channel servers over its
+lifetime — observed as three under one codex parent (aged 2d07h, 1d20h, 1d18h)
+and two under another. They appear hours apart rather than in a burst, so this
+is per-session-lifetime growth, independent of how many sessions exist.
+
+Not the zombie case fixed in `isCurrentProcess`: those were three *running*
+processes, each polling and each holding a registration.
+
+Mechanism: teardown fires on signals and on `stdin` close/end. Both observed
+parents were stopped (`ps stat` `T`), and a stopped parent holds the pipe open,
+so a superseded listener never receives EOF, never runs `shutdown()`, and keeps
+polling. On reconnect the parent spawns another server and nothing on either
+side reconciles.
+
+Likely fix: on register, a listener sharing `parentPid` and `cwd` with an
+existing registration supersedes it, and the older one self-exits on its next
+poll rather than being signalled — routing through the existing `shutdown()` so
+its claims and work leases release instead of leaking a second resource.
+
+**Blocked on evidence, deliberately.** The fix assumes two live listeners under
+one parent are always a duplicate, and the registrations that would confirm it
+were removed during a cleanup before they were captured. At least one
+configuration makes the assumption false: a user-scope `mcpServers` entry
+alongside the plugin has one parent legitimately spawning two agent-mail
+servers. Terminating listener processes on an unverified premise is the wrong
+trade — capture both registry entries from the next duplicate and check whether
+they share `parentPid` and differ only in `pid` and `started`.
+
 ## Live handoff
 
 Async mail can't express "I'm handing this task to you now, are you taking it."
