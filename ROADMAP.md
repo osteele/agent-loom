@@ -155,6 +155,23 @@ surface that reports a level. They must not be silently dropped either — the
 aggregate emits them as an explicit bucket so "none exist" stays
 distinguishable from "never seen".
 
+`project_root` is backfilled for legacy rows by a *derivation*, not a guess:
+expand `working_dir`, realpath, walk up to the repo root, and accept it only if
+that root's basename equals the recorded `project`. Measured coverage 6092 of
+6231 tilde rows; the ~139 rejected are genuine overrides and vanished
+directories, which stay NULL and land in the unattributable bucket. The bucket
+is therefore small at rollout rather than total, and the announcement is useful
+from day one.
+
+The basename check is load-bearing and must not be removed as redundant. It is
+*not* corroboration between independent facts: `project` defaults to the
+basename of `working_dir`, so for non-override rows one is a function of the
+other. What the check actually verifies is that `working_dir` was itself the
+repo root and still is one with the same name — which is exactly what rejects
+the two bad cases, an override naming a tree the path does not lead to, and a
+job run in a subdirectory (`project` == "sub" while the root is "repo").
+Dropping it would silently accept every override.
+
 **Source of truth is weft's session-inbox contract**, `weft session unprocessed`
 (versioned envelope, `version: 1`), *not* `weft list jobs --unprocessed`. The
 two disagree by 13 of 21 rows: `IsInboxJob` excludes canceled and killed, which
