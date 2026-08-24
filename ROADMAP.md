@@ -163,6 +163,21 @@ reports a rendered display label (`completed ok`, with a space) that is not safe
 to depend on. Migrate the existing daemon snapshot to the same contract rather
 than publishing two numbers that disagree about what "unprocessed" means.
 
+**Disposition is weft's four-value grouped enum, not the per-job `status`.**
+`counts` and `status` in the same envelope disagree by design: `IsFailedJob`
+folds `dead` into `failed` *and* counts a `completed` job with a non-zero exit
+as failed, so summing the per-job enum does not reproduce `counts`. Grouping on
+`status` would produce a breakdown that silently disagrees with weft's own
+totals. The grouped surface exposes instead:
+
+    completed_ok      completed, exit 0      -> bookkeeping
+    completed_error   completed, exit != 0   -> investigate
+    failed                                   -> investigate
+    dead                                     -> investigate
+
+Four fixed keys, each action-uniform. A completed job that exited non-zero needs
+investigation exactly like a failure, which the raw enum cannot express.
+
 **Report by disposition, never as one integer.** A single count filtered only by
 project and ownership reproduces the defect of the advisory it replaces: a
 number dominated by low-urgency rows with the one genuine failure invisible
@@ -184,6 +199,27 @@ unattributed rows that *are* the orphans — 11 of 21 when sampled. A grouped
 query relying on that index returns a count that is plausible, small, and wrong,
 and a too-low orphan count looks like good news. Check this explicitly against a
 known-unattributed job before trusting the first numbers.
+
+**The grouped document** is a distinct kind, refusable on either axis:
+
+    {"kind": "unprocessed_groups", "version": 1,
+     "scope": {"state": "all_sessions"},
+     "groups": [{"project_root": ..., "project": ..., "submitter_session": ...,
+                 "unattributed_session": bool,
+                 "dispositions": {...}, "total": N}]}
+
+`scope.state` is `all_sessions` by construction — the grouped path never reads
+the caller's session id, so there is nothing for it to inherit. Ungrouped
+`weft session unprocessed` stays `version: 1` with `project_root` added
+additively.
+
+**Canonicalize `project_root` at read time anyway.** weft canonicalizes at
+submit time, which does not survive the project moving afterwards — this repo
+has carried live registry entries under both `code/utils/agent-mail` and
+`code/agent-tools/agent-mail`, one a symlink to the other. Compare
+`canonicalProject(project_root)` against `canonicalProject(P)` rather than
+string-matching a value that was canonical when it was written. A genuine move
+is unrecoverable; a symlink is not, and realpath at read time handles it.
 
 **Delivery split.** weft is separating the broadcast-safe completion notice from
 the session-scoped count, so agent-mail is no longer handed one opaque string
