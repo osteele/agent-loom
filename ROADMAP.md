@@ -125,49 +125,74 @@ and are not assigned to any surviving session. Jobs whose submitter is still
 alive already get a session-addressed notification; the orphans are the ones
 with no owner, and a session starting in that project is the natural inheritor.
 
-**Layer division.** weft supplies job facts (project, submitter session,
-unprocessed status, disposition); agent-mail supplies session liveness; the join
-happens here. weft must *not* model session liveness — it cannot observe it, and
-adding it would make weft a reader of agent-mail's registry, which is exactly
-the private-state coupling that rots. Do not "simplify" this later by asking
-weft to track owners.
+Interface agreed with weft 2026-08-24; awaiting a weft build. Nothing here is
+implemented.
+
+**Layer division.** weft supplies job facts (owning project as a canonical path,
+submitter session, disposition, counts); agent-mail supplies session liveness;
+the join happens here. weft must *not* model session liveness — it cannot
+observe it, and adding it would make weft a reader of agent-mail's registry,
+which is exactly the private-state coupling that rots. Do not "simplify" this
+later by asking weft to track owners.
 
 **Orphaned** means the submitter session is empty *or* is not live anywhere.
 Live-anywhere rather than live-in-project: a submitter alive in another project
-still receives its own notice, so counting it here would double-report it. An
-empty submitter is unattributable, which for this purpose is the same as
-unowned, and is already how `countBySession` buckets a missing value.
+still receives its own notice, so counting it here would double-report it.
 
-**Report by disposition, never as one integer.** The unprocessed set spans four
-terminal states — sampled 2026-08-24: 12 canceled, 7 completed ok, 1 killed,
-1 failed. A single count filtered only by project and ownership reproduces the
-defect of the advisory this replaces, one layer down: a number dominated by
-canceled jobs with the one genuine failure invisible inside it. The test that
-catches this is whether every item in a count deserves the same response
-latency; canceled is "whenever" and failed is "now", so merging them hides the
-time-sensitive item. Each disposition line is action-uniform and the total still
-reaches zero as jobs are processed.
+**The two absent fields are handled in opposite directions**, which is the part
+most likely to be wrongly "unified" later:
 
-**Blocked on weft: a canonical project path per job.** Project identity here is
-an absolute realpath, applied at every boundary. weft's two location fields are
-bare names and they disagree — a job reported `project=agent-review` with
-`dir=with-limits`. Neither supports the join, and inferring a name-to-path
-mapping would mean announcing a count derived from a guess.
+- absent `submitter_session` -> **include** as orphaned. A missing owner is
+  evidence of having no owner; unattributable and unowned are the same state.
+- absent `project_root` -> **exclude** from every per-project count. A missing
+  project is absence of evidence about membership, and bucketing it into project
+  P would invent the one fact the announcement asserts.
 
-Two further interface dependencies, both raised with weft: the announcement pins
-the literal `status` values (`canceled`, `completed ok`, `killed`, `failed` —
-note the space, which suggests a display label rather than an enum), and a
-schema version would let a field rename fail loudly instead of miscounting
-silently. Prefer an underlying enum over the display string if one exists; treat
-an unrecognized value as "unknown disposition" rather than dropping the row.
+Unknown-project jobs are not a line in the startup announcement: that surface is
+a demand, every line must prompt something the reader can do now, and a job of
+unknown project cannot be acted on in P's context. They belong on a diagnostic
+surface that reports a level. They must not be silently dropped either — the
+aggregate emits them as an explicit bucket so "none exist" stays
+distinguishable from "never seen".
 
-**On this side**, once the path lands: bucket the cached snapshot by canonical
-project and submitter session rather than by session alone, join against live
-registrations at announcement time, and extend the existing startup
-announcement. No extra weft invocations — the daemon already refreshes that
-query every 60s, so the announcement reads the snapshot and never shells out.
-The snapshot keeps the `presence.json` discipline: raw counts, never rendered
-text, and readers degrade when it is stale.
+**Source of truth is weft's session-inbox contract**, `weft session unprocessed`
+(versioned envelope, `version: 1`), *not* `weft list jobs --unprocessed`. The
+two disagree by 13 of 21 rows: `IsInboxJob` excludes canceled and killed, which
+is the action-uniformity rule expressed as a contract. `list --format json`
+reports a rendered display label (`completed ok`, with a space) that is not safe
+to depend on. Migrate the existing daemon snapshot to the same contract rather
+than publishing two numbers that disagree about what "unprocessed" means.
+
+**Report by disposition, never as one integer.** A single count filtered only by
+project and ownership reproduces the defect of the advisory it replaces: a
+number dominated by low-urgency rows with the one genuine failure invisible
+inside it. The test is whether every item in a count deserves the same response
+latency. Treat an unrecognized disposition as "unknown disposition" and show it,
+rather than discarding a row the breakdown has no line for.
+
+**Efficiency: delete the 60s poll, do not optimize it.** The current
+`weft list jobs --unprocessed` refresh is a full table scan over ~6400 rows and
+growing, with no index on project or on the unprocessed predicate. weft is
+adding a grouped aggregate keyed by (project_root, submitter session,
+disposition), computed in SQL, so agent-mail stops shipping and re-bucketing
+every row every minute. Raw session ids are required in that output — the
+liveness join cannot run against an aggregate that has collapsed them.
+
+**Hazard to verify on arrival:** weft's `idx_jobs_submitter_session` is partial
+(`submitter_session IS NOT NULL AND != ''`) and therefore excludes exactly the
+unattributed rows that *are* the orphans — 11 of 21 when sampled. A grouped
+query relying on that index returns a count that is plausible, small, and wrong,
+and a too-low orphan count looks like good news. Check this explicitly against a
+known-unattributed job before trusting the first numbers.
+
+**Delivery split.** weft is separating the broadcast-safe completion notice from
+the session-scoped count, so agent-mail is no longer handed one opaque string
+with a safe half and an unsafe half. The completion notice keeps the existing
+project-broadcast fallback. The session-scoped count gets **no** fallback: if
+the submitter is not listening it is dropped, because a "this session has N"
+sentence delivered to anyone else is false by construction. A lost count is
+recoverable from the inbox on demand; a confident false claim is not recallable
+once read.
 
 ## Native Slack threading
 
