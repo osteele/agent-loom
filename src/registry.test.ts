@@ -15,8 +15,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REGISTRY_DIR, projectSlug } from "./paths.ts";
 import {
+  type Registration,
   type SessionCapabilities,
   capabilityLabels,
+  isCurrentProcess,
   listLiveInProject,
   parsePsLine,
   pushIsKnownUnreachable,
@@ -400,4 +402,70 @@ test("a host without channel push is polling, whatever the diagnosis says", () =
       channelPushStatus: "host-not-loaded",
     }),
   ).toEqual(["poll", "claims", "work", "receipts"]);
+});
+
+// --- zombie liveness ------------------------------------------------------
+
+const ZOMBIE_START = "Wed Aug 19 21:35:55 2026";
+
+function reg(procStart?: string): Registration {
+  return {
+    cwd: "/p",
+    pid: 84490,
+    started: "2026-08-19T21:35:55.000Z",
+    ...(procStart ? { procStart } : {}),
+  };
+}
+
+test("a zombie is not a live process, even though its start time matches", () => {
+  // Observed on this machine: a listener that exited on Aug 19 was still being
+  // advertised as live five days later. Its parent was stopped, so it was never
+  // reaped, and `ps` kept reporting the original pid and lstart. procStart
+  // matching is necessary but not sufficient — the same trap as bare
+  // alive(pid), one level down.
+  expect(
+    isCurrentProcess(reg(ZOMBIE_START), {
+      start: ZOMBIE_START,
+      command: "<defunct>",
+    }),
+  ).toBe(false);
+});
+
+test("a running listener with a matching start time stays live", () => {
+  // Guards the fix against over-reach: pruning on anything looser than the
+  // defunct marker would unregister working sessions.
+  expect(
+    isCurrentProcess(reg(ZOMBIE_START), {
+      start: ZOMBIE_START,
+      command: "bun /Users/x/agent-mail/src/channel.ts",
+    }),
+  ).toBe(true);
+});
+
+test("a recycled pid is not the process that registered", () => {
+  expect(
+    isCurrentProcess(reg(ZOMBIE_START), {
+      start: "Mon Aug 24 09:00:00 2026",
+      command: "distnoted",
+    }),
+  ).toBe(false);
+});
+
+test("a legacy entry without procStart is judged by its command", () => {
+  // Pre-procStart entries survive only while the pid still looks like a channel
+  // server. A defunct one no longer does, so the same guard covers them.
+  const legacy = reg();
+  expect(
+    isCurrentProcess(legacy, {
+      start: ZOMBIE_START,
+      command: "bun /Users/x/agent-mail/src/channel.ts",
+    }),
+  ).toBe(true);
+  expect(
+    isCurrentProcess(legacy, { start: ZOMBIE_START, command: "<defunct>" }),
+  ).toBe(false);
+});
+
+test("an exited pid that ps does not report at all is not live", () => {
+  expect(isCurrentProcess(reg(ZOMBIE_START), undefined)).toBe(false);
 });

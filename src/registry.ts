@@ -479,11 +479,26 @@ export function unregister(cwd: string, pid: number): void {
  * time when the entry recorded one, else (legacy entries) a command line that
  * looks like a channel server. A bare pid-exists check is not enough — recycled
  * pids otherwise keep dead entries alive indefinitely. */
-function isCurrentProcess(
+/** A zombie is reported by `ps` with its original pid, its original start time
+ * and a `<defunct>` command: the process has exited and its parent has not
+ * reaped it. `procStart` matching is therefore not evidence that anything is
+ * running, which is the same trap as bare `alive(pid)` one level down.
+ *
+ * Left as live, the registration outlives its session indefinitely — a parent
+ * that is itself stopped never reaps, so the entry survives until the parent
+ * dies. Peers are told to deliver to a process that can never poll, and each
+ * reconnect adds another entry under the same parent, which is where
+ * "duplicate listeners" came from. */
+export function isDefunct(command: string): boolean {
+  return command.includes("<defunct>");
+}
+
+export function isCurrentProcess(
   entry: Registration,
   info: ProcessInfo | undefined,
 ): boolean {
   if (!info) return false;
+  if (isDefunct(info.command)) return false;
   if (entry.procStart) return entry.procStart === info.start;
   return /agent-mail|channel\.ts/.test(info.command);
 }
