@@ -44,9 +44,30 @@ export interface WeftJobGroup {
   projectRoot: string | null;
   project: string;
   submitterSession: string | null;
+  /** The submitter's launcher-minted id, when weft recorded one.
+   *
+   * Optional because weft does not emit it yet. Absent behaves exactly as
+   * before, which is what lets this reader ship ahead of the column. */
+  submitterLaunchId: string | null;
   unattributedSession: boolean;
   dispositions: Record<string, number>;
   total: number;
+}
+
+/** The id to match against agent-mail's own sessions.
+ *
+ * The launcher id wins where weft recorded one, because that is the id
+ * agent-mail holds for the same session: a Codex session's channel server
+ * adopts AGENT_SESSION_ID from its host, while weft — seeing both variables in
+ * a tool call and preferring the more authoritative — records CODEX_THREAD_ID
+ * as the submitter. Matching on `submitterSession` there compares two ids that
+ * are both correct and never equal.
+ *
+ * Falling back to `submitterSession` is right for Claude Code, where no
+ * launcher id reaches the tool call and both tools already agree on the native
+ * id. */
+export function joinKey(group: WeftJobGroup): string | null {
+  return group.submitterLaunchId ?? group.submitterSession;
 }
 
 export interface WeftJobsSnapshot {
@@ -191,6 +212,10 @@ export function parseUnprocessedGroups(
         typeof group.submitter_session === "string"
           ? group.submitter_session
           : null,
+      submitterLaunchId:
+        typeof group.submitter_launch_id === "string"
+          ? group.submitter_launch_id
+          : null,
       unattributedSession: group.unattributed_session === true,
       dispositions,
       total: typeof group.total === "number" ? group.total : 0,
@@ -238,14 +263,15 @@ export function orphansForProject(
   for (const group of groups) {
     if (group.projectRoot === null) continue;
     if (canonicalProject(group.projectRoot) !== target) continue;
-    if (!group.unattributedSession && group.submitterSession !== null) {
-      if (liveSessionIds.has(group.submitterSession)) continue; // owned
+    const submitter = joinKey(group);
+    if (!group.unattributedSession && submitter !== null) {
+      if (liveSessionIds.has(submitter)) continue; // owned
       // A submitter agent-mail has never registered is unknown ownership, not
       // an absent owner — the third form of the same asymmetry. Codex spawns
       // its MCP child without a session env var, so that child mints an id no
       // sibling can learn while weft records the shell's own id; the two never
       // meet. Counting those as orphans would mark every such job unowned.
-      if (!knownSession(group.submitterSession)) continue;
+      if (!knownSession(submitter)) continue;
     }
     for (const [key, value] of Object.entries(group.dispositions)) {
       if (value <= 0) continue;
