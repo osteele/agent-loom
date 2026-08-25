@@ -214,6 +214,22 @@ export function scanProcesses(
 
 /** Process map compatibility helper for presentation and tests. Liveness
  * decisions use `scanProcesses` so they retain the reliability verdict. */
+/** One process's environment, as `ps` renders it, or "" when unreadable.
+ *
+ * Single-pid query, so it takes the fast `ps` path (see the note on
+ * `scanProcesses` about multi-row `-p`). The result contains every variable the
+ * process holds, including secrets — callers must extract what they need and
+ * discard the rest rather than logging or storing it. */
+export function processEnviron(pid: number): string {
+  const res = spawnSync(
+    "/bin/ps",
+    ["eww", "-p", String(pid), "-o", "command="],
+    { encoding: "utf8" },
+  );
+  if (res.error || res.signal || res.status !== 0) return "";
+  return res.stdout ?? "";
+}
+
 export function processInfo(pids: number[]): Map<number, ProcessInfo> {
   return scanProcesses(pids).processes;
 }

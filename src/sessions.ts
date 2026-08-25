@@ -448,21 +448,18 @@ export function sessionDisplayName(
  * CLAUDE_CODE_SESSION_ID. */
 /** Resolution order for the calling agent's session id.
  *
- * The launcher-minted id comes FIRST, ahead of every native id. A native id
- * that only the agent process can read is worth less than a launcher id every
- * process in the shell can read: Codex injects `CODEX_THREAD_ID` into tool-call
- * environments only, so its MCP children never see it and mint an id no sibling
- * can learn, while a sibling CLI records the thread id — two identities for one
- * session that never meet. Reachability beats provenance. See
- * `docs/decisions/0009-prefer-launcher-minted-session-id.md`.
+ * Native ids come first: an agent that mints its own per-session id knows more
+ * about that session than a launcher wrapping it does. Reordering this to put
+ * the launcher id first buys nothing — the children that lack a native id lack
+ * `AGENT_SESSION_ID` too, so no order reaches them. Those are served by
+ * `sessionIdFromHostEnviron` instead. See
+ * `docs/decisions/0010-adopt-the-host-agent-session-id.md`.
  *
- * This order is mirrored in `agent-command-guards`' launcher and in weft's
- * `defaultSubmitterSessionEnvVars`; all three move together or the join breaks
- * again. */
+ * Mirrored in weft's `defaultSubmitterSessionEnvVars`; the two move together. */
 export const SESSION_ID_ENV_VARS = [
-  "AGENT_SESSION_ID",
   "CLAUDE_CODE_SESSION_ID",
   "CODEX_THREAD_ID",
+  "AGENT_SESSION_ID",
 ] as const;
 
 /** Process the launcher minted `AGENT_SESSION_ID` for. */
@@ -495,6 +492,45 @@ export function sessionIdFromEnv(
     return value;
   }
   return undefined;
+}
+
+/** The host agent's session id, read from that process's environment.
+ *
+ * For children spawned without one. Codex gives its MCP servers no session
+ * variable at all — measured across three sessions, zero of the four names are
+ * present — while the codex process itself holds `AGENT_SESSION_ID`. Such a
+ * child otherwise mints a `randomUUID()` that no sibling can learn, so the
+ * session is addressable by nothing and no tool can join a job back to it.
+ *
+ * Only `AGENT_SESSION_ID` is adopted this way, never a native id. A native id
+ * in a parent's environment may have been inherited from an outer agent, and
+ * answering to it would file this session's work under a different, live one.
+ *
+ * The marker is REQUIRED here, unlike in our own environment. A variable in our
+ * own environment is at least weak evidence it was meant for us; a value read
+ * out of another process has no such standing, so it is adopted only on proof
+ * that the launcher minted it for that exact process.
+ *
+ * `environ` is the parent's full environment and routinely contains API keys.
+ * Extract the two variables and never log, store, or return the rest. */
+export function sessionIdFromHostEnviron(
+  environ: string,
+  hostPid: number,
+): string | undefined {
+  const idPrefix = "AGENT_SESSION_ID=";
+  const pidPrefix = `${AGENT_SESSION_PID_ENV_VAR}=`;
+  let id: string | undefined;
+  let marker: string | undefined;
+  // Whitespace splitting is safe for these two specifically — a minted id is a
+  // UUID and the marker is a pid, neither of which can contain a space. It is
+  // not safe in general, which is why nothing else is read from here.
+  for (const token of environ.split(/\s+/)) {
+    if (token.startsWith(idPrefix)) id = token.slice(idPrefix.length);
+    else if (token.startsWith(pidPrefix))
+      marker = token.slice(pidPrefix.length);
+  }
+  if (!id || !marker) return undefined;
+  return Number(marker) === hostPid ? id : undefined;
 }
 
 function mintedForHost(

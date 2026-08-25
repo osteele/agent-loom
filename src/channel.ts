@@ -73,6 +73,7 @@ import {
   inboundPolicy,
   isMuted,
   listLive,
+  processEnviron,
   pushIsKnownUnreachable,
   register,
   scanProcesses,
@@ -91,6 +92,7 @@ import {
   lastActivityMs,
   matchSessions,
   sessionIdFromEnv,
+  sessionIdFromHostEnviron,
   sessionNames,
 } from "./sessions.ts";
 import {
@@ -142,7 +144,15 @@ const cwd = canonicalProject(process.cwd());
 // spool) and to suppress self-echo of our own outgoing mail.
 // process.ppid is the host agent that spawned this MCP server, which is the
 // process a launcher-minted id must name to be ours rather than inherited.
-const sessionId = sessionIdFromEnv(process.env, process.ppid) ?? randomUUID();
+//
+// Falling back to the host's own environment is what makes a Codex session
+// addressable at all: Codex spawns its MCP servers with no session variable, so
+// without this the id is a randomUUID() no sibling process can learn, and
+// nothing can join a weft job back to the session that submitted it.
+const sessionId =
+  sessionIdFromEnv(process.env, process.ppid) ??
+  sessionIdFromHostEnviron(processEnviron(process.ppid), process.ppid) ??
+  randomUUID();
 const myMeta = claudeSessions().get(sessionId);
 const myName = myMeta?.name; // raw Claude name for the registry snapshot
 const mySessionNames = sessionNames(sessionId, myMeta, cwd);
