@@ -118,160 +118,34 @@ that session, and `pushed` is a terminal receipt status.
 Retention thresholds warrant a decision record — they are exactly the kind of
 choice a later contributor reverses by mistake.
 
-## Orphaned weft jobs at session startup
+## Session identity across agent-mail, weft, and Codex
 
-Tell a session, on startup, how many unprocessed weft jobs belong to its project
-and are not assigned to any surviving session. Jobs whose submitter is still
-alive already get a session-addressed notification; the orphans are the ones
-with no owner, and a session starting in that project is the natural inheritor.
+The orphaned-jobs startup announcement is implemented but silent for every job
+submitted from a Codex session, because the two tools disagree about what that
+session is called.
 
-Interface agreed with weft 2026-08-24; awaiting a weft build. Nothing here is
-implemented.
+Codex spawns its MCP child with no session env var, so `sessionIdFromEnv()`
+falls through to a `randomUUID()` minted inside the channel server — the same
+failure already documented for kimi and opencode, which `agent-command-guards`
+solved for those by minting `AGENT_SESSION_ID` before exec. Observed: a codex
+parent carrying `AGENT_SESSION_ID` whose channel child had no session variable
+at all and registered under a different id, while weft recorded a third value
+(the codex thread id) for jobs submitted from that same shell.
 
-**Layer division.** weft supplies job facts (owning project as a canonical path,
-submitter session, disposition, counts); agent-mail supplies session liveness;
-the join happens here. weft must *not* model session liveness — it cannot
-observe it, and adding it would make weft a reader of agent-mail's registry,
-which is exactly the private-state coupling that rots. Do not "simplify" this
-later by asking weft to track owners.
+Across 1402 session ids agent-mail has named, not one matches a weft
+`submitter_session`. The announcement therefore cannot prove any Codex-submitted
+job is unowned, and correctly says nothing. `hasSeenSession` is what keeps that
+honest — without it every such job reads as an orphan.
 
-**Orphaned** means the submitter session is empty *or* is not live anywhere.
-Live-anywhere rather than live-in-project: a submitter alive in another project
-still receives its own notice, so counting it here would double-report it.
+Fixing it means making one identity reach all three: whatever the launcher
+mints must survive into the MCP child's environment *and* be what weft captures
+at submit time. `SESSION_ID_ENV_VARS` here, the guard launcher's unset-and-mint,
+and weft's `defaultSubmitterSessionEnvVars` already have to move together; this
+adds the requirement that the value actually be present in the spawned child,
+which is the part nothing currently checks.
 
-**The two absent fields are handled in opposite directions**, which is the part
-most likely to be wrongly "unified" later:
-
-- absent `submitter_session` -> **include** as orphaned. A missing owner is
-  evidence of having no owner; unattributable and unowned are the same state.
-- absent `project_root` -> **exclude** from every per-project count. A missing
-  project is absence of evidence about membership, and bucketing it into project
-  P would invent the one fact the announcement asserts.
-
-Unknown-project jobs are not a line in the startup announcement: that surface is
-a demand, every line must prompt something the reader can do now, and a job of
-unknown project cannot be acted on in P's context. They belong on a diagnostic
-surface that reports a level. They must not be silently dropped either — the
-aggregate emits them as an explicit bucket so "none exist" stays
-distinguishable from "never seen".
-
-`project_root` is backfilled for legacy rows by a *derivation*, not a guess:
-expand `working_dir`, realpath, walk up to the repo root, and accept it only if
-that root's basename equals the recorded `project`. Measured coverage 6092 of
-6231 tilde rows; the ~139 rejected are genuine overrides and vanished
-directories, which stay NULL and land in the unattributable bucket. The bucket
-is therefore small at rollout rather than total, and the announcement is useful
-from day one.
-
-The basename check is load-bearing and must not be removed as redundant. It is
-*not* corroboration between independent facts: `ResolveProjectName` returns
-`filepath.Base(ProjectDir(dir))`, so for non-override rows `project` is a
-function of the same input the derivation walks. What it verifies is that the
-project name recorded at submit time still equals the basename of the repo root
-this job's `working_dir` leads to today.
-
-    rejects  an override, where `project` names a tree the path does not lead to
-    rejects  a path that no longer resolves to a same-named repo root
-    accepts  a job run in a SUBDIRECTORY of its project — `project` was already
-             the repo-root name, never the directory basename (11 such rows)
-
-The subdirectory behaviour is intended, not a leak; do not "fix" it. Dropping
-the check entirely would silently readmit every override. Two repos sharing a
-basename stay safe because the root is derived from this job's own
-`working_dir` rather than looked up by name.
-
-**Source of truth is weft's session-inbox contract**, `weft session unprocessed`
-(versioned envelope, `version: 1`), *not* `weft list jobs --unprocessed`. The
-two disagree by 13 of 21 rows: `IsInboxJob` excludes canceled and killed, which
-is the action-uniformity rule expressed as a contract. `list --format json`
-reports a rendered display label (`completed ok`, with a space) that is not safe
-to depend on. Migrate the existing daemon snapshot to the same contract rather
-than publishing two numbers that disagree about what "unprocessed" means.
-
-**Disposition cuts on observables, never on weft's attempt status.** Every value
-below is derived from whether an exit code exists and whether it was zero,
-because that is the part of the record that does not drift:
-
-    completed_ok      exit 0                         bookkeeping
-    completed_error   exit != 0, any attempt status  read the program's output
-    no_exit           no exit code recorded          look at weft or the host
-    dead                                             weft concluded the job is gone
-
-`dead` stays its own line rather than folding into `no_exit`: it never carries
-an exit code, but it means something more specific than "no exit recorded".
-
-The attempt status is unusable for this. Among non-zero-exit attempts, 6030 of
-6645 have no specific `failure_reason`, and the same queue-runner marked those
-`completed` (2715) and `failed` (2178) over the same 175-day span. The marking
-carries no information for that 91%, so a `failed` line meaning "look at weft or
-the host" would have been unfounded for 83% of the rows it covered — sending
-someone to the host for something their own program did.
-
-Two traps recorded so they are not re-derived:
-
-- **Do not write a reconciliation check between `counts` and the per-job
-  `status`.** They agree. The `job_status` view remaps a non-zero exit to
-  `failed` before `EffectiveStatus()` sees it, so the `StatusCompleted` branch
-  in `IsFailedJob` is unreachable through this path — zero rows, not a
-  discrepancy to guard against.
-- **Do not build an infra-vs-program classifier from `failure_reason`.** The 614
-  specific reasons include `exit_2` and `exit_127`, which are program exit codes
-  in a field that otherwise names infrastructure (`oom`, `disk_full`,
-  `infra_prewarm_download_failed`). "Has a reason" is not an infra predicate.
-  That judgement belongs in weft's triage surfaces, which carry the full
-  `failure_reason`, not in a four-value announcement.
-
-**Report by disposition, never as one integer.** A single count filtered only by
-project and ownership reproduces the defect of the advisory it replaces: a
-number dominated by low-urgency rows with the one genuine failure invisible
-inside it. The test is whether every item in a count deserves the same response
-latency. Treat an unrecognized disposition as "unknown disposition" and show it,
-rather than discarding a row the breakdown has no line for.
-
-**Efficiency: delete the 60s poll, do not optimize it.** The current
-`weft list jobs --unprocessed` refresh is a full table scan over ~6400 rows and
-growing, with no index on project or on the unprocessed predicate. weft is
-adding a grouped aggregate keyed by (project_root, submitter session,
-disposition), computed in SQL, so agent-mail stops shipping and re-bucketing
-every row every minute. Raw session ids are required in that output — the
-liveness join cannot run against an aggregate that has collapsed them.
-
-**Hazard to verify on arrival:** weft's `idx_jobs_submitter_session` is partial
-(`submitter_session IS NOT NULL AND != ''`) and therefore excludes exactly the
-unattributed rows that *are* the orphans — 11 of 21 when sampled. A grouped
-query relying on that index returns a count that is plausible, small, and wrong,
-and a too-low orphan count looks like good news. Check this explicitly against a
-known-unattributed job before trusting the first numbers.
-
-**The grouped document** is a distinct kind, refusable on either axis:
-
-    {"kind": "unprocessed_groups", "version": 1,
-     "scope": {"state": "all_sessions"},
-     "groups": [{"project_root": ..., "project": ..., "submitter_session": ...,
-                 "unattributed_session": bool,
-                 "dispositions": {...}, "total": N}]}
-
-`scope.state` is `all_sessions` by construction — the grouped path never reads
-the caller's session id, so there is nothing for it to inherit. Ungrouped
-`weft session unprocessed` stays `version: 1` with `project_root` added
-additively.
-
-**Canonicalize `project_root` at read time anyway.** weft canonicalizes at
-submit time, which does not survive the project moving afterwards — this repo
-has carried live registry entries under both `code/utils/agent-mail` and
-`code/agent-tools/agent-mail`, one a symlink to the other. Compare
-`canonicalProject(project_root)` against `canonicalProject(P)` rather than
-string-matching a value that was canonical when it was written. A genuine move
-is unrecoverable; a symlink is not, and realpath at read time handles it.
-
-**Delivery split.** weft is separating the broadcast-safe completion notice from
-the session-scoped count, so agent-mail is no longer handed one opaque string
-with a safe half and an unsafe half. The completion notice keeps the existing
-project-broadcast fallback. The session-scoped count gets **no** fallback: if
-the submitter is not listening it is dropped, because a "this session has N"
-sentence delivered to anyone else is false by construction. A lost count is
-recoverable from the inbox on demand; a confident false claim is not recallable
-once read.
+Worth a check that fails loudly: if no live session id has ever matched a weft
+submitter id, the join is vacuous and any feature built on it is silently inert.
 
 ## Native Slack threading
 
