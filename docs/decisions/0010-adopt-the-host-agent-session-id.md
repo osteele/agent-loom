@@ -16,21 +16,26 @@ that was never measured: that a child lacking a native id would nonetheless
 have `AGENT_SESSION_ID` in its own environment, so that reordering would reach
 it.
 
-It does not. Codex spawns its MCP servers with **no session variable at all** —
-measured across three live sessions, none of the four candidate names present —
-while the codex process itself holds `AGENT_SESSION_ID`. There is no order that
-reaches a child holding nothing.
+It does not. Every harness constructs a filtered environment for the MCP
+servers it spawns, and what each one puts there decides the outcome:
 
-The wider measurement says the same. Of the nine sessions weft has ever
-recorded a submitter for, agent-mail has registered exactly one: the Claude
-Code session, whose native id Claude injects into both MCP spawn environments
-and tool-call environments, and which therefore already joins correctly today.
-The seven Codex sessions and the one launcher-id session were never seen here.
-That last case is decisive on its own — even where a launcher id was reachable
-by the CLI that recorded it, it did not reach agent-mail's channel server.
+| harness       | MCP child gets      | resolves to  | weft records |
+|---------------|---------------------|--------------|--------------|
+| Claude Code   | the native id       | native id    | native id    |
+| kimi/opencode | `AGENT_SESSION_ID`  | launcher id  | launcher id  |
+| Codex         | nothing at all      | minted UUID  | thread id    |
 
-So the problem is not which id is preferred. It is that the child is given no
-id to prefer, and mints a `randomUUID()` no sibling process can learn.
+Measured over all 6363 jobs weft holds: fourteen sessions have a recorded
+submitter and agent-mail has registered five of them — three launcher-id
+sessions and two Claude sessions. Both of those harnesses already join
+correctly, and have for a week. All seven Codex sessions are unmatched, and
+they are the only unmatched ones.
+
+So the problem is not which id is preferred, and it is not general. Codex hands
+its MCP child nothing, so the child mints a `randomUUID()` no sibling process
+can learn. No ordering reaches a child holding nothing, and reordering is inert
+even where a child holds something — a Claude MCP child has no
+`AGENT_SESSION_ID` to promote, and a kimi child has no native id to demote.
 
 ## Decision Outcome
 
@@ -70,10 +75,11 @@ is adopted only on proof that the launcher minted it for that process.
 
 ### Reorder to prefer `AGENT_SESSION_ID` (0009)
 
-Rejected: measured as a no-op in every observed configuration. Children with a
-native id already resolve correctly; children without one have no
-`AGENT_SESSION_ID` either. It also asked weft to reverse a documented nesting
-protection in exchange for nothing.
+Rejected: measured as a no-op in every observed configuration, though not for
+one uniform reason. A Claude child has no `AGENT_SESSION_ID` to promote; a
+kimi child has one but no native id to demote, so it already wins by
+fall-through; a Codex child has neither. It also asked weft to reverse a
+documented nesting protection in exchange for nothing.
 
 ### Adopt an unmarked launcher id from the host
 

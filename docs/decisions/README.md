@@ -8,10 +8,18 @@ A record belongs here when a future reader could reasonably undo the decision
 by mistake — because the rule looks arbitrary, looks like an unfinished
 feature, or looks like a safe simplification.
 
-Records are immutable once accepted. A change of position is a new record that
-names the one it supersedes. The superseded record's `status` is updated to name
-its successor — lifecycle metadata, not a revision: its body still states what
-was decided when it was decided.
+A change of position is a new record that names the one it supersedes. The
+superseded record's `status` is updated to name its successor — lifecycle
+metadata, not a revision: its body still states what was decided when it was
+decided.
+
+A record that was *recorded erroneously* is corrected in place instead. This is
+a single-developer project, and a record earns its keep by standing alone and
+reading cold; a wrong measurement left in place with the correction elsewhere
+costs more than the audit trail it preserves. The test is whether the original
+author, with the same intent, would have written it differently: if yes it is
+an error and gets fixed; if they would have written exactly that and the world
+has since moved, it is a reversal and gets a successor.
 
 | # | Decision | Adopted |
 |---|---|---|
