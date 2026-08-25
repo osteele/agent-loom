@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by [0010](0010-adopt-the-host-agent-session-id.md)
 date: 2026-08-25
 ---
 
