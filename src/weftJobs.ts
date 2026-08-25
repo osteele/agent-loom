@@ -21,10 +21,36 @@
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { WEFT_JOBS_SNAPSHOT_PATH } from "./paths.ts";
+import { WEFT_JOBS_SNAPSHOT_PATH, canonicalProject } from "./paths.ts";
+
+/** Action-uniform disposition, cut on observables rather than on weft's attempt
+ * status. The attempt marking drifts — the same runner recorded the same
+ * situation as `completed` and `failed` over the same period — so only the exit
+ * code and the presence of an exact forensic reason are load-bearing. */
+export const WEFT_DISPOSITIONS = [
+  "completed_ok",
+  "completed_error",
+  "infra_suspected",
+  "dead",
+] as const;
+
+/** One (project, submitter session) bucket from weft's grouped inbox.
+ *
+ * Both nullable fields carry meaning and neither may be dropped. A null
+ * `projectRoot` is a job whose owning project weft could not derive truthfully;
+ * `unattributedSession` marks a bucket weft has no submitter for. They are
+ * handled in OPPOSITE directions — see `orphansForProject`. */
+export interface WeftJobGroup {
+  projectRoot: string | null;
+  project: string;
+  submitterSession: string | null;
+  unattributedSession: boolean;
+  dispositions: Record<string, number>;
+  total: number;
+}
 
 export interface WeftJobsSnapshot {
-  version: 1;
+  version: 2;
   /** Epoch ms the query ran. In-band rather than the file's mtime, which a
    * backup restore or `cp -p` destroys and a torn write refreshes. */
   generatedAt: number;
@@ -35,9 +61,13 @@ export interface WeftJobsSnapshot {
    * not an error. */
   bySession: Record<string, number>;
   total: number;
+  /** Per (project, session) buckets. Raw, exactly as weft grouped them: the
+   * liveness join is a read-time decision and must not be baked in here, or
+   * the cache becomes a routing input that freezes a liveness verdict. */
+  groups: WeftJobGroup[];
 }
 
-const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_VERSION = 2;
 
 /** How often the daemon refreshes. Deliberately far slower than the daemon's
  * 10s tick: a multi-second subprocess every 10 seconds is a background job
@@ -48,33 +78,14 @@ export const WEFT_JOBS_REFRESH_MS = 60_000;
  * against its tick: one missed refresh is tolerated, a stopped daemon is not. */
 export const WEFT_JOBS_SNAPSHOT_TTL_MS = 3 * WEFT_JOBS_REFRESH_MS;
 
-/** Count unprocessed jobs per submitter session.
- *
- * Pure, so the bucketing is testable without spawning weft. Rows missing the
- * key are counted as unattributable rather than dropped: an older weft omits
- * the field entirely, and silently reporting a smaller total would read as
- * "no jobs" instead of "cannot tell". */
-export function countBySession(rows: unknown): {
-  bySession: Record<string, number>;
-  total: number;
-} {
-  const bySession: Record<string, number> = {};
-  if (!Array.isArray(rows)) return { bySession, total: 0 };
-  for (const row of rows) {
-    const value =
-      typeof row === "object" && row !== null
-        ? (row as Record<string, unknown>).submitter_session
-        : undefined;
-    const key = typeof value === "string" ? value : "";
-    bySession[key] = (bySession[key] ?? 0) + 1;
-  }
-  return { bySession, total: rows.length };
-}
-
 /** Publish a snapshot. Temp file plus rename, so a reader on a latency budget
  * never parses a half-written file. */
 export function writeWeftJobsSnapshot(
-  counts: { bySession: Record<string, number>; total: number },
+  counts: {
+    bySession: Record<string, number>;
+    total: number;
+    groups?: WeftJobGroup[];
+  },
   nowMs = Date.now(),
   path = WEFT_JOBS_SNAPSHOT_PATH,
 ): WeftJobsSnapshot {
@@ -84,6 +95,7 @@ export function writeWeftJobsSnapshot(
     generatedBy: process.pid,
     bySession: counts.bySession,
     total: counts.total,
+    groups: counts.groups ?? [],
   };
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(snapshot, null, 1));
@@ -113,6 +125,7 @@ export function readWeftJobsSnapshot(
   if (typeof snapshot.bySession !== "object" || snapshot.bySession === null) {
     return undefined;
   }
+  if (!Array.isArray(snapshot.groups)) return undefined;
   if (nowMs - snapshot.generatedAt > maxAgeMs) return undefined;
   return snapshot as WeftJobsSnapshot;
 }
@@ -133,4 +146,144 @@ export function weftJobsForSession(
   const snapshot = readWeftJobsSnapshot(nowMs, WEFT_JOBS_SNAPSHOT_TTL_MS, path);
   if (!snapshot) return undefined;
   return snapshot.bySession[sessionId] ?? 0;
+}
+
+/** Parse weft's grouped inbox document (`kind: unprocessed_groups`).
+ *
+ * Refuses anything unrecognized rather than parsing optimistically. A renamed
+ * field or a new shape must fail here, where the daemon logs it, instead of
+ * yielding a smaller count — an undercount in this feature reads as good news
+ * and is the one error nobody would investigate.
+ *
+ * The `all_sessions` scope check is load-bearing, not defensive. The ungrouped
+ * form of this command scopes to the CALLING session implicitly, so a document
+ * that ever arrived caller-scoped would describe one session's jobs as though
+ * they were every session's, and the orphan count would be silently wrong. */
+export function parseUnprocessedGroups(
+  raw: unknown,
+): WeftJobGroup[] | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const doc = raw as Record<string, unknown>;
+  if (doc.kind !== "unprocessed_groups") return undefined;
+  if (doc.version !== 1) return undefined;
+  const scope = doc.scope as Record<string, unknown> | null | undefined;
+  if (!scope || scope.state !== "all_sessions") return undefined;
+  if (!Array.isArray(doc.groups)) return undefined;
+  const out: WeftJobGroup[] = [];
+  for (const entry of doc.groups) {
+    if (typeof entry !== "object" || entry === null) return undefined;
+    const group = entry as Record<string, unknown>;
+    const raw_dispositions = group.dispositions;
+    if (typeof raw_dispositions !== "object" || raw_dispositions === null) {
+      return undefined;
+    }
+    const dispositions: Record<string, number> = {};
+    for (const [key, value] of Object.entries(raw_dispositions)) {
+      if (typeof value !== "number" || !Number.isFinite(value))
+        return undefined;
+      dispositions[key] = value;
+    }
+    out.push({
+      projectRoot:
+        typeof group.project_root === "string" ? group.project_root : null,
+      project: typeof group.project === "string" ? group.project : "",
+      submitterSession:
+        typeof group.submitter_session === "string"
+          ? group.submitter_session
+          : null,
+      unattributedSession: group.unattributed_session === true,
+      dispositions,
+      total: typeof group.total === "number" ? group.total : 0,
+    });
+  }
+  return out;
+}
+
+export interface OrphanCounts {
+  dispositions: Record<string, number>;
+  total: number;
+}
+
+/** Unprocessed jobs owned by `project` whose submitter is not live anywhere.
+ *
+ * The two nullable fields invert, and this is the part that must not later be
+ * "unified" into consistent null handling:
+ *
+ * - `unattributedSession` → **orphaned**. A missing owner is the evidence of
+ *   having no owner; unattributable and unowned are the same state.
+ * - `projectRoot === null` → **excluded from every project**. A missing project
+ *   is absence of evidence about membership, and counting it under P would
+ *   invent the one fact the announcement asserts.
+ *
+ * Liveness is "live anywhere", not "live in this project": a submitter alive
+ * elsewhere still receives its own notice, so counting it again here would
+ * double-report it.
+ *
+ * `knownSession` is required rather than optional on purpose: defaulting it to
+ * "everything is known" silently restores the over-report it exists to stop.
+ *
+ * `projectRoot` is canonicalized at read time. weft canonicalizes at submit,
+ * which does not survive the project being moved or reached through a different
+ * symlink afterwards — this repo has carried live entries under two spellings
+ * of its own path. */
+export function orphansForProject(
+  project: string,
+  liveSessionIds: ReadonlySet<string>,
+  groups: readonly WeftJobGroup[],
+  knownSession: (sessionId: string) => boolean,
+): OrphanCounts {
+  const target = canonicalProject(project);
+  const dispositions: Record<string, number> = {};
+  let total = 0;
+  for (const group of groups) {
+    if (group.projectRoot === null) continue;
+    if (canonicalProject(group.projectRoot) !== target) continue;
+    if (!group.unattributedSession && group.submitterSession !== null) {
+      if (liveSessionIds.has(group.submitterSession)) continue; // owned
+      // A submitter agent-mail has never registered is unknown ownership, not
+      // an absent owner — the third form of the same asymmetry. Codex spawns
+      // its MCP child without a session env var, so that child mints an id no
+      // sibling can learn while weft records the shell's own id; the two never
+      // meet. Counting those as orphans would mark every such job unowned.
+      if (!knownSession(group.submitterSession)) continue;
+    }
+    for (const [key, value] of Object.entries(group.dispositions)) {
+      if (value <= 0) continue;
+      dispositions[key] = (dispositions[key] ?? 0) + value;
+      total += value;
+    }
+  }
+  return { dispositions, total };
+}
+
+const DISPOSITION_ACTIONS: Record<string, string> = {
+  completed_ok: "process the results",
+  completed_error: "read the program's output",
+  infra_suspected: "check weft or the host",
+  dead: "weft concluded the job is gone",
+};
+
+/** One sentence for the startup announcement, or "" when there is nothing to
+ * say. Every line names its own next action: a single merged integer is what
+ * made the advisory this replaces unreadable, since a count spanning "process
+ * results" and "investigate a failure" cannot tell anyone what to do.
+ *
+ * An unrecognized disposition is shown rather than dropped — weft may add one,
+ * and silently omitting it would undercount. */
+export function startupOrphanText(orphans: OrphanCounts): string {
+  if (orphans.total <= 0) return "";
+  const known: readonly string[] = WEFT_DISPOSITIONS;
+  const rank = (key: string) => {
+    const index = known.indexOf(key);
+    return index < 0 ? known.length : index;
+  };
+  const parts = Object.keys(orphans.dispositions)
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+    .map((key) => {
+      const action =
+        DISPOSITION_ACTIONS[key] ?? "unrecognized disposition, inspect in weft";
+      return `${orphans.dispositions[key]} ${key} (${action})`;
+    });
+  const plural = orphans.total === 1 ? "job" : "jobs";
+  return `Weft orphans: ${orphans.total} unprocessed ${plural} in this project have no live submitter — ${parts.join("; ")}.`;
 }

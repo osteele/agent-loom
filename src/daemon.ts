@@ -42,7 +42,7 @@ import {
 } from "./unreadSummary.ts";
 import {
   WEFT_JOBS_REFRESH_MS,
-  countBySession,
+  parseUnprocessedGroups,
   writeWeftJobsSnapshot,
 } from "./weftJobs.ts";
 
@@ -329,23 +329,43 @@ function tickWeftJobs(): void {
   // A missing executable is reported through the returned promises, never as
   // a synchronous throw — the asymmetry that once took the daemon down under
   // launchd, whose PATH omits weft, is absorbed in runtime.ts.
+  // The grouped session-inbox surface, not `list jobs --unprocessed`. The two
+  // disagree about what "unprocessed" means — the inbox excludes canceled and
+  // killed jobs, which need no action and only ever diluted the count — and
+  // this one is versioned, aggregates in SQL rather than shipping every row,
+  // and carries the canonical project root the per-project join needs.
   const proc = spawnCapture([
     weft,
-    "list",
-    "jobs",
-    "--unprocessed",
-    "--format",
-    "json",
+    "session",
+    "unprocessed",
+    "--group-by",
+    "project,session",
   ]);
   proc.stdout
     .then(async (out) => {
       const code = await proc.exited;
       if (code !== 0) throw new Error(`weft exited ${code}`);
-      const counts = countBySession(JSON.parse(out));
-      writeWeftJobsSnapshot(counts);
-      if (counts.total !== lastWeftTotal) {
-        lastWeftTotal = counts.total;
-        log(`weft jobs snapshot: ${counts.total} unprocessed`);
+      const groups = parseUnprocessedGroups(JSON.parse(out));
+      if (!groups) {
+        // A shape this build does not recognise. Publishing a partial parse
+        // would undercount, and an undercount here reads as good news.
+        throw new Error("unrecognised weft grouped-inbox document");
+      }
+      const bySession: Record<string, number> = {};
+      let total = 0;
+      for (const group of groups) {
+        const key = group.unattributedSession
+          ? ""
+          : (group.submitterSession ?? "");
+        bySession[key] = (bySession[key] ?? 0) + group.total;
+        total += group.total;
+      }
+      writeWeftJobsSnapshot({ bySession, total, groups });
+      if (total !== lastWeftTotal) {
+        lastWeftTotal = total;
+        log(
+          `weft jobs snapshot: ${total} unprocessed, ${groups.length} groups`,
+        );
       }
     })
     .catch((error) => {

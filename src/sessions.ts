@@ -309,6 +309,26 @@ function readGeneratedSessionName(
   };
 }
 
+/** Whether agent-mail has ever registered a session under this id.
+ *
+ * Read-only: unlike `assignedGeneratedSessionName` it never mints an
+ * assignment, so asking the question cannot create the evidence that answers
+ * it. The name store is the durable record — registry entries are pruned when
+ * a process exits, so they answer "live now", not "ever existed".
+ *
+ * This is what separates "the submitter is gone" from "the submitter was never
+ * ours". Agents whose channel server is spawned without a session env var mint
+ * an id no sibling process can learn, so their weft jobs carry a submitter id
+ * agent-mail has never seen — and treating that as an absent owner would
+ * report every such job as unowned. */
+export function hasSeenSession(
+  sessionId: string,
+  directory = SESSION_NAMES_DIR,
+): boolean {
+  if (!sessionId) return false;
+  return existsSync(assignmentPath(sessionId, directory));
+}
+
 /** Return the session's persisted generated name, selecting one only once.
  * `legacy` is used by the upgrade migration for sessions that were already
  * registered; all genuinely new session ids use adjective–noun names. */
