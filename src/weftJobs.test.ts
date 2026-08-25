@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   WEFT_JOBS_SNAPSHOT_TTL_MS,
-  joinKey,
   orphansForProject,
   parseUnprocessedGroups,
   readWeftJobsSnapshot,
@@ -252,70 +251,4 @@ test("a submitter agent-mail has never seen is not reported as an orphan", () =>
   // all, so there is no id whose provenance could be in doubt.
   expect(stranger.dispositions).toEqual({ dead: 4 });
   expect(startupOrphanText(stranger)).toContain("4 dead");
-});
-
-// --- the launcher-id join key -------------------------------------------
-// weft does not emit submitter_launch_id yet. These pin the reader's behaviour
-// both before and after it does, so the column can land with a consumer already
-// waiting rather than needing a coordinated switch-on.
-
-const LAUNCH_DOC = {
-  ...DOC,
-  groups: [
-    {
-      project_root: "/p/alpha",
-      project: "alpha",
-      // What weft records for a Codex session: the native thread id, correctly
-      // preferred, and never equal to the id agent-mail holds for it.
-      submitter_session: "01a02-codex-thread",
-      submitter_launch_id: "LAUNCHER-MINTED",
-      unattributed_session: false,
-      dispositions: { completed_ok: 2 },
-      total: 2,
-    },
-  ],
-};
-
-test("an absent launch id leaves the join exactly as it was", () => {
-  // The property that lets this ship before the column exists: every current
-  // row lacks the field, and must behave as it does today.
-  const groups = parseUnprocessedGroups(DOC);
-  if (!groups) throw new Error("fixture failed to parse");
-  expect(groups.every((g) => g.submitterLaunchId === null)).toBe(true);
-  expect(joinKey(groups[0])).toBe("live-1");
-  expect(
-    orphansForProject("/p/alpha", new Set(["live-1"]), groups, KNOWN).total,
-  ).toBe(7);
-});
-
-test("the launcher id outranks the submitter session when present", () => {
-  // Matching on submitter_session for a Codex session compares two ids that are
-  // both correct and never equal, so the job reads as unowned however live its
-  // submitter is.
-  const groups = parseUnprocessedGroups(LAUNCH_DOC);
-  if (!groups) throw new Error("fixture failed to parse");
-  expect(joinKey(groups[0])).toBe("LAUNCHER-MINTED");
-  // Live under the launcher id: owned, nothing announced.
-  expect(
-    orphansForProject("/p/alpha", new Set(["LAUNCHER-MINTED"]), groups, KNOWN)
-      .total,
-  ).toBe(0);
-  // Live under the thread id only: that is not the id agent-mail holds, so it
-  // must not count as ownership.
-  expect(
-    orphansForProject(
-      "/p/alpha",
-      new Set(["01a02-codex-thread"]),
-      groups,
-      KNOWN,
-    ).total,
-  ).toBe(2);
-});
-
-test("an unknown launcher id is excluded, like an unknown submitter", () => {
-  const groups = parseUnprocessedGroups(LAUNCH_DOC);
-  if (!groups) throw new Error("fixture failed to parse");
-  expect(
-    orphansForProject("/p/alpha", new Set(), groups, () => false).total,
-  ).toBe(0);
 });
