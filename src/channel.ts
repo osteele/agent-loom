@@ -73,6 +73,7 @@ import {
   inboundPolicy,
   isMuted,
   listLive,
+  processCommand,
   processEnviron,
   pushIsKnownUnreachable,
   register,
@@ -91,6 +92,7 @@ import {
   hasSeenSession,
   lastActivityMs,
   matchSessions,
+  resumeIdFromCommand,
   sessionIdFromEnv,
   sessionIdFromHostEnviron,
   sessionNames,
@@ -149,8 +151,15 @@ const cwd = canonicalProject(process.cwd());
 // addressable at all: Codex spawns its MCP servers with no session variable, so
 // without this the id is a randomUUID() no sibling process can learn, and
 // nothing can join a weft job back to the session that submitted it.
+//
+// The resume id sits between the two: it is the conversation's own identity and
+// survives a restart, where the launcher id is minted fresh per launch and
+// identifies only this run. It comes after our own environment because that is
+// what the harness actually set for this process, and argv records only what
+// was asked for.
 const sessionId =
   sessionIdFromEnv(process.env, process.ppid) ??
+  resumeIdFromCommand(processCommand(process.ppid)) ??
   sessionIdFromHostEnviron(processEnviron(process.ppid), process.ppid) ??
   randomUUID();
 const myMeta = claudeSessions().get(sessionId);

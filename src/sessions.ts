@@ -494,6 +494,38 @@ export function sessionIdFromEnv(
   return undefined;
 }
 
+const RESUME_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The conversation id a host agent was resumed with, from its command line.
+ *
+ * Covers `claude --resume <id>` / `-r <id>` and `codex resume <id>`. It exists
+ * for Codex, whose thread id is the resume-stable identity weft records but is
+ * reachable only from tool-call environments — never from the MCP child. On the
+ * command line it is readable.
+ *
+ * What it does NOT cover, and cannot: `--continue`, `codex resume --last`, and
+ * an in-session `/resume` all carry no id. Only a UUID-shaped token is taken,
+ * so a bare `--resume` that opens a picker is ignored rather than swallowing
+ * the next flag.
+ *
+ * The load-bearing caveat: **argv records intent, not outcome.** A resume that
+ * failed, or one whose picker the user overrode, still leaves the requested id
+ * on the command line. Nothing observable from outside the process
+ * distinguishes that from a resume that took, so this is trusted only where
+ * there is no better answer — after the process's own environment, which is
+ * what the harness actually set. */
+export function resumeIdFromCommand(command: string): string | undefined {
+  const tokens = command.trim().split(/\s+/);
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token !== "--resume" && token !== "-r" && token !== "resume") continue;
+    const candidate = tokens[i + 1];
+    if (RESUME_UUID.test(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 /** The host agent's session id, read from that process's environment.
  *
  * For children spawned without one. Codex gives its MCP servers no session

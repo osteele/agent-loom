@@ -13,6 +13,7 @@ import {
   matchSessions,
   resetSessionAliasCache,
   resolveSessionQuery,
+  resumeIdFromCommand,
   sessionDisplayName,
   sessionFullName,
   sessionIdFromEnv,
@@ -366,4 +367,53 @@ test("a native id is never adopted out of the host's environment", () => {
   const nativeOnly =
     "CLAUDE_CODE_SESSION_ID=an-outer-agents-native-id AGENT_SESSION_PID=44822";
   expect(sessionIdFromHostEnviron(nativeOnly, 44822)).toBeUndefined();
+});
+
+// --- resume ids from the host's command line ------------------------------
+
+const RESUMED = "004a30c3-6144-4e8a-8f47-c0ace144c8f4";
+
+test("a resume id is taken from either harness's command line", () => {
+  // Codex is why this exists: its thread id is the resume-stable identity weft
+  // records, and it is unreachable from the MCP child except here.
+  expect(resumeIdFromCommand(`/opt/homebrew/bin/codex resume ${RESUMED}`)).toBe(
+    RESUMED,
+  );
+  expect(
+    resumeIdFromCommand(`/bin/claude --channels=plugin:x --resume ${RESUMED}`),
+  ).toBe(RESUMED);
+  expect(resumeIdFromCommand(`/bin/claude -r ${RESUMED}`)).toBe(RESUMED);
+});
+
+test("a resume that names no id yields none rather than the next token", () => {
+  // `--resume` with no value opens a picker, and `--continue` and `--last`
+  // carry no id at all. Taking the following token would adopt a flag as an
+  // identity — worse than having none, because it would be stable and wrong.
+  expect(
+    resumeIdFromCommand("/bin/claude --resume --model fable"),
+  ).toBeUndefined();
+  expect(resumeIdFromCommand("/bin/claude --continue")).toBeUndefined();
+  expect(
+    resumeIdFromCommand("/opt/homebrew/bin/codex resume --last"),
+  ).toBeUndefined();
+  expect(resumeIdFromCommand("/opt/homebrew/bin/codex")).toBeUndefined();
+  expect(resumeIdFromCommand("")).toBeUndefined();
+});
+
+test("a non-uuid after the flag is not adopted", () => {
+  // codex resume also accepts a session NAME. A name is not what weft records,
+  // so matching one would produce an id that joins to nothing while looking
+  // like it should.
+  expect(
+    resumeIdFromCommand("/opt/homebrew/bin/codex resume my-saved-session"),
+  ).toBeUndefined();
+});
+
+test("the harness's own environment outranks the command line", () => {
+  // Claude sets CLAUDE_CODE_SESSION_ID to the resumed id, so argv adds nothing
+  // there. Where they could differ, the environment is what the harness
+  // actually adopted; argv is only what was requested of it.
+  expect(sessionIdFromEnv({ CLAUDE_CODE_SESSION_ID: "from-env" })).toBe(
+    "from-env",
+  );
 });

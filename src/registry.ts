@@ -230,6 +230,19 @@ export function processEnviron(pid: number): string {
   return res.stdout ?? "";
 }
 
+/** One process's command line WITHOUT its environment, or "" when unreadable.
+ *
+ * Deliberately not `ps eww`: that appends the environment to the same column,
+ * and a scan looking for an argument would then also be scanning API keys and
+ * whatever else the environment holds. Two narrow reads beat one wide one. */
+export function processCommand(pid: number): string {
+  const res = spawnSync("/bin/ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+  if (res.error || res.signal || res.status !== 0) return "";
+  return res.stdout ?? "";
+}
+
 export function processInfo(pids: number[]): Map<number, ProcessInfo> {
   return scanProcesses(pids).processes;
 }
