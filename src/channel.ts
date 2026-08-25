@@ -140,7 +140,9 @@ const cwd = canonicalProject(process.cwd());
 // sibling subprocess could ever learn the id minted in here.
 // Used to distinguish multiple sessions in the same directory (which share one
 // spool) and to suppress self-echo of our own outgoing mail.
-const sessionId = sessionIdFromEnv() ?? randomUUID();
+// process.ppid is the host agent that spawned this MCP server, which is the
+// process a launcher-minted id must name to be ours rather than inherited.
+const sessionId = sessionIdFromEnv(process.env, process.ppid) ?? randomUUID();
 const myMeta = claudeSessions().get(sessionId);
 const myName = myMeta?.name; // raw Claude name for the registry snapshot
 const mySessionNames = sessionNames(sessionId, myMeta, cwd);

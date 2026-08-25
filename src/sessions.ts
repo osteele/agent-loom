@@ -446,24 +446,64 @@ export function sessionDisplayName(
  * first, so a nested agent cannot be mistaken for the parent that launched it —
  * plain inheritance would otherwise hand a nested kimi its parent's
  * CLAUDE_CODE_SESSION_ID. */
+/** Resolution order for the calling agent's session id.
+ *
+ * The launcher-minted id comes FIRST, ahead of every native id. A native id
+ * that only the agent process can read is worth less than a launcher id every
+ * process in the shell can read: Codex injects `CODEX_THREAD_ID` into tool-call
+ * environments only, so its MCP children never see it and mint an id no sibling
+ * can learn, while a sibling CLI records the thread id — two identities for one
+ * session that never meet. Reachability beats provenance. See
+ * `docs/decisions/0009-prefer-launcher-minted-session-id.md`.
+ *
+ * This order is mirrored in `agent-command-guards`' launcher and in weft's
+ * `defaultSubmitterSessionEnvVars`; all three move together or the join breaks
+ * again. */
 export const SESSION_ID_ENV_VARS = [
+  "AGENT_SESSION_ID",
   "CLAUDE_CODE_SESSION_ID",
   "CODEX_THREAD_ID",
-  "AGENT_SESSION_ID",
 ] as const;
+
+/** Process the launcher minted `AGENT_SESSION_ID` for. */
+export const AGENT_SESSION_PID_ENV_VAR = "AGENT_SESSION_PID";
 
 /** Resolve the calling agent's session id from the environment.
  *
  * Empty values are skipped rather than winning the chain: an `export X=""`
- * upstream would otherwise mask a real id further down it. */
+ * upstream would otherwise mask a real id further down it.
+ *
+ * `hostPid` is the agent process this caller belongs to — for an MCP server,
+ * its parent. When supplied, a launcher-minted id is accepted only if
+ * `AGENT_SESSION_PID` names that same process. An agent started *outside* the
+ * launcher inherits its parent agent's `AGENT_SESSION_ID` from the environment,
+ * and answering to it would file this session's work under a different, live
+ * session — a specific wrong answer, which is worse than having none. The
+ * marker is what distinguishes minted-for-me from inherited, since the id
+ * itself looks identical either way.
+ *
+ * A missing marker is trusted: launchers predating it export no such variable,
+ * and refusing those would strand every session started by one. */
 export function sessionIdFromEnv(
   env: Record<string, string | undefined> = process.env,
+  hostPid?: number,
 ): string | undefined {
   for (const name of SESSION_ID_ENV_VARS) {
     const value = env[name];
-    if (value) return value;
+    if (!value) continue;
+    if (name === "AGENT_SESSION_ID" && !mintedForHost(env, hostPid)) continue;
+    return value;
   }
   return undefined;
+}
+
+function mintedForHost(
+  env: Record<string, string | undefined>,
+  hostPid: number | undefined,
+): boolean {
+  const marker = env[AGENT_SESSION_PID_ENV_VAR];
+  if (!marker || hostPid === undefined) return true; // unverifiable, so trusted
+  return Number(marker) === hostPid;
 }
 
 /** The subset of a session's identity that `--session` can be matched against. */

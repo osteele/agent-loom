@@ -182,22 +182,53 @@ test("isStaleSession agrees with the tag activityTag renders", () => {
 
 // --- session identity from the environment -----------------------------------
 
-test("a native session id wins over a launcher-minted one", () => {
-  // Order matters only when both are present, which is the nested case: an
-  // agent started inside another agent's shell inherits AGENT_SESSION_ID, then
-  // sets its own native id. The native id is the more specific of the two.
+test("a launcher-minted session id wins over a native one", () => {
+  // Reachability beats provenance. A native id the agent alone can read makes
+  // the session unaddressable from anywhere else: Codex injects CODEX_THREAD_ID
+  // into tool-call environments only, so a sibling CLI records it while the MCP
+  // child sees nothing and mints its own — two ids for one session that never
+  // meet. The launcher id is in the shell environment every process inherits.
   expect(
     sessionIdFromEnv({
       AGENT_SESSION_ID: "launcher-minted",
       CLAUDE_CODE_SESSION_ID: "claude-native",
     }),
-  ).toBe("claude-native");
+  ).toBe("launcher-minted");
   expect(
     sessionIdFromEnv({
       AGENT_SESSION_ID: "launcher-minted",
       CODEX_THREAD_ID: "codex-native",
     }),
-  ).toBe("codex-native");
+  ).toBe("launcher-minted");
+});
+
+test("a launcher id minted for another process is not adopted", () => {
+  // An agent started outside the launcher inherits AGENT_SESSION_ID from its
+  // parent agent's environment, where it is indistinguishable from one minted
+  // for itself. Answering to it files this session's work under a different,
+  // live session — a specific wrong answer, worse than having none. The marker
+  // names the process the id was minted for.
+  const inherited = {
+    AGENT_SESSION_ID: "parent-agents-id",
+    AGENT_SESSION_PID: "4242",
+    CODEX_THREAD_ID: "my-own-native",
+  };
+  expect(sessionIdFromEnv(inherited, 9999)).toBe("my-own-native");
+  // Same environment, and this really is the process it was minted for.
+  expect(sessionIdFromEnv(inherited, 4242)).toBe("parent-agents-id");
+});
+
+test("an unverifiable launcher id is trusted rather than discarded", () => {
+  // A launcher predating the marker exports no such variable, and a caller may
+  // not know its host agent's pid. Refusing in either case would strand every
+  // session those launchers start, which is the failure this ordering exists
+  // to fix.
+  expect(sessionIdFromEnv({ AGENT_SESSION_ID: "no-marker" }, 9999)).toBe(
+    "no-marker",
+  );
+  expect(
+    sessionIdFromEnv({ AGENT_SESSION_ID: "id", AGENT_SESSION_PID: "4242" }),
+  ).toBe("id");
 });
 
 test("AGENT_SESSION_ID identifies agents that export no native id", () => {
