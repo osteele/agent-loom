@@ -1,11 +1,18 @@
 /** Unprocessed weft job counts, cached for the status line.
  *
- * `weft list jobs` takes seconds: it starts a Go binary and queries a local
- * SQLite file, and a measurement at 1-minute load 11 put it at a 3.6s median.
  * Claude Code cancels a status-line script that exceeds roughly 300ms, and a
- * cancelled script drops the whole line rather than one field, so the query
- * can never happen on the read path. The daemon runs it on a slow cadence and
- * publishes counts; the status line reads the file.
+ * cancelled script drops the whole line rather than one field, so a subprocess
+ * can never happen on the read path. The daemon runs the query on a slow
+ * cadence and publishes counts; the status line reads the file.
+ *
+ * The margin is no longer the reason it started out being. The original query,
+ * `weft list jobs --unprocessed`, was a full table scan measured at a 3.6s
+ * median under 1-minute load 11. The grouped surface that replaced it
+ * aggregates in SQL and runs in 40-60ms idle — roughly seventy times cheaper,
+ * and comfortably inside the budget on a quiet machine. What keeps the cache is
+ * that this machine is routinely not quiet: it reaches load 100 with sixty-odd
+ * sessions, and spawning a Go binary there is unpredictable in a way a file
+ * read is not. Do not remove the cache on the strength of the idle number.
  *
  * The same two invariants as `presence.ts`, for the same reasons:
  *
