@@ -70,6 +70,14 @@ is adopted only on proof that the launcher minted it for that process.
   which is a separate decision and not settled here.
 - Claude Code sessions are unaffected: they already resolve natively and
   already join.
+- **The adopted id identifies a launch, not a conversation.**
+  `AGENT_SESSION_ID` is minted unconditionally on every launcher invocation, so
+  a session resumed later is a different identity: its agent-mail address
+  changes, peers holding the old one cannot reach it, and jobs it submitted
+  before the resume stay attributed to the id it had then. Native ids do not
+  have this property — they identify the conversation and survive a resume — so
+  the cost falls only on the harnesses that need the host read at all, which
+  today means Codex.
 
 ## Considered Options
 
