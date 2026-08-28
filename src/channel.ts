@@ -69,6 +69,7 @@ import { readPresenceSnapshot } from "./presence.ts";
 import {
   type InboundPolicy,
   type SessionCapabilities,
+  assignedGeneratedSessionNameForRegistration,
   capabilityLabels,
   inboundPolicy,
   isMuted,
@@ -164,7 +165,8 @@ const sessionId =
   randomUUID();
 const myMeta = claudeSessions().get(sessionId);
 const myName = myMeta?.name; // raw Claude name for the registry snapshot
-const mySessionNames = sessionNames(sessionId, myMeta, cwd);
+const myGeneratedName = assignedGeneratedSessionNameForRegistration(sessionId);
+const mySessionNames = sessionNames(sessionId, myMeta, cwd, myGeneratedName);
 const myLabel = mySessionNames.displayName;
 const startupIdentity = `${mySessionNames.displayName} — address: ${mySessionNames.fullName}`;
 const selfLabel = `${mySessionNames.displayName} (${mySessionNames.fullName}; ${sessionId})`;

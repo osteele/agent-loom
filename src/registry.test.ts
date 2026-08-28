@@ -17,6 +17,7 @@ import { REGISTRY_DIR, projectSlug } from "./paths.ts";
 import {
   type Registration,
   type SessionCapabilities,
+  assignedGeneratedSessionNameForRegistration,
   capabilityLabels,
   isCurrentProcess,
   listLiveInProject,
@@ -28,6 +29,7 @@ import {
   setMuted,
   touchInboxPoll,
 } from "./registry.ts";
+import { adjectiveNounSessionName, generatedNameNoun } from "./sessions.ts";
 
 test("parsePsLine handles macOS lstart (incl. padded day) and spaced commands", () => {
   const parsed = parsePsLine(
@@ -182,6 +184,45 @@ test("a process instance preserves state without a process-start scan", () => {
     expect(after.procStart).toBeUndefined();
   } finally {
     if (existsSync(path)) rmSync(path);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pre-registration minting avoids a noun already represented in the registry", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-nouns-"));
+  const project = join(root, "project");
+  mkdirSync(project);
+  const firstSession = "registered-noun-first";
+  const first = assignedGeneratedSessionNameForRegistration(firstSession);
+  const firstNoun = generatedNameNoun(first);
+  if (!firstNoun) throw new Error("expected an adjective-noun name");
+  const registration = register(
+    project,
+    1_000_001,
+    firstSession,
+    undefined,
+    undefined,
+    undefined,
+    "accept",
+    undefined,
+    "registered-noun-instance",
+  );
+  try {
+    let secondSession: string | undefined;
+    for (let index = 0; index < 10_000; index += 1) {
+      const candidate = `registered-noun-second-${index}`;
+      if (
+        generatedNameNoun(adjectiveNounSessionName(candidate)) === firstNoun
+      ) {
+        secondSession = candidate;
+        break;
+      }
+    }
+    if (!secondSession) throw new Error("could not find the preferred noun");
+    const second = assignedGeneratedSessionNameForRegistration(secondSession);
+    expect(generatedNameNoun(second)).not.toBe(firstNoun);
+  } finally {
+    if (existsSync(registration)) rmSync(registration);
     rmSync(root, { recursive: true, force: true });
   }
 });

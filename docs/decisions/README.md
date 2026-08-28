@@ -26,3 +26,4 @@ decided. A record that states something untrue is corrected in place instead.
 | [0009](0009-prefer-launcher-minted-session-id.md) | Prefer the launcher-minted session id over native ids — superseded by [0010](0010-adopt-the-host-agent-session-id.md) | 2026-08-25 |
 | [0010](0010-adopt-the-host-agent-session-id.md) | Adopt the host agent's session id when spawned without one | 2026-08-25 |
 | [0011](0011-prefer-a-resume-id-from-the-host-command-line.md) | Prefer a resume id from the host's command line | 2026-08-25 |
+| [0012](0012-allow-friendly-session-names-to-recycle.md) | Allow friendly session names to recycle | 2026-08-28 |

@@ -1,12 +1,21 @@
 import { beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NOUNS } from "./nameWords.ts";
 import {
+  RECENT_NOUN_USE_MS,
   activityTag,
   adjectiveNounSessionName,
   assignedGeneratedSessionName,
   formatAge,
+  generatedNameNoun,
   isStaleSession,
   lastActivityMs,
   legacyGeneratedSessionName,
@@ -125,6 +134,114 @@ test("a persisted selection wins over a later requested scheme", () => {
     const [file] = readdirSync(directory);
     const stored = readFileSync(join(directory, file), "utf8");
     expect(stored).toContain('"scheme": "legacy-syllable"');
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+function sessionWithPreferredNoun(noun: string, prefix: string): string {
+  for (let index = 0; index < 10_000; index += 1) {
+    const sessionId = `${prefix}-${index}`;
+    if (generatedNameNoun(adjectiveNounSessionName(sessionId)) === noun) {
+      return sessionId;
+    }
+  }
+  throw new Error(`could not find a session id that prefers ${noun}`);
+}
+
+test("a newly minted name avoids a recently used noun", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const nowMs = Date.parse("2026-08-28T12:00:00.000Z");
+  try {
+    const first = assignedGeneratedSessionName("first", false, directory, {
+      nowMs,
+    });
+    const firstNoun = generatedNameNoun(first);
+    if (!firstNoun) throw new Error("expected an adjective-noun name");
+    const second = assignedGeneratedSessionName(
+      sessionWithPreferredNoun(firstNoun, "second"),
+      false,
+      directory,
+      { nowMs: nowMs + 1 },
+    );
+    expect(generatedNameNoun(second)).not.toBe(firstNoun);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test("a newly minted name never takes a noun held by a current session", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  try {
+    const preferred = generatedNameNoun(adjectiveNounSessionName("current"));
+    if (!preferred) throw new Error("expected an adjective-noun name");
+    const assigned = assignedGeneratedSessionName("current", false, directory, {
+      unavailableNouns: new Set([preferred]),
+    });
+    expect(generatedNameNoun(assigned)).not.toBe(preferred);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test("an exhausted recent pool recycles its least-recently minted noun", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const nowMs = Date.parse("2026-08-28T12:00:00.000Z");
+  try {
+    const assignedNouns: string[] = [];
+    for (let index = 0; index < NOUNS.length; index += 1) {
+      const assigned = assignedGeneratedSessionName(
+        `fill-${index}`,
+        false,
+        directory,
+        { nowMs: nowMs + index },
+      );
+      const noun = generatedNameNoun(assigned);
+      if (!noun) throw new Error("expected an adjective-noun name");
+      assignedNouns.push(noun);
+    }
+    expect(new Set(assignedNouns)).toHaveLength(256);
+
+    const recycled = assignedGeneratedSessionName(
+      "after-exhaustion",
+      false,
+      directory,
+      { nowMs: nowMs + NOUNS.length },
+    );
+    expect(generatedNameNoun(recycled)).toBe(assignedNouns[0]);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test("a noun becomes normally eligible after the recency window", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const nowMs = Date.parse("2026-08-28T12:00:00.000Z");
+  try {
+    const first = assignedGeneratedSessionName("old", false, directory, {
+      nowMs,
+    });
+    const noun = generatedNameNoun(first);
+    if (!noun) throw new Error("expected an adjective-noun name");
+    const reused = assignedGeneratedSessionName(
+      sessionWithPreferredNoun(noun, "later"),
+      false,
+      directory,
+      { nowMs: nowMs + RECENT_NOUN_USE_MS + 1 },
+    );
+    expect(generatedNameNoun(reused)).toBe(noun);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test("a malformed assignment blocks minting instead of silently weakening recency", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  try {
+    writeFileSync(join(directory, "corrupt.json"), "not json");
+    expect(() =>
+      assignedGeneratedSessionName("new", false, directory),
+    ).toThrow();
   } finally {
     rmSync(directory, { recursive: true });
   }

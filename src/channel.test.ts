@@ -65,7 +65,6 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     stderr: "pipe",
   });
   const client = new Client({ name: "agent-mail-test", version: "1" });
-
   try {
     await client.connect(transport);
     expect(client.getInstructions()).not.toContain("Agent-mail backlog:");
@@ -178,6 +177,7 @@ test("initial MCP instructions report the session's unread backlog only", async 
       CLAUDE_CODE_SESSION_ID: "",
       CODEX_THREAD_ID: "",
       AGENT_SESSION_ID: "recipient-session",
+      AGENT_SESSION_PID: "",
     },
     stderr: "pipe",
   });
@@ -196,18 +196,18 @@ test("initial MCP instructions report the session's unread backlog only", async 
     // A following request establishes that the server handled the initialized
     // notification and stamped announcement state without writing a receipt.
     await client.listTools();
-    const announced = JSON.parse(
-      readFileSync(
-        join(
-          home,
-          ".claude",
-          "agent-mail",
-          "announced",
-          `${slug}-recipient-session.json`,
-        ),
-        "utf8",
-      ),
-    ) as { lastUnread: number; lastNewestId?: string; remindCount: number };
+    const announcedPath = join(
+      home,
+      ".claude",
+      "agent-mail",
+      "announced",
+      `${slug}-recipient-session.json`,
+    );
+    const announced = JSON.parse(readFileSync(announcedPath, "utf8")) as {
+      lastUnread: number;
+      lastNewestId?: string;
+      remindCount: number;
+    };
     expect(announced.lastUnread).toBe(2);
     expect(announced.lastNewestId).toBe("direct");
     expect(announced.remindCount).toBe(1);

@@ -18,12 +18,18 @@ import { join } from "node:path";
 import type { ChannelPushStatus } from "./channelIdentity.ts";
 import {
   REGISTRY_DIR,
+  SESSION_NAMES_DIR,
   canonicalProject,
   ensureDirs,
   projectSlug,
 } from "./paths.ts";
 import { sleepSync } from "./runtime.ts";
-import { assignedGeneratedSessionName } from "./sessions.ts";
+import {
+  type GeneratedSessionName,
+  assignedGeneratedSessionName,
+  generatedNameNoun,
+  hasSeenSession,
+} from "./sessions.ts";
 
 export interface Registration {
   cwd: string;
@@ -329,7 +335,8 @@ function mutateEntry(
  * session already in the registry. Assignments are per session id and survive
  * unregister/restart; stale entries are included so an old session resumed
  * after the upgrade keeps the name its user already saw. */
-function preserveRegisteredSessionNames(): void {
+function preserveRegisteredSessionNames(): Set<string> {
+  const unavailableNouns = new Set<string>();
   for (const file of readdirSync(REGISTRY_DIR)) {
     if (!file.endsWith(".json")) continue;
     let entry: Registration;
@@ -348,8 +355,26 @@ function preserveRegisteredSessionNames(): void {
       }
       throw error;
     }
-    if (entry.sessionId) assignedGeneratedSessionName(entry.sessionId, true);
+    if (entry.sessionId) {
+      const assigned = assignedGeneratedSessionName(entry.sessionId, true);
+      const noun = generatedNameNoun(assigned);
+      if (noun) unavailableNouns.add(noun);
+    }
   }
+  return unavailableNouns;
+}
+
+/** Mint a name while reserving every noun already represented in the registry.
+ * Called before the channel can register itself, so naming and registration do
+ * not have a race window in which an old current noun looks available. */
+export function assignedGeneratedSessionNameForRegistration(
+  sessionId: string,
+): GeneratedSessionName {
+  ensureDirs();
+  if (hasSeenSession(sessionId)) return assignedGeneratedSessionName(sessionId);
+  return assignedGeneratedSessionName(sessionId, false, SESSION_NAMES_DIR, {
+    unavailableNouns: preserveRegisteredSessionNames(),
+  });
 }
 
 export function register(
@@ -365,8 +390,7 @@ export function register(
   parentPid?: number,
 ): string {
   ensureDirs();
-  preserveRegisteredSessionNames();
-  if (sessionId) assignedGeneratedSessionName(sessionId);
+  if (sessionId) assignedGeneratedSessionNameForRegistration(sessionId);
   const path = entryPath(cwd, pid);
   const scan =
     knownProcStart || knownInstanceId ? undefined : scanProcesses([pid]);

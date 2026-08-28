@@ -33,7 +33,12 @@ use; this is the reference behind it.
   the original process.
 - **Session names persist.** Assignments under
   `~/.claude/agent-mail/session-names/` are keyed by session ID. They survive
-  listener restarts and keep existing names stable across naming upgrades.
+  listener restarts and keep existing names stable across naming upgrades. New
+  names draw from credited 256-word Glitch adjective and noun lists. Minting is
+  serialized, excludes nouns held by registered sessions, and prefers nouns
+  not minted in the preceding 30 days. After that preference is exhausted, the
+  least-recently minted available noun may recycle; see
+  [ADR 0012](decisions/0012-allow-friendly-session-names-to-recycle.md).
 - **Claims are filesystem transactions.** Per-project entries under
   `~/.claude/agent-mail/claims/` reserve lab-notebook experiment numbers and
   files or directories. Claims do not depend on the daemon.
@@ -68,7 +73,9 @@ Claude Code supplies its ID in `CLAUDE_CODE_SESSION_ID`; current Codex supplies
 their MCP server starts. A deliberate Claude `/rename` is preserved verbatim as
 both forms. Existing sessions retain their previously assigned syllable names,
 such as full name `augur-hia` and display name `hia`. Only new session IDs
-receive adjective–noun names.
+receive adjective–noun names. Current generated sessions have distinct nouns,
+so a human can ordinarily refer to one as `Lantern` after its full identity has
+been established.
 
 The project spool stores every message for that directory. Session-local views
 (`check_inbox`, `mark_read`, and channel push) filter it for the current

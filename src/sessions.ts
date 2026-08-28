@@ -14,11 +14,14 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadSessionAliases } from "./config.ts";
+import { withFileLock } from "./lock.ts";
+import { ADJECTIVES, NOUNS } from "./nameWords.ts";
 import { SESSION_NAMES_DIR } from "./paths.ts";
 
 const SESSIONS_DIR = join(
@@ -60,140 +63,6 @@ const ONSETS = [
 ];
 const VOWELS = ["a", "e", "i", "o", "u", "ai", "ia"];
 const CODAS = ["", "", "", "l", "m", "n", "r", "s"];
-
-const ADJECTIVES = [
-  "amber",
-  "brave",
-  "bright",
-  "calm",
-  "clear",
-  "clever",
-  "cool",
-  "coral",
-  "crisp",
-  "daring",
-  "deep",
-  "eager",
-  "fair",
-  "fast",
-  "gentle",
-  "golden",
-  "grand",
-  "green",
-  "happy",
-  "hidden",
-  "indigo",
-  "jolly",
-  "keen",
-  "kind",
-  "lively",
-  "lucid",
-  "lucky",
-  "merry",
-  "mighty",
-  "nimble",
-  "noble",
-  "patient",
-  "plain",
-  "proud",
-  "quick",
-  "quiet",
-  "rapid",
-  "ready",
-  "red",
-  "rising",
-  "royal",
-  "silver",
-  "small",
-  "soft",
-  "steady",
-  "still",
-  "sunny",
-  "swift",
-  "teal",
-  "tidy",
-  "true",
-  "vivid",
-  "warm",
-  "wise",
-  "witty",
-  "young",
-  "azure",
-  "bold",
-  "cosmic",
-  "fresh",
-  "glad",
-  "open",
-  "polished",
-  "sharp",
-] as const;
-
-const NOUNS = [
-  "badger",
-  "beacon",
-  "birch",
-  "brook",
-  "cedar",
-  "comet",
-  "crane",
-  "dawn",
-  "delta",
-  "ember",
-  "falcon",
-  "fern",
-  "finch",
-  "forest",
-  "fox",
-  "garden",
-  "grove",
-  "harbor",
-  "hawk",
-  "heron",
-  "island",
-  "jay",
-  "kingfisher",
-  "lake",
-  "lantern",
-  "lark",
-  "maple",
-  "meadow",
-  "moon",
-  "oak",
-  "ocean",
-  "orbit",
-  "otter",
-  "owl",
-  "pine",
-  "planet",
-  "quartz",
-  "rain",
-  "raven",
-  "reef",
-  "river",
-  "robin",
-  "sage",
-  "shore",
-  "sparrow",
-  "star",
-  "stone",
-  "summit",
-  "sun",
-  "swift",
-  "thistle",
-  "tiger",
-  "trail",
-  "vale",
-  "willow",
-  "wind",
-  "wren",
-  "acorn",
-  "bridge",
-  "cloud",
-  "field",
-  "glade",
-  "kestrel",
-  "wave",
-] as const;
 
 export interface GeneratedSessionName {
   scheme: "legacy-syllable" | "adjective-noun";
@@ -276,6 +145,13 @@ export function adjectiveNounSessionName(
   const bytes = createHash("sha256").update(sessionId).digest();
   const adjective = ADJECTIVES[bytes[0] % ADJECTIVES.length];
   const noun = NOUNS[bytes[1] % NOUNS.length];
+  return adjectiveNounName(adjective, noun);
+}
+
+function adjectiveNounName(
+  adjective: (typeof ADJECTIVES)[number],
+  noun: (typeof NOUNS)[number],
+): GeneratedSessionName {
   return {
     scheme: "adjective-noun",
     slug: `${adjective}-${noun}`,
@@ -288,25 +164,113 @@ function assignmentPath(sessionId: string, directory: string): string {
   return join(directory, `${id}.json`);
 }
 
+interface StoredGeneratedSessionName extends GeneratedSessionName {
+  sessionId?: string;
+  assignedAt?: string;
+}
+
+function readGeneratedSessionNameFile(
+  path: string,
+): StoredGeneratedSessionName {
+  const value = JSON.parse(
+    readFileSync(path, "utf8"),
+  ) as StoredGeneratedSessionName;
+  if (
+    (value.scheme !== "legacy-syllable" && value.scheme !== "adjective-noun") ||
+    typeof value.slug !== "string" ||
+    typeof value.displayName !== "string" ||
+    (value.sessionId !== undefined && typeof value.sessionId !== "string") ||
+    (value.assignedAt !== undefined &&
+      (typeof value.assignedAt !== "string" ||
+        !Number.isFinite(Date.parse(value.assignedAt))))
+  ) {
+    throw new Error(`invalid session-name assignment: ${path}`);
+  }
+  return value;
+}
+
 function readGeneratedSessionName(
   sessionId: string,
   directory: string,
 ): GeneratedSessionName | undefined {
   const path = assignmentPath(sessionId, directory);
   if (!existsSync(path)) return undefined;
-  const value = JSON.parse(readFileSync(path, "utf8")) as GeneratedSessionName;
-  if (
-    (value.scheme !== "legacy-syllable" && value.scheme !== "adjective-noun") ||
-    typeof value.slug !== "string" ||
-    typeof value.displayName !== "string"
-  ) {
-    throw new Error(`invalid session-name assignment: ${path}`);
-  }
+  const value = readGeneratedSessionNameFile(path);
   return {
     scheme: value.scheme,
     slug: value.slug,
     displayName: value.displayName,
   };
+}
+
+/** Noun portion of a generated adjective–noun identity. */
+export function generatedNameNoun(
+  name: GeneratedSessionName,
+): string | undefined {
+  if (name.scheme !== "adjective-noun") return undefined;
+  const separator = name.slug.lastIndexOf("-");
+  return separator >= 0 ? name.slug.slice(separator + 1) : undefined;
+}
+
+export const RECENT_NOUN_USE_MS = 30 * 24 * 60 * 60 * 1_000;
+
+export interface NameAssignmentOptions {
+  /** Nouns held by currently registered sessions. */
+  unavailableNouns?: ReadonlySet<string>;
+  /** Dependency injection for deterministic recency tests. */
+  nowMs?: number;
+}
+
+function recentNounUse(directory: string): Map<string, number> {
+  const use = new Map<string, number>();
+  for (const file of readdirSync(directory)) {
+    if (!file.endsWith(".json")) continue;
+    const path = join(directory, file);
+    const stored = readGeneratedSessionNameFile(path);
+    const noun = generatedNameNoun(stored);
+    if (!noun || !NOUNS.includes(noun as (typeof NOUNS)[number])) continue;
+    const assignedAt = stored.assignedAt
+      ? Date.parse(stored.assignedAt)
+      : statSync(path).mtimeMs;
+    use.set(noun, Math.max(use.get(noun) ?? 0, assignedAt));
+  }
+  return use;
+}
+
+function selectedAdjectiveNounName(
+  sessionId: string,
+  directory: string,
+  unavailableNouns: ReadonlySet<string>,
+  nowMs: number,
+): GeneratedSessionName {
+  const bytes = createHash("sha256").update(sessionId).digest();
+  const adjective = ADJECTIVES[bytes[0]];
+  const firstNoun = bytes[1];
+  const use = recentNounUse(directory);
+  const cutoff = nowMs - RECENT_NOUN_USE_MS;
+
+  for (let offset = 0; offset < NOUNS.length; offset += 1) {
+    const noun = NOUNS[(firstNoun + offset) % NOUNS.length];
+    if (!unavailableNouns.has(noun) && (use.get(noun) ?? 0) <= cutoff) {
+      return adjectiveNounName(adjective, noun);
+    }
+  }
+
+  let oldestNoun: (typeof NOUNS)[number] | undefined;
+  let oldestUse = Number.POSITIVE_INFINITY;
+  for (let offset = 0; offset < NOUNS.length; offset += 1) {
+    const noun = NOUNS[(firstNoun + offset) % NOUNS.length];
+    if (unavailableNouns.has(noun)) continue;
+    const usedAt = use.get(noun) ?? 0;
+    if (usedAt < oldestUse) {
+      oldestNoun = noun;
+      oldestUse = usedAt;
+    }
+  }
+  if (!oldestNoun) {
+    throw new Error("all friendly session-name nouns are currently in use");
+  }
+  return adjectiveNounName(adjective, oldestNoun);
 }
 
 /** Whether agent-mail has ever registered a session under this id.
@@ -336,25 +300,42 @@ export function assignedGeneratedSessionName(
   sessionId: string,
   legacy = false,
   directory = SESSION_NAMES_DIR,
+  options: NameAssignmentOptions = {},
 ): GeneratedSessionName {
   const existing = readGeneratedSessionName(sessionId, directory);
   if (existing) return existing;
-  const selected = legacy
-    ? legacyGeneratedSessionName(sessionId)
-    : adjectiveNounSessionName(sessionId);
-  mkdirSync(directory, { recursive: true });
-  const path = assignmentPath(sessionId, directory);
-  try {
-    writeFileSync(path, JSON.stringify({ sessionId, ...selected }, null, 1), {
-      flag: "wx",
-    });
-    return selected;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const raced = readGeneratedSessionName(sessionId, directory);
-    if (!raced) throw error;
-    return raced;
-  }
+  const nowMs = options.nowMs ?? Date.now();
+  return withFileLock(join(directory, ".mint.lock"), () => {
+    const lockedExisting = readGeneratedSessionName(sessionId, directory);
+    if (lockedExisting) return lockedExisting;
+    const selected = legacy
+      ? legacyGeneratedSessionName(sessionId)
+      : selectedAdjectiveNounName(
+          sessionId,
+          directory,
+          options.unavailableNouns ?? new Set(),
+          nowMs,
+        );
+    mkdirSync(directory, { recursive: true });
+    const path = assignmentPath(sessionId, directory);
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify(
+          { sessionId, assignedAt: new Date(nowMs).toISOString(), ...selected },
+          null,
+          1,
+        ),
+        { flag: "wx" },
+      );
+      return selected;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const raced = readGeneratedSessionName(sessionId, directory);
+      if (!raced) throw error;
+      return raced;
+    }
+  });
 }
 
 /** Project base (directory basename) for a session's label, mapped through the

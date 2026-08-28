@@ -88,6 +88,14 @@ project, use `list_sessions` to find its full name and pass that name to
 `send_mail`. The target project determines which inbox stores the message; the
 optional session name limits who can see it.
 
+Generated addresses use a credited 256 × 256 subset of Glitch's
+[`friendly-words`](https://github.com/glitchdotcom/friendly-words). Agent-mail
+does not reuse a noun held by another registered session and normally waits 30
+days before reusing a noun, so a human can usually address an established agent
+by its noun alone. Names may eventually recycle; session IDs remain the durable
+identity. See [ADR 0012](docs/decisions/0012-allow-friendly-session-names-to-recycle.md)
+and [the third-party notice](THIRD_PARTY_NOTICES.md).
+
 ### Install only what you need
 
 | Component | What it adds | Setup |
