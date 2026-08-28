@@ -80,9 +80,13 @@ been established.
 The project spool stores every message for that directory. Session-local views
 (`check_inbox`, `mark_read`, and channel push) filter it for the current
 session. A session does not see mail it authored itself. A direct
-session-targeted message is visible only to the addressed session. The CLI
-`agent-mail inbox` and HTTP `/inbox` endpoint are project-spool views and show
-the stored messages without session-local filtering.
+session-targeted message is visible only to the addressed session.
+`check_inbox` marks the messages it returns read — the pull is the one delivery
+the server can verify — and `peek=true` leaves them unread; `mark_read` covers
+mail handled from a channel push, which never marks anything read by itself. The
+CLI `agent-mail inbox` and HTTP `/inbox` endpoint are project-spool views: they
+show the stored messages without session-local filtering and mark nothing
+read.
 
 Each session also records its **host client**, the name the client reports in the
 MCP handshake: `claude-code`, `codex`, `kimi-code`, and `opencode` are the ones

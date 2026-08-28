@@ -357,3 +357,100 @@ test("coordination tools expose and recover only dead-session records", async ()
     await client.close();
   }
 });
+
+test("check_inbox marks returned messages read unless peek", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-markread-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
+  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  mkdirSync(inboxDirectory, { recursive: true });
+  const messages = [
+    {
+      id: "note-a",
+      ts: "2026-08-28T12:00:00.000Z",
+      from: "peer",
+      project: canonical,
+      message: "broadcast body",
+    },
+    {
+      id: "note-b",
+      ts: "2026-08-28T12:01:00.000Z",
+      from: "peer",
+      project: canonical,
+      message: "direct body",
+      meta: { toSession: "recipient-session" },
+    },
+  ];
+  writeFileSync(
+    join(inboxDirectory, `${slug}.jsonl`),
+    `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`,
+  );
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "recipient-session",
+      AGENT_SESSION_PID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+
+    const peeked = await client.callTool({
+      name: "check_inbox",
+      arguments: { peek: true },
+    });
+    const peekedText = textContent(peeked);
+    expect(peekedText).toContain("note-a unread");
+    expect(peekedText).toContain("note-b unread");
+    expect(peekedText).not.toContain("marked");
+
+    const stillUnread = await client.callTool({
+      name: "check_inbox",
+      arguments: { unread: true, peek: true },
+    });
+    expect(textContent(stillUnread)).toContain("note-a unread");
+    expect(textContent(stillUnread)).toContain("note-b unread");
+
+    const pulled = await client.callTool({ name: "check_inbox" });
+    const pulledText = textContent(pulled);
+    expect(pulledText).toContain("note-a unread");
+    expect(pulledText).toContain("marked 2 message(s) read");
+
+    const after = await client.callTool({
+      name: "check_inbox",
+      arguments: { unread: true },
+    });
+    expect(textContent(after)).toBe("inbox empty");
+
+    const again = await client.callTool({ name: "check_inbox" });
+    const againText = textContent(again);
+    expect(againText).toContain("note-a read");
+    expect(againText).not.toContain("marked");
+
+    const receipts = readFileSync(
+      join(home, ".claude", "agent-mail", "receipts", `${slug}.jsonl`),
+      "utf8",
+    );
+    expect(receipts).toContain('"status":"read"');
+  } finally {
+    await client.close();
+  }
+});

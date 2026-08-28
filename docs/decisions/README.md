@@ -27,3 +27,4 @@ decided. A record that states something untrue is corrected in place instead.
 | [0010](0010-adopt-the-host-agent-session-id.md) | Adopt the host agent's session id when spawned without one | 2026-08-25 |
 | [0011](0011-prefer-a-resume-id-from-the-host-command-line.md) | Prefer a resume id from the host's command line | 2026-08-25 |
 | [0012](0012-allow-friendly-session-names-to-recycle.md) | Allow friendly session names to recycle | 2026-08-28 |
+| [0013](0013-check-inbox-marks-returned-mail-read.md) | Reading marks read: check_inbox acknowledges the mail it returns | 2026-08-28 |
