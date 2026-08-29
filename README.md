@@ -301,7 +301,8 @@ app and enable [Incoming
 Webhooks](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks).
 Then select **Add New Webhook to Workspace**. Choose the channel that should
 receive agent-mail traffic, then copy the generated webhook URL. Treat this
-URL as a secret.
+URL as a secret. Message Markdown is translated to Slack's `mrkdwn`, including
+headings, emphasis, lists, code, and links.
 
 Add the URL to `~/.config/agent-mail/config.toml`:
 

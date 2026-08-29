@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Render message Markdown as Slack `mrkdwn` in per-message echoes and escape
+  Slack control characters in message bodies.
 - Keep session addresses routable after Claude Code rotates its session ID, and
   expire abandoned coordination records owned outside a live agent session.
 - Prevent duplicate sends when a slow daemon request races its direct fallback.

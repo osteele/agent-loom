@@ -140,6 +140,53 @@ test("native audit routes preserve the named native recipient", () => {
   );
 });
 
+test("message bodies translate CommonMark bold to Slack mrkdwn", () => {
+  const formatted = formatSlackEcho(
+    message({
+      message:
+        "**Decision made** with `**literal inline**`.\n```md\n**literal block**\n```",
+    }),
+    [registration(SOURCE, "recipient")],
+    sessions([
+      ["sender", "hia"],
+      ["recipient", "nia"],
+    ]),
+  );
+  const section = formatted.sectionText.replaceAll("\u200b", "");
+  const fallback = formatted.fallbackText.replaceAll("\u200b", "");
+  expect(section).toContain("*Decision made*");
+  expect(section).toContain("`**literal inline**`");
+  expect(section).toContain("```\n**literal block**\n```");
+  expect(fallback).toContain("*Decision made*");
+});
+
+test("message bodies escape Slack control characters", () => {
+  const formatted = formatSlackEcho(
+    message({ message: "**safe** & <!here>" }),
+    [],
+    sessions([["sender", "hia"]]),
+  );
+  expect(formatted.sectionText.replaceAll("\u200b", "")).toContain(
+    "*safe* &amp; &lt;!here&gt;",
+  );
+});
+
+test("message bodies serialize nested styles, headings, lists, and links", () => {
+  const formatted = formatSlackEcho(
+    message({
+      message:
+        "# Result\n\n**bold and _italic_**\n\n- one\n- [two](https://example.com)",
+    }),
+    [],
+    sessions([["sender", "hia"]]),
+  );
+  const section = formatted.sectionText.replaceAll("\u200b", "");
+  expect(section).toContain("*Result*");
+  expect(section).toContain("*bold and _italic_*");
+  expect(section).toContain("•   one");
+  expect(section).toContain("•   <https://example.com|two>");
+});
+
 test("the complete Slack section stays within 3000 characters", () => {
   const formatted = formatSlackEcho(
     message({

@@ -1,3 +1,4 @@
+import { slackifyMarkdown } from "slackify-markdown";
 import { canonicalProject, displayName } from "./paths.ts";
 import type { Registration } from "./registry.ts";
 import { type ClaudeSessionMeta, sessionDisplayName } from "./sessions.ts";
@@ -5,6 +6,8 @@ import type { Message } from "./spool.ts";
 
 const SLACK_SECTION_LIMIT = 3000;
 const LIVE_NAME_LIMIT = 3;
+const SAFE_SLACK_LINK =
+  /^<(?:https?|ftp):\/\/[^<>\s|]+(?:\|[^<>\n]*)?>$|^<mailto:[^<>\s|]+(?:\|[^<>\n]*)?>$/i;
 
 export interface SlackEchoFormat {
   sectionText: string;
@@ -17,6 +20,15 @@ function escapeSlack(text: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function formatMessageMrkdwn(text: string): string {
+  const rendered = slackifyMarkdown(text).replace(/\n$/, "");
+  // Raw HTML can also be valid Slack control syntax. Keep only links emitted
+  // with a protocol Slack can safely render; display every other tag literally.
+  return rendered.replace(/<[^>\n]*>/g, (control) =>
+    SAFE_SLACK_LINK.test(control) ? control : escapeSlack(control),
+  );
 }
 
 function bold(text: string): string {
@@ -155,12 +167,15 @@ export function formatSlackEcho(
   const lines = [`:mailbox: ${formattedRoute.mrkdwn}${slackDate(msg.ts)}`];
   if (msg.replyTo) {
     const re = msg.meta?.replyToFrom
-      ? `${bold(msg.meta.replyToFrom)}: ${msg.meta.replyToPreview ?? ""}`
+      ? `${bold(msg.meta.replyToFrom)}: ${formatMessageMrkdwn(msg.meta.replyToPreview ?? "")}`
       : `message ${msg.replyTo.slice(0, 8)}`;
     lines.push(`↩︎ re ${re}`);
   }
   const prefix = `${lines.join("\n")}\n`;
-  const body = truncateBody(msg.message, SLACK_SECTION_LIMIT - prefix.length);
+  const body = truncateBody(
+    formatMessageMrkdwn(msg.message),
+    SLACK_SECTION_LIMIT - prefix.length,
+  );
   const sectionText = truncateBody(`${prefix}${body}`, SLACK_SECTION_LIMIT);
   return {
     sectionText,
