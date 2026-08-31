@@ -948,7 +948,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           content: [
             {
               type: "text",
-              text: `no live session "${session}" in ${target}. ${tail}`,
+              text: `no live session "${session}" in ${target}. ${tail} A sender name shown on a message from an automation/cli origin is a free-form label, not an address; it resolves only when the sender stamped a session.`,
             },
           ],
         };
@@ -1100,7 +1100,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
                   const origin = m.origin
                     ? ` [${m.origin.kind}/${m.origin.transport}; ${m.origin.authority}]`
                     : " [legacy origin; untrusted]";
-                  return `${m.id} ${m.read ? "read" : "unread"} [${m.ts}] from ${displayName(m.from)}${tag}${origin}${direct}${reply}: ${m.message}`;
+                  // A cli-origin message without a stamped session shows a
+                  // free-form sender label that cannot be replied to; say so
+                  // rather than letting it read as an address.
+                  const labelNote =
+                    m.origin?.transport === "cli" && !m.meta?.sessionId
+                      ? " [label; not a reply address]"
+                      : "";
+                  return `${m.id} ${m.read ? "read" : "unread"} [${m.ts}] from ${displayName(m.from)}${tag}${origin}${labelNote}${direct}${reply}: ${m.message}`;
                 })
                 .join("\n") +
               (marked > 0 ? `\nmarked ${marked} message(s) read` : "")

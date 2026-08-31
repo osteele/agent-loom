@@ -454,3 +454,80 @@ test("check_inbox marks returned messages read unless peek", async () => {
     await client.close();
   }
 });
+
+test("cli-origin senders without a stamped session render as labels, not addresses", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-label-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
+  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  mkdirSync(inboxDirectory, { recursive: true });
+  const cliOrigin = {
+    kind: "automation",
+    transport: "cli",
+    authority: "untrusted",
+  };
+  const messages = [
+    {
+      id: "cli-label",
+      ts: "2026-08-31T12:00:00.000Z",
+      from: "ci-robot",
+      project: canonical,
+      message: "unattributed body",
+      origin: cliOrigin,
+    },
+    {
+      id: "cli-attributed",
+      ts: "2026-08-31T12:01:00.000Z",
+      from: "ci-robot",
+      project: canonical,
+      message: "attributed body",
+      origin: cliOrigin,
+      meta: { sessionId: "sender-session", fromName: "sender-full-name" },
+    },
+  ];
+  writeFileSync(
+    join(inboxDirectory, `${slug}.jsonl`),
+    `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`,
+  );
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "recipient-session",
+      AGENT_SESSION_PID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+    const pulled = await client.callTool({
+      name: "check_inbox",
+      arguments: { peek: true },
+    });
+    const lines = textContent(pulled).split("\n");
+    const unattributed = lines.find((line) => line.startsWith("cli-label "));
+    expect(unattributed).toContain("[automation/cli; untrusted]");
+    expect(unattributed).toContain("[label; not a reply address]");
+    const attributed = lines.find((line) => line.startsWith("cli-attributed "));
+    expect(attributed).toContain("[sender-full-name]");
+    expect(attributed).not.toContain("[label; not a reply address]");
+  } finally {
+    await client.close();
+  }
+});

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectSlug } from "./paths.ts";
 import { processInfo } from "./registry.ts";
+import { sessionNames } from "./sessions.ts";
 
 test("notify --no-slack suppresses only that message's Slack echo", async () => {
   const requests: Record<string, unknown>[] = [];
@@ -896,3 +897,351 @@ test("status trusts the daemon pidfile only when the pid is still the daemon", a
   }
   // Two CLI spawns, each paying module load plus a health probe.
 }, 30_000);
+
+/** A seeded project inbox: two unread messages, plus a live registration for
+ * session "cli-reader" borrowed from this test process (a registration is only
+ * live if its pid and start time still match, so an invented pid would not do). */
+function seedInbox(
+  root: string,
+  hostPid: number = process.pid,
+): {
+  home: string;
+  project: string;
+  slug: string;
+} {
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const state = join(home, ".claude", "agent-mail");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(join(state, "inbox"), { recursive: true });
+  mkdirSync(join(state, "receipts"), { recursive: true });
+  mkdirSync(join(state, "registry"), { recursive: true });
+  const canonical = realpathSync(project);
+  const slug = projectSlug(canonical);
+  const messages = [
+    {
+      id: "note-a",
+      ts: "2026-08-31T12:00:00.000Z",
+      from: "peer",
+      project: canonical,
+      message: "broadcast body",
+    },
+    {
+      id: "note-b",
+      ts: "2026-08-31T12:01:00.000Z",
+      from: "peer",
+      project: canonical,
+      message: "direct body",
+    },
+  ];
+  writeFileSync(
+    join(state, "inbox", `${slug}.jsonl`),
+    `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`,
+  );
+  const procStart = processInfo([process.pid]).get(process.pid)?.start;
+  writeFileSync(
+    join(state, "registry", `${slug}-${process.pid}.json`),
+    JSON.stringify({
+      cwd: canonical,
+      pid: process.pid,
+      // This test process spawns the CLI, so it stands in for the host agent:
+      // the child's ancestor chain contains it, which is what makes the
+      // registration's session id adoptable.
+      parentPid: hostPid,
+      ...(procStart ? { procStart } : {}),
+      sessionId: "cli-reader",
+      started: new Date().toISOString(),
+    }),
+  );
+  return { home, project, slug };
+}
+
+const INBOX_READER_ENV = {
+  CLAUDE_CODE_SESSION_ID: "cli-reader",
+  CODEX_THREAD_ID: "",
+  AGENT_SESSION_ID: "",
+};
+
+test("inbox read with a session id records the pull and marks messages read", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-read-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    const { home, project, slug } = seedInbox(root);
+    const state = join(home, ".claude", "agent-mail");
+    const child = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await child.exited).toBe(0);
+    const out = await new Response(child.stdout).text();
+    expect(out).toContain("note-a unread");
+    expect(out).toContain("note-b unread");
+    expect(out).toContain("marked 2 message(s) read");
+
+    const receipts = readFileSync(
+      join(state, "receipts", `${slug}.jsonl`),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, string>);
+    expect(receipts.filter((r) => r.status === "pushed")).toHaveLength(2);
+    expect(receipts.find((r) => r.status === "pushed")?.detail).toBe(
+      "cli inbox",
+    );
+    expect(receipts.filter((r) => r.status === "read")).toHaveLength(2);
+    expect(receipts.every((r) => r.sessionId === "cli-reader")).toBe(true);
+
+    // The pull was also an explicit inbox check for the live registration.
+    const registration = JSON.parse(
+      readFileSync(
+        join(state, "registry", `${slug}-${process.pid}.json`),
+        "utf8",
+      ),
+    ) as { lastInboxPoll?: string };
+    expect(registration.lastInboxPoll).toBeDefined();
+
+    // A later pull sees them read; nothing is left for an --unread pass.
+    const again = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project, "--unread"],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await again.exited).toBe(0);
+    expect(await new Response(again.stdout).text()).toBe("inbox empty\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("inbox --peek leaves messages unread and appends no receipt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-peek-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    const { home, project, slug } = seedInbox(root);
+    const state = join(home, ".claude", "agent-mail");
+    const child = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project, "--peek"],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await child.exited).toBe(0);
+    const out = await new Response(child.stdout).text();
+    expect(out).toContain("note-a unread");
+    expect(out).toContain("note-b unread");
+    expect(out).not.toContain("marked");
+    expect(existsSync(join(state, "receipts", `${slug}.jsonl`))).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("inbox read with no session id is unattributed and leaves the spool alone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-anon-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  const {
+    CLAUDE_CODE_SESSION_ID: _claude,
+    CODEX_THREAD_ID: _codex,
+    AGENT_SESSION_ID: _agent,
+    ...anonymous
+  } = process.env;
+  try {
+    const { home, project, slug } = seedInbox(root);
+    const state = join(home, ".claude", "agent-mail");
+    const child = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project],
+      {
+        env: { ...anonymous, HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await child.exited).toBe(0);
+    const out = await new Response(child.stdout).text();
+    expect(out).toContain("note-a unread");
+    expect(out).toContain("note-b unread");
+    expect(out).not.toContain("marked");
+    expect(await new Response(child.stderr).text()).toContain(
+      "no verified agent session for this process",
+    );
+    expect(existsSync(join(state, "receipts", `${slug}.jsonl`))).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("notify stamps a live sender session so its label resolves as an address", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-sender-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const registry = join(home, ".claude", "agent-mail", "registry");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(registry, { recursive: true });
+  const self = processInfo([process.pid]).get(process.pid);
+  const canonical = realpathSync(project);
+  writeFileSync(
+    join(registry, `${projectSlug(canonical)}-${process.pid}.json`),
+    JSON.stringify({
+      cwd: canonical,
+      pid: process.pid,
+      parentPid: process.pid,
+      ...(self ? { procStart: self.start } : {}),
+      sessionId: "submitter-session",
+      started: new Date().toISOString(),
+    }),
+  );
+  const names = sessionNames("submitter-session", undefined, canonical);
+  const senderEnv = {
+    HOME: home,
+    CLAUDE_CODE_SESSION_ID: "",
+    CODEX_THREAD_ID: "submitter-session",
+    AGENT_SESSION_ID: "",
+  };
+
+  try {
+    const stamped = await notifyRequest(
+      ["--project", project, "--message", "job done"],
+      senderEnv,
+    );
+    expect(stamped.exitCode).toBe(0);
+    expect(stamped.body?.meta).toEqual({
+      sessionId: "submitter-session",
+      fromName: names.fullName,
+    });
+    // No --from passed: the display name replaces the bare "cli" label.
+    expect(stamped.body?.from).toBe(names.displayName);
+
+    // An explicit --from still wins for the free-form label.
+    const labeled = await notifyRequest(
+      ["--project", project, "--message", "job done", "--from", "ops-robot"],
+      senderEnv,
+    );
+    expect(labeled.exitCode).toBe(0);
+    expect(labeled.body?.from).toBe("ops-robot");
+    expect(labeled.body?.meta).toEqual({
+      sessionId: "submitter-session",
+      fromName: names.fullName,
+    });
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
+test("notify without a resolving sender stamps no identity and keeps the label", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-anon-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(project, { recursive: true });
+  const {
+    CLAUDE_CODE_SESSION_ID: _claude,
+    CODEX_THREAD_ID: _codex,
+    AGENT_SESSION_ID: _agent,
+    ...anonymous
+  } = process.env;
+  // A session id in the environment is not enough: without a live registration
+  // for it, the id names no one, so nothing may be stamped from it.
+  const ghostEnv = { ...anonymous, CLAUDE_CODE_SESSION_ID: "ghost-session" };
+  try {
+    const ghost = await notifyRequest(
+      ["--project", project, "--message", "job done"],
+      { ...ghostEnv, HOME: home },
+    );
+    expect(ghost.exitCode).toBe(0);
+    expect(ghost.body?.meta).toBeUndefined();
+    expect(ghost.body?.from).toBe("cli");
+
+    const unlabeled = await notifyRequest(
+      ["--project", project, "--message", "job done"],
+      { ...anonymous, HOME: home },
+    );
+    expect(unlabeled.exitCode).toBe(0);
+    expect(unlabeled.body?.meta).toBeUndefined();
+    expect(unlabeled.body?.from).toBe("cli");
+
+    const labeled = await notifyRequest(
+      ["--project", project, "--message", "job done", "--from", "ops-robot"],
+      { ...ghostEnv, HOME: home },
+    );
+    expect(labeled.exitCode).toBe(0);
+    expect(labeled.body?.meta).toBeUndefined();
+    expect(labeled.body?.from).toBe("ops-robot");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an inherited session id is not adopted without a host-process match", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-inherited-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    // A live registration for "cli-reader" whose host agent is not an ancestor
+    // of the CLI child — the shape a script or daemon launched from an agent
+    // shell has, carrying that shell's session id without belonging to it.
+    const { home, project, slug } = seedInbox(root, 999_999);
+    const state = join(home, ".claude", "agent-mail");
+    const child = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await child.exited).toBe(0);
+    const out = await new Response(child.stdout).text();
+    expect(out).toContain("note-a unread");
+    expect(out).not.toContain("marked");
+    expect(await new Response(child.stderr).text()).toContain(
+      "no verified agent session for this process",
+    );
+    expect(existsSync(join(state, "receipts", `${slug}.jsonl`))).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a second inbox read does not re-stamp receipts it already settled", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-twice-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  const read = async (home: string, project: string) => {
+    const child = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await child.exited).toBe(0);
+    return await new Response(child.stdout).text();
+  };
+  try {
+    const { home, project, slug } = seedInbox(root);
+    const receiptsPath = join(
+      home,
+      ".claude",
+      "agent-mail",
+      "receipts",
+      `${slug}.jsonl`,
+    );
+    expect(await read(home, project)).toContain("marked 2 message(s) read");
+    const afterFirst = readFileSync(receiptsPath, "utf8");
+
+    // Receipts are append-only, so a repeat read must add nothing rather than
+    // stack a second delivery history onto the same messages.
+    expect(await read(home, project)).not.toContain("marked");
+    expect(readFileSync(receiptsPath, "utf8")).toBe(afterFirst);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

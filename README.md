@@ -189,6 +189,19 @@ agent-mail notify --project "$PWD" --from cli --message "agent-mail is ready"
 agent-mail inbox --project "$PWD"
 ```
 
+`inbox` acknowledges what it returns, the way the `check_inbox` tool does: it
+records a delivery receipt per message and marks them read. Pass `--peek` to
+read without acknowledging. Both depend on agent-mail being able to tell which
+session you are — it adopts a session id from the environment only when that
+session's own agent process is an ancestor of the CLI process, so a script or
+daemon cannot mark a peer's mail read by inheriting its id. When it cannot tell,
+it says so on stderr and leaves the mail unread.
+
+Sending has the mirror rule: `notify` stamps a resolvable sender identity when
+it can prove one, and otherwise sends with `--from` as a free-form label. A
+recipient sees such a label tagged `[label; not a reply address]`, because
+replying to it by name will not resolve.
+
 ### Unread-mail reminders for pull-only clients
 
 Every agent-mail MCP server reports an existing unread backlog in its initial

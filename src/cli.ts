@@ -3,7 +3,7 @@
  *
  * Messaging:
  *   agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id>] [--no-slack]
- *   agent-mail inbox [--project <dir>] [--limit N] [--unread]
+ *   agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek]
  *   agent-mail mark-read [--project <dir>] (--id <message-id> | --all)
  *   agent-mail listeners [--project <dir>] [--json] [--no-sync]
  *   agent-mail mute|unmute (--session <name-or-id> | --project <dir>)
@@ -77,7 +77,7 @@ import {
 } from "./coordination.ts";
 import { openBrowser, serveDashboard } from "./dashboard.ts";
 import { buildReadOnlyState } from "./dashboardData.ts";
-import { classifyFallback, withAttemptKey } from "./delivery.ts";
+import { classifyFallback, settled, withAttemptKey } from "./delivery.ts";
 import {
   KIMI_REMIND_BEGIN_MARKER,
   addNativeAuditHook,
@@ -121,9 +121,11 @@ import {
   type Registration,
   capabilityLabels,
   listLive,
+  listLiveInProject,
   processInfo,
   setInboundPolicy,
   setMuted,
+  touchInboxPoll,
 } from "./registry.ts";
 import {
   decideReminder,
@@ -148,6 +150,7 @@ import {
 import {
   type AdmissionResult,
   appendMessageGuarded,
+  appendReceipt,
   knownProjects,
   markAllMessagesRead,
   markMessagesRead,
@@ -530,6 +533,59 @@ function resolveProjectArg(arg: string): string {
   process.exit(1);
 }
 
+/** Live registrations in one project, each with the addressable names its
+ * session id resolves to. The one place that combines the live listing with
+ * `sessionNames`, so every sender/recipient lookup sees the same names. */
+type NamedSession = {
+  sessionId: string;
+  fullName: string;
+  displayName: string;
+  pid: number;
+  parentPid?: number;
+};
+
+function liveNamedSessions(project: string): NamedSession[] {
+  const meta = claudeSessions();
+  return listLiveInProject(project)
+    .filter((r) => r.sessionId)
+    .map((r) => {
+      const sid = r.sessionId as string;
+      const names = sessionNames(sid, meta.get(sid), project);
+      return {
+        sessionId: sid,
+        fullName: names.fullName,
+        displayName: names.displayName,
+        pid: r.pid,
+        ...(r.parentPid !== undefined ? { parentPid: r.parentPid } : {}),
+      };
+    });
+}
+
+/** The calling agent's session, when this process provably runs inside it.
+ *
+ * A session id in the environment is inherited, not proved: a script or daemon
+ * launched from an agent shell carries that shell's id unchanged. Adopting it
+ * would attribute this process's reads and sends to a live peer that performed
+ * neither — marking its mail read, or putting its address on a message it never
+ * sent, so replies route confidently to the wrong agent. That is a specific
+ * wrong answer, which ADR 0003 already judged worse than having none.
+ *
+ * The channel server is a sibling of this process under the host agent, not an
+ * ancestor of it, so the registration's `parentPid` is the pid that must appear
+ * in our own ancestor chain. A registration without one cannot be proved and is
+ * therefore not adopted. */
+function callingSession(project: string): NamedSession | undefined {
+  const sessionId = sessionIdFromEnv();
+  if (!sessionId) return undefined;
+  const candidate = liveNamedSessions(project).find(
+    (s) => s.sessionId === sessionId,
+  );
+  if (candidate?.parentPid === undefined) return undefined;
+  return hostAncestorPids().includes(candidate.parentPid)
+    ? candidate
+    : undefined;
+}
+
 /** Resolve `notify --session` to a single live session, or explain why not.
  *
  * Unlike send_mail, an unresolvable name is not an error here. The caller is an
@@ -543,18 +599,7 @@ function resolveNotifySession(
 ):
   | { kind: "session"; sessionId: string; label: string }
   | { kind: "broadcast"; reason: string } {
-  const meta = claudeSessions();
-  const candidates = listLive()
-    .filter((r) => r.sessionId && canonicalProject(r.cwd) === project)
-    .map((r) => {
-      const sid = r.sessionId as string;
-      const names = sessionNames(sid, meta.get(sid), project);
-      return {
-        sessionId: sid,
-        fullName: names.fullName,
-        displayName: names.displayName,
-      };
-    });
+  const candidates = liveNamedSessions(project);
   const resolved = resolveSessionQuery(candidates, session);
   if (resolved.kind === "unique") {
     return {
@@ -567,7 +612,7 @@ function resolveNotifySession(
     kind: "broadcast",
     reason:
       resolved.kind === "none"
-        ? `no live session "${session}" in ${project}`
+        ? `no live session "${session}" in ${project}. A sender name shown on a message from an automation/cli origin is a free-form label, not an address; it resolves only when the sender stamped a session.`
         : `"${session}" matches ${resolved.matches.length} live sessions`,
   };
 }
@@ -600,7 +645,16 @@ async function cmdNotify(
     console.error("--ttl must be a non-negative number of seconds");
     process.exit(1);
   }
-  const from = typeof flags.from === "string" ? flags.from : "cli";
+  // The sender is addressable only when its own registration is live and this
+  // process runs inside it: stamping a dead, invented, or inherited id would
+  // put a name on the message that either resolves to nobody or resolves to the
+  // wrong agent. With one, `fromName` carries the full name (the address form)
+  // and an unpassed --from defaults to the display name.
+  const sender = callingSession(resolvedProject);
+  const from =
+    typeof flags.from === "string"
+      ? flags.from
+      : (sender?.displayName ?? "cli");
   const suppressSlack = flags["no-slack"] === true;
   // An addressed message is hidden from every other session in the project
   // (spool.ts `messageVisibleToSession`), so resolving here is the whole of
@@ -614,7 +668,13 @@ async function cmdNotify(
       console.error(`broadcasting to the project: ${resolved.reason}`);
     }
   }
-  const meta = toSession ? { toSession } : undefined;
+  const meta: Record<string, string> = {};
+  if (toSession) meta.toSession = toSession;
+  if (sender) {
+    meta.sessionId = sender.sessionId;
+    meta.fromName = sender.fullName;
+  }
+  const hasMeta = Object.keys(meta).length > 0;
   // One message, used for both the daemon POST and the fallback append. The
   // attempt key is what lets the fallback recognise a message the daemon had
   // already stored before its reply went missing.
@@ -628,7 +688,7 @@ async function cmdNotify(
       transport: "cli",
       authority: "untrusted",
     },
-    ...(meta ? { meta } : {}),
+    ...(hasMeta ? { meta } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(replyTo ? { replyTo } : {}),
     ...(suppressSlack ? { slackEcho: false } : {}),
@@ -725,6 +785,15 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
       ? resolveProjectArg(flags.project)
       : canonicalProject(process.cwd());
   const limit = typeof flags.limit === "string" ? Number(flags.limit) : 20;
+  const peek = flags.peek === true;
+  // A CLI inbox read is an explicit inbox check, so it stamps the same signal
+  // the MCP check_inbox tool does; without it a CLI-only session reads as idle
+  // while it works. Attribution is what needs proving, not the read itself.
+  const self = callingSession(project);
+  const sessionId = self?.sessionId;
+  if (self) {
+    touchInboxPoll(project, self.pid);
+  }
   const messages = readMessages(project, {
     limit,
     unreadOnly: flags.unread === true,
@@ -738,6 +807,38 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
     console.log(
       `${m.id} ${m.read ? "read" : "unread"} [${m.ts}] from ${displayName(m.from)}${reply}: ${m.message}`,
     );
+  }
+  if (!sessionId) {
+    console.error(
+      "note: no verified agent session for this process; this read is unattributed and leaves the messages spooled",
+    );
+    return;
+  }
+  // The returned messages entered the caller's context with this output — the
+  // one delivery this read can verify — so the pull records itself the same way
+  // the check_inbox tool does, unless the caller peeks. See
+  // docs/decisions/0013. Receipts are append-only: settled ids are never
+  // re-stamped.
+  if (!peek) {
+    const receipts = readReceipts(project);
+    for (const m of messages) {
+      if (settled(receipts, m.id, sessionId)) continue;
+      appendReceipt(project, {
+        messageId: m.id,
+        ts: new Date().toISOString(),
+        status: "pushed",
+        sessionId,
+        detail: "cli inbox",
+      });
+    }
+    const marked = markMessagesRead(
+      project,
+      messages.filter((m) => !m.read).map((m) => m.id),
+      sessionId,
+    );
+    if (marked > 0) {
+      console.log(`marked ${marked} message(s) read`);
+    }
   }
 }
 
@@ -2438,8 +2539,12 @@ Messaging:
                         Send a message to a project's inbox. --session
                         addresses one live session instead of broadcasting;
                         an unknown or ambiguous name falls back to a broadcast.
-  inbox [--project <dir>] [--limit N] [--unread]
-                        Read a project's spool (defaults to cwd)
+  inbox [--project <dir>] [--limit N] [--unread] [--peek]
+                        Read a project's spool (defaults to cwd). A read with a
+                        session id in the environment records a pushed receipt
+                        per message and marks them read; --peek leaves them
+                        unread, and a read with no session id stays
+                        unattributed.
   mark-read [--project <dir>] (--id <message-id> | --all)
                         Mark messages read
   receipts [--project <dir>] [--id <message-id>] [--limit N]
