@@ -35,22 +35,46 @@ discovery can therefore continue to import the existing Codex and
 agent-neutral instructions, skills, and MCP configuration instead of shadowing
 them with a second configuration tree.
 
-The status line keeps `mail <name>` after the daemon accepts the connection and
-adds the session's unread-message count, unprocessed terminal Weft-job count,
-and nearest ancestor jj bookmark when the project is a jj workspace:
+The extension replaces OMP's native status row with a responsive two-row widget.
+To remove the native duplicate, configure an empty custom status line:
 
-```
-mail Quiet Lantern · 2 unread · 3 unprocessed · jj main
+```yaml
+statusLine:
+  preset: custom
+  separator: none
+  showHookStatus: false
+  leftSegments: []
+  rightSegments: []
 ```
 
-The human-facing display name comes from the same registered, routable
-agent-mail address used for delivery; until that status snapshot resolves, the
-extension falls back to the full address supplied by the push connection.
-Unknown counts render as `?` rather than as zero, and a failed jj query is
-independent of mail status. Status refreshes use the documented
-`agent-mail status-line --fields` contract and `jj log --ignore-working-copy`,
-so the extension does not parse either tool's private state or snapshot the jj
-working copy merely to render a footer.
+The first widget row carries the former native status information: model,
+reasoning effort, project, revision, and a context-window bar. The second row
+carries the routable agent-mail display name, unread messages (`✉︎`), pending
+terminal Weft jobs (`⚙︎`), peer count, active Python environment, JavaScript
+runtime, common listening development ports, and weekly subscription use. Both
+rows use `·` separators and independently drop lower-priority fields to fit a
+narrow pane. When both progress bars are available, they are the final fields
+and align vertically.
+
+In a jj workspace the revision comes from a tagged `jj log` template and Git is
+not queried or shown. A dirty working copy adds `*`; `ⅉ` identifies Jujutsu and
+`⎇` identifies Git, matching gitsync's repository symbols. Outside jj, Git state
+comes from porcelain v2. Revision colors distinguish clean and dirty state.
+
+For an OAuth subscription, the weekly meter uses OMP's public normalized
+`authStorage.fetchUsageReports()` API and renders a bar plus percent used. An
+ambiguous or unavailable provider/account join renders `wk ?`. When OMP reports
+that the current model uses an API key, config override, environment key, or
+other non-OAuth credential, the same high-priority field turns red and shows
+session cost, hourly run rate, and token count instead.
+
+The human-facing mail name comes from the same registered, routable address
+used for delivery; until that status snapshot resolves, the extension falls
+back to the full address supplied by the push connection. Unknown counts render
+as `?` rather than zero. Status refreshes consume the documented
+`agent-mail status-line --fields`, Git porcelain v2, jj template output, and OMP
+extension APIs instead of reading another tool's private state.
+
 Incoming messages use OMP custom messages with agent attribution, carry an
 explicit external/untrusted envelope, and are queued after an active turn or
 start a turn when the session is idle.
@@ -80,5 +104,5 @@ Only loopback HTTP URLs are accepted.
 - A lost acknowledgement can produce a duplicate after reconnect; the visible
   message ID identifies it.
 - Mute and inbound `accept`, `hold`, and `refuse` policies apply normally.
-- A broken daemon connection is visible as `mail <name> (offline)` in OMP's
-  status line and reconnects with bounded backoff.
+- A broken daemon connection is visible as `<name> (offline)` in the widget and
+  reconnects with bounded backoff.
