@@ -78,6 +78,7 @@ interface SessionPushConnection {
   controller: ReadableStreamDefaultController<Uint8Array>;
   receiptTail: ReceiptTail;
   pendingByMessage: Map<string, string>;
+  lastWriteMs: number;
   closed: boolean;
 }
 
@@ -113,6 +114,7 @@ const OH_MY_PI_CLIENT: SessionPushClient = {
 };
 
 const encoder = new TextEncoder();
+const KEEP_ALIVE_INTERVAL_MS = 5_000;
 
 function connectionKey(project: string, sessionId: string): string {
   return `${project}\u0000${sessionId}`;
@@ -138,15 +140,18 @@ export class SessionPushBridge {
   readonly #resumeMessages = new Map<string, (Message & { id: string })[]>();
   readonly #processVerifier: SessionPushProcessVerifier;
   readonly #client: SessionPushClient;
+  readonly #now: () => number;
   #polling: Promise<void> | undefined;
   #pollAgain = false;
 
   constructor(
     client: SessionPushClient,
     processVerifier: SessionPushProcessVerifier = verifiedProcessStart,
+    now: () => number = Date.now,
   ) {
     this.#client = client;
     this.#processVerifier = processVerifier;
+    this.#now = now;
   }
 
   connect(input: SessionPushConnectInput, signal?: AbortSignal): Response {
@@ -208,6 +213,7 @@ export class SessionPushBridge {
       controller: streamController,
       receiptTail: emptyReceiptTail(),
       pendingByMessage: new Map(),
+      lastWriteMs: this.#now(),
       closed: false,
     };
     state.connection = connection;
@@ -289,7 +295,9 @@ export class SessionPushBridge {
 
   async #pollAll(): Promise<void> {
     for (const connection of [...this.#connections.values()]) {
-      if (!connection.closed) await this.#pollConnection(connection);
+      if (connection.closed) continue;
+      await this.#pollConnection(connection);
+      this.#keepAlive(connection);
     }
   }
 
@@ -368,7 +376,7 @@ export class SessionPushBridge {
         true,
         byId,
         receipts,
-        Date.now(),
+        this.#now(),
       )) {
         if (action.type === "push") {
           const message = byId.get(action.messageId);
@@ -408,7 +416,7 @@ export class SessionPushBridge {
         true,
         connection.heldMessageLimit,
         receipts,
-        Date.now(),
+        this.#now(),
       );
       if (overflowHeldId) {
         this.#recordReceipt(
@@ -437,6 +445,27 @@ export class SessionPushBridge {
       connection.controller.enqueue(
         encoder.encode(`${JSON.stringify(event)}\n`),
       );
+      connection.lastWriteMs = this.#now();
+    } catch {
+      this.#disconnect(connection);
+    }
+  }
+
+  /** Keep Bun's HTTP idle timeout from terminating a quiet push stream.
+   *
+   * Blank NDJSON lines carry no protocol event, and clients are required to
+   * ignore them. This keeps connection liveness separate from delivery state:
+   * a heartbeat creates neither a message nor a receipt. */
+  #keepAlive(connection: SessionPushConnection): void {
+    if (
+      connection.closed ||
+      this.#now() - connection.lastWriteMs < KEEP_ALIVE_INTERVAL_MS
+    ) {
+      return;
+    }
+    try {
+      connection.controller.enqueue(encoder.encode("\n"));
+      connection.lastWriteMs = this.#now();
     } catch {
       this.#disconnect(connection);
     }
@@ -472,7 +501,8 @@ export class SessionPushBridge {
 export class OhMyPiPushBridge extends SessionPushBridge {
   constructor(
     processVerifier: SessionPushProcessVerifier = verifiedProcessStart,
+    now: () => number = Date.now,
   ) {
-    super(OH_MY_PI_CLIENT, processVerifier);
+    super(OH_MY_PI_CLIENT, processVerifier, now);
   }
 }

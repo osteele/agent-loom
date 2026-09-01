@@ -32,6 +32,7 @@ async function nextEvent(
     if (newline >= 0) {
       const line = buffered.text.slice(0, newline);
       buffered.text = buffered.text.slice(newline + 1);
+      if (line === "") continue;
       return JSON.parse(line) as SessionPushEvent;
     }
     const result = await reader.read();
@@ -43,7 +44,11 @@ async function nextEvent(
 
 test("Oh My Pi push uses its exact session without another routing id", async () => {
   const project = projectDirectory();
-  const bridge = new OhMyPiPushBridge(() => "test process start");
+  let now = Date.parse("2026-09-01T13:00:00.000Z");
+  const bridge = new OhMyPiPushBridge(
+    () => "test process start",
+    () => now,
+  );
   const response = bridge.connect({
     project,
     sessionId: "omp-session",
@@ -65,6 +70,11 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
     sessionId: "omp-session",
     address: expect.any(String),
   });
+
+  now += 5_000;
+  await bridge.poll();
+  const heartbeat = await reader.read();
+  expect(new TextDecoder().decode(heartbeat.value)).toBe("\n");
 
   appendMessage({
     id: "omp-mail-1",

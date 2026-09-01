@@ -15,7 +15,7 @@ omp --version
 If mise reports GitHub authentication failure because a stale `GITHUB_TOKEN`
 overrides the public release download, retry the first command as
 `env -u GITHUB_TOKEN mise use -g github:can1357/oh-my-pi`. This does not change
-OMP provider authentication. The integration is tested with OMP 18.0.11.
+OMP provider authentication. The integration is tested with OMP 18.1.1.
 
 Link the bundled extension at user scope:
 
@@ -35,8 +35,22 @@ discovery can therefore continue to import the existing Codex and
 agent-neutral instructions, skills, and MCP configuration instead of shadowing
 them with a second configuration tree.
 
-The status line shows `mail <address>` after the daemon accepts the connection.
-That address is agent-mail's routable session name, not OMP's display title.
+The status line keeps `mail <name>` after the daemon accepts the connection and
+adds the session's unread-message count, unprocessed terminal Weft-job count,
+and nearest ancestor jj bookmark when the project is a jj workspace:
+
+```
+mail Quiet Lantern · 2 unread · 3 unprocessed · jj main
+```
+
+The human-facing display name comes from the same registered, routable
+agent-mail address used for delivery; until that status snapshot resolves, the
+extension falls back to the full address supplied by the push connection.
+Unknown counts render as `?` rather than as zero, and a failed jj query is
+independent of mail status. Status refreshes use the documented
+`agent-mail status-line --fields` contract and `jj log --ignore-working-copy`,
+so the extension does not parse either tool's private state or snapshot the jj
+working copy merely to render a footer.
 Incoming messages use OMP custom messages with agent attribution, carry an
 explicit external/untrusted envelope, and are queued after an active turn or
 start a turn when the session is idle.
@@ -66,5 +80,5 @@ Only loopback HTTP URLs are accepted.
 - A lost acknowledgement can produce a duplicate after reconnect; the visible
   message ID identifies it.
 - Mute and inbound `accept`, `hold`, and `refuse` policies apply normally.
-- A broken daemon connection is visible as `mail offline · retrying` in OMP's
+- A broken daemon connection is visible as `mail <name> (offline)` in OMP's
   status line and reconnects with bounded backoff.

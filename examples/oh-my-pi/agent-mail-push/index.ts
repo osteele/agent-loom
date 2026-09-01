@@ -1,11 +1,25 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@oh-my-pi/pi-coding-agent";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 const PROTOCOL_VERSION = 1;
 const STATUS_KEY = "agent-mail";
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:8377";
+const STATUS_REFRESH_MS = 10_000;
+
+interface MailStatus {
+  name: string;
+  unread: number;
+  unprocessed: number | undefined;
+}
+
+interface StatusState {
+  address?: string;
+  mail?: MailStatus;
+  jj?: string;
+  jjFailed: boolean;
+  push: "connecting" | "online" | "offline" | "failed";
+}
 
 interface ConnectedEvent {
   version: typeof PROTOCOL_VERSION;
@@ -32,9 +46,7 @@ interface MailEvent {
 type PushEvent = ConnectedEvent | MailEvent;
 
 function daemonUrl(): URL {
-  const url = new URL(
-    process.env.AGENT_MAIL_DAEMON_URL ?? DEFAULT_DAEMON_URL,
-  );
+  const url = new URL(process.env.AGENT_MAIL_DAEMON_URL ?? DEFAULT_DAEMON_URL);
   if (
     url.protocol !== "http:" ||
     (url.hostname !== "127.0.0.1" && url.hostname !== "localhost")
@@ -50,6 +62,134 @@ function renderedMail(event: MailEvent): string {
     "",
     event.message,
   ].join("\n");
+}
+
+/** Parse agent-mail's documented append-only status-line field contract. */
+export function parseMailStatus(row: string): MailStatus | undefined {
+  const line = row.endsWith("\n") ? row.slice(0, -1) : row;
+  const fields = (line.endsWith("\r") ? line.slice(0, -1) : line).split("\t");
+  if (fields.length < 5 || fields[0] === "") return undefined;
+  const unread = Number(fields[2]);
+  const unprocessed = fields[4] === "" ? undefined : Number(fields[4]);
+  if (
+    !Number.isSafeInteger(unread) ||
+    unread < 0 ||
+    (unprocessed !== undefined &&
+      (!Number.isSafeInteger(unprocessed) || unprocessed < 0))
+  ) {
+    return undefined;
+  }
+  return { name: fields[0], unread, unprocessed };
+}
+
+function findJjRoot(cwd: string): string | undefined {
+  let candidate = cwd;
+  while (true) {
+    if (existsSync(join(candidate, ".jj"))) return candidate;
+    const parent = dirname(candidate);
+    if (parent === candidate) return undefined;
+    candidate = parent;
+  }
+}
+
+function renderStatus(state: StatusState): string {
+  const fields: string[] = [];
+  const identity = state.mail?.name ?? state.address;
+  if (state.push === "online") {
+    fields.push(identity ? `mail ${identity}` : "mail connected");
+  } else if (state.push === "connecting") {
+    fields.push("mail connecting");
+  } else if (state.push === "offline") {
+    fields.push(identity ? `mail ${identity} (offline)` : "mail offline");
+  } else {
+    fields.push("mail failed");
+  }
+
+  if (state.mail) {
+    fields.push(`${state.mail.unread} unread`);
+    fields.push(
+      state.mail.unprocessed === undefined
+        ? "unprocessed ?"
+        : `${state.mail.unprocessed} unprocessed`,
+    );
+  } else if (identity) {
+    fields.push("unread ?", "unprocessed ?");
+  }
+  if (state.jj) fields.push(`jj ${state.jj}`);
+  else if (state.jjFailed) fields.push("jj ?");
+  return fields.join(" · ");
+}
+
+async function refreshStatus(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  state: StatusState,
+): Promise<void> {
+  const sessionId = ctx.sessionManager.getSessionId();
+  const mailCommand = process.env.AGENT_MAIL_BIN || "agent-mail";
+  const mailPromise = pi
+    .exec(
+      mailCommand,
+      ["status-line", "--fields", "--project", ctx.cwd, "--session", sessionId],
+      { timeout: 5_000 },
+    )
+    .then((result) => parseMailStatus(result.stdout));
+
+  const jjRoot = findJjRoot(ctx.cwd);
+  const jjPromise = jjRoot
+    ? pi
+        .exec(
+          "jj",
+          [
+            "log",
+            "--ignore-working-copy",
+            "--no-graph",
+            "-r",
+            "heads(::@ & bookmarks())",
+            "-T",
+            'bookmarks ++ "\\n"',
+          ],
+          { cwd: jjRoot, timeout: 5_000 },
+        )
+        .then((result) =>
+          result.code === 0
+            ? result.stdout
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .join(",") || "@"
+            : undefined,
+        )
+    : Promise.resolve(null);
+
+  const [mailResult, jjResult] = await Promise.allSettled([
+    mailPromise,
+    jjPromise,
+  ]);
+  state.mail = mailResult.status === "fulfilled" ? mailResult.value : undefined;
+  if (jjResult.status === "fulfilled" && jjResult.value === null) {
+    state.jj = undefined;
+    state.jjFailed = false;
+  } else if (jjResult.status === "fulfilled" && jjResult.value !== undefined) {
+    state.jj = jjResult.value;
+    state.jjFailed = false;
+  } else {
+    state.jj = undefined;
+    state.jjFailed = true;
+  }
+  ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
+}
+
+async function refreshStatusLoop(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  state: StatusState,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    await refreshStatus(pi, ctx, state);
+    await waitForRetry(ctx, signal, STATUS_REFRESH_MS);
+  }
 }
 
 function isPushEvent(value: unknown): value is PushEvent {
@@ -96,6 +236,7 @@ async function waitForRetry(
 async function consumeStream(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
+  state: StatusState,
   signal: AbortSignal,
 ): Promise<void> {
   const baseUrl = daemonUrl();
@@ -138,7 +279,9 @@ async function consumeStream(
         );
       }
       if (value.type === "connected") {
-        ctx.ui.setStatus(STATUS_KEY, `mail ${value.address}`);
+        state.address = value.address;
+        state.push = "online";
+        ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
         continue;
       }
       pi.sendMessage(
@@ -165,16 +308,28 @@ export default function agentMailExtension(pi: ExtensionAPI): void {
     controller?.abort();
     controller = new AbortController();
     const signal = controller.signal;
+    const state: StatusState = {
+      jjFailed: false,
+      push: "connecting",
+    };
+    ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
+    void refreshStatusLoop(pi, ctx, state, signal).catch((error) => {
+      if (!signal.aborted) {
+        pi.logger.warn(`Agent Mail status refresh stopped: ${String(error)}`);
+      }
+    });
     void (async () => {
       let retryDelay = 1_000;
       while (!signal.aborted) {
         try {
-          ctx.ui.setStatus(STATUS_KEY, "mail connecting");
-          await consumeStream(pi, ctx, signal);
+          state.push = "connecting";
+          ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
+          await consumeStream(pi, ctx, state, signal);
           retryDelay = 1_000;
         } catch (error) {
           if (signal.aborted) return;
-          ctx.ui.setStatus(STATUS_KEY, "mail offline · retrying");
+          state.push = "offline";
+          ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
           pi.logger.warn(`Agent Mail Push: ${String(error)}`);
         }
         await waitForRetry(ctx, signal, retryDelay);
@@ -182,7 +337,8 @@ export default function agentMailExtension(pi: ExtensionAPI): void {
       }
     })().catch((error) => {
       if (signal.aborted) return;
-      ctx.ui.setStatus(STATUS_KEY, "mail failed");
+      state.push = "failed";
+      ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
       pi.logger.error(`Agent Mail Push stopped: ${String(error)}`);
     });
   };

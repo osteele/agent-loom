@@ -104,7 +104,7 @@ and [the third-party notice](THIRD_PARTY_NOTICES.md).
 | Local CLI | Shell automation, status commands, daemon management, and dashboards | `npm install -g github:osteele/agent-mail` |
 | Daemon | Slack echo, fast presence status, automatic dead-session cleanup, later-arrival reminder data, and a persistent dashboard | `agent-mail install` on macOS; `agent-mail start` on Linux |
 | Claude Code channel | Automatic message push into a running Claude session | Add and configure the plugin below |
-| Oh My Pi extension | Automatic exact-session push plus an agent-mail address in OMP's status line | Link the bundled extension; see [Oh My Pi](docs/oh-my-pi.md) |
+| Oh My Pi extension | Automatic exact-session push plus mail, Weft, and jj status in OMP's status line | Link the bundled extension; see [Oh My Pi](docs/oh-my-pi.md) |
 | Reminder hooks | Unread counts on later turns in pull-only clients | `agent-mail hooks install` |
 | Web dashboard | Local read-only traffic and coordination view | Set `dashboard = true`; requires the local CLI |
 
