@@ -423,6 +423,16 @@ hand. One command both registers and serves, so a client can be configured in
 a single line without a prior global install, and sending falls back to a
 direct spool append when no daemon answers.
 
+### `oh-my-pi-plugin-path`
+
+```
+agent-mail oh-my-pi-plugin-path
+```
+
+Prints the absolute directory of the bundled Oh My Pi push extension. Pass the
+result to `omp plugin link --scope user`. See [oh-my-pi.md](oh-my-pi.md) for
+subscription login, status, provenance, and delivery behavior.
+
 ### `install`
 
 ```

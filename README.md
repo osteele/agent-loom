@@ -8,7 +8,7 @@ copy text from one session and paste it into another.
 
 agent-mail is a local message bus for those sessions. A message lands in a
 project's on-disk inbox (its spool) whether or not anyone is listening. A
-running Claude Code session can receive it in context when channel push is
+a running session can receive it in context when its push integration is
 enabled.
 
 ```mermaid
@@ -23,15 +23,15 @@ Sessions address each other by stable names across project directories.
 
 - **Durable delivery.** A message waits in the project's inbox until an
   intended recipient retrieves it with `check_inbox`, unless it expires. A
-  running Claude Code session with channel push can receive it automatically.
+  running session with push enabled can receive it automatically.
   Receipts distinguish spooled, pushed, read, held, refused, and expired mail.
 - **Any endpoint.** agent-mail speaks standard MCP over stdio, so any MCP
   client can use the same tools and inboxes. Setup is tested with Claude Code
   and Codex; the CLI, an HTTP client, or a tool such as
   [weft](https://github.com/osteele/weft) reporting a finished job can send
   too.
-- **Push into Claude Code.** With the channel enabled, mail arrives in a
-  session's context without the agent asking.
+- **Push into supported sessions.** With the corresponding channel or extension
+  enabled, mail arrives in a session's context without the agent asking.
 - **Advisory coordination.** Path claims keep two agents from editing the
   same files, work leases record who is responsible for a logical unit, and
   lab-notebook experiment numbers (`EXP-NNN`) allocate atomically.
@@ -104,6 +104,7 @@ and [the third-party notice](THIRD_PARTY_NOTICES.md).
 | Local CLI | Shell automation, status commands, daemon management, and dashboards | `npm install -g github:osteele/agent-mail` |
 | Daemon | Slack echo, fast presence status, automatic dead-session cleanup, later-arrival reminder data, and a persistent dashboard | `agent-mail install` on macOS; `agent-mail start` on Linux |
 | Claude Code channel | Automatic message push into a running Claude session | Add and configure the plugin below |
+| Oh My Pi extension | Automatic exact-session push plus an agent-mail address in OMP's status line | Link the bundled extension; see [Oh My Pi](docs/oh-my-pi.md) |
 | Reminder hooks | Unread counts on later turns in pull-only clients | `agent-mail hooks install` |
 | Web dashboard | Local read-only traffic and coordination view | Set `dashboard = true`; requires the local CLI |
 

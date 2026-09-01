@@ -16,6 +16,8 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | `GET /registry` | live channel-server registrations |
 | `GET /inbox?project=<path>&limit=N&unread=1` | read a project's spool |
 | `GET /receipts?project=<path>&message=<id>` | read delivery state changes |
+| `GET /api/v1/push/oh-my-pi?project=<path>&sessionId=<id>&pid=<pid>` | protocol-v1 NDJSON mail stream for the bundled OMP extension |
+| `POST /api/v1/push/oh-my-pi/ack` | `{deliveryToken}` → record an OMP delivery after exact-session acceptance |
 
 Automation that wants presence or aggregate state should consume
 `agent-mail listeners --no-sync --json`, `agent-mail state --no-sync --json`,
@@ -26,3 +28,11 @@ semantics, and what presence and receipts do and do not prove.
 The daemon binds 127.0.0.1, so any process running as the local user can
 submit text. The README's [security section](../README.md#security) covers
 what that exposes and the inbound policies that contain it.
+
+The OMP stream verifies that `pid` names a current process before adding a
+listener. Each mail event carries an opaque acknowledgement token. A
+token is valid only for its live stream generation and creates a `pushed`
+receipt only after the extension reports successful delivery. Consumers must
+validate the `X-Agent-Mail-Protocol: 1` response header, each event's `version`,
+and the exact project and session ID join. Unknown versions are incompatible,
+not partial data to guess through.

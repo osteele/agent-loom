@@ -223,6 +223,12 @@ const DAEMON_ENTRY = join(SRC_DIR, `daemon${ENTRY_EXT}`);
 const DAEMON_ENTRY_NAME = `daemon${ENTRY_EXT}`;
 const CHANNEL_ENTRY = join(SRC_DIR, `channel${ENTRY_EXT}`);
 const NATIVE_AUDIT_ENTRY = join(SRC_DIR, `nativeAudit${ENTRY_EXT}`);
+const OH_MY_PI_PLUGIN_DIR = join(
+  dirname(SRC_DIR),
+  "examples",
+  "oh-my-pi",
+  "agent-mail-push",
+);
 const PLIST_PATH = join(
   homedir(),
   "Library",
@@ -254,6 +260,15 @@ function openCodeConfigPath(): string {
  * so an install never hardcodes a runtime the user may not have. */
 function runtimePath(): string {
   return process.execPath;
+}
+
+function cmdOhMyPiPluginPath(): void {
+  if (!existsSync(join(OH_MY_PI_PLUGIN_DIR, "package.json"))) {
+    throw new Error(
+      `Oh My Pi plugin is missing from this installation: ${OH_MY_PI_PLUGIN_DIR}`,
+    );
+  }
+  console.log(OH_MY_PI_PLUGIN_DIR);
 }
 
 interface InstallPlan {
@@ -2639,6 +2654,8 @@ Daemon (launchd-aware):
 Setup:
   mcp                   Run the MCP server on stdio. This is what an agent's
                         config launches; you do not run it by hand.
+  oh-my-pi-plugin-path  Print the bundled OMP push plugin directory for
+                        "omp plugin link".
   install [--dry-run] [--native-audit] [--no-codex]
           [--replace-claude] [--replace-codex] [--replace-kimi]
           [--replace-gemini] [--replace-opencode]
@@ -2683,6 +2700,9 @@ switch (cmd) {
     break;
   case "hooks":
     cmdHooks(flags, rest);
+    break;
+  case "oh-my-pi-plugin-path":
+    cmdOhMyPiPluginPath();
     break;
   case "mute":
     cmdSetMuted(flags, true);

@@ -9,6 +9,8 @@
  *   GET  /api/state dashboard JSON
  *   GET  /registry live channel-server registrations
  *   GET  /inbox?project=<path>&limit=N&unread=1  read a project's spool
+ *   GET  /api/v1/push/oh-my-pi  versioned OMP NDJSON push stream
+ *   POST /api/v1/push/oh-my-pi/ack  acknowledge exact-session OMP delivery
  *
  * SIGTERM: graceful stop. SIGHUP: reload config (Slack webhook, echo mode).
  */
@@ -23,6 +25,7 @@ import { writePresenceSnapshot } from "./presence.ts";
 import { writeProcessSnapshot } from "./processSnapshot.ts";
 import { listLive } from "./registry.ts";
 import { serve, spawnCapture, which } from "./runtime.ts";
+import { OhMyPiPushBridge } from "./sessionPush.ts";
 import { claudeSessions, resetSessionAliasCache } from "./sessions.ts";
 import { formatSlackEcho } from "./slackEcho.ts";
 import {
@@ -47,6 +50,13 @@ import {
 } from "./weftJobs.ts";
 
 let config: Config = loadConfig();
+const ohMyPiPush = new OhMyPiPushBridge();
+
+function tickSessionPush(): void {
+  void ohMyPiPush
+    .poll()
+    .catch((error) => log(`session push delivery failed: ${error}`));
+}
 
 function admissionOptions(): AdmissionOptions {
   return {
@@ -149,6 +159,44 @@ const server = await serve({
       return json(readReceipts(canonicalProject(project), messageId));
     }
 
+    if (req.method === "GET" && url.pathname === "/api/v1/push/oh-my-pi") {
+      const project = url.searchParams.get("project");
+      const sessionId = url.searchParams.get("sessionId");
+      const pid = Number(url.searchParams.get("pid"));
+      if (!project || !sessionId) {
+        return json(
+          { error: "required query fields: project, sessionId, pid" },
+          400,
+        );
+      }
+      return ohMyPiPush.connect(
+        {
+          project,
+          sessionId,
+          pid,
+          defaultInboundPolicy: config.inboundPolicy,
+          heldMessageLimit: config.heldMessageLimit,
+        },
+        req.signal,
+      );
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/v1/push/oh-my-pi/ack") {
+      let body: { deliveryToken?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid JSON body" }, 400);
+      }
+      if (typeof body.deliveryToken !== "string") {
+        return json({ error: "required field: deliveryToken" }, 400);
+      }
+      if (!ohMyPiPush.acknowledge(body.deliveryToken)) {
+        return json({ error: "unknown or stale delivery token" }, 409);
+      }
+      return json({ ok: true });
+    }
+
     if (req.method === "POST" && url.pathname === "/notify") {
       let body: Partial<Message> & { ttlSeconds?: unknown };
       try {
@@ -207,6 +255,7 @@ const server = await serve({
       // Slack POST must not delay the response (a timed-out client would
       // fall back to a direct spool append and double-deliver).
       echoToSlack(msg).catch((err) => log(`slack echo error: ${err}`));
+      tickSessionPush();
       return json({ ok: true, ...result });
     }
 
@@ -384,6 +433,7 @@ let lastWeftTotal = -1;
 // snapshot for a whole tick.
 tickPresence();
 const presenceTimer = setInterval(tickPresence, PRESENCE_TICK_MS);
+const sessionPushTimer = setInterval(tickSessionPush, 1000);
 tickWeftJobs();
 const weftJobsTimer = setInterval(tickWeftJobs, WEFT_JOBS_REFRESH_MS);
 
@@ -399,7 +449,9 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
     log(`${sig} received, stopping`);
     clearInterval(presenceTimer);
+    clearInterval(sessionPushTimer);
     clearInterval(weftJobsTimer);
+    ohMyPiPush.close();
     server.stop();
     process.exit(0);
   });
