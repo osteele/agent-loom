@@ -16,9 +16,11 @@ import {
 import { canonicalProject, spoolPath } from "./paths.ts";
 import {
   type InboundPolicy,
+  type Registration,
   type SessionCapabilities,
   inboundPolicy,
   isMuted,
+  listLiveInProject,
   register,
   scanProcesses,
   unregister,
@@ -35,7 +37,7 @@ import {
   readReceiptTail,
 } from "./spool.ts";
 
-export const SESSION_PUSH_PROTOCOL_VERSION = 1;
+export const SESSION_PUSH_PROTOCOL_VERSION = 2;
 
 export interface SessionPushConnectInput {
   project: string;
@@ -50,6 +52,7 @@ export type SessionPushEvent =
       version: typeof SESSION_PUSH_PROTOCOL_VERSION;
       type: "connected";
       project: string;
+      requestedSessionId: string;
       sessionId: string;
       address: string;
     }
@@ -120,6 +123,30 @@ function connectionKey(project: string, sessionId: string): string {
   return `${project}\u0000${sessionId}`;
 }
 
+/** Resolve the routing id shared with the host's agent-mail MCP component.
+ *
+ * OMP owns a native conversation id but does not export it to MCP subprocesses.
+ * The MCP registration does record OMP's exact host pid, which the extension
+ * supplies and the daemon verifies. One distinct registration id under that
+ * pid is therefore an exact join; zero or several are not, and retain the
+ * requested id rather than guessing. */
+export function resolveSessionPushId(
+  project: string,
+  hostPid: number,
+  requestedSessionId: string,
+  registrations: Registration[] = listLiveInProject(project),
+): string {
+  const ids = new Set(
+    registrations
+      .filter(
+        (registration) =>
+          registration.parentPid === hostPid && registration.sessionId,
+      )
+      .map((registration) => registration.sessionId as string),
+  );
+  return ids.size === 1 ? ([...ids][0] as string) : requestedSessionId;
+}
+
 function validIdentifier(value: string): boolean {
   return value.length > 0 && value.length <= 512 && !value.includes("\u0000");
 }
@@ -179,7 +206,9 @@ export class SessionPushBridge {
       );
     }
 
-    const key = connectionKey(project, input.sessionId);
+    const sessionId = resolveSessionPushId(project, input.pid, input.sessionId);
+
+    const key = connectionKey(project, sessionId);
     this.#disconnect(this.#connections.get(key));
     const path = spoolPath(project);
     const currentSize = existsSync(path) ? statSync(path).size : 0;
@@ -206,7 +235,7 @@ export class SessionPushBridge {
       id,
       key,
       project,
-      sessionId: input.sessionId,
+      sessionId,
       pid: input.pid,
       heldMessageLimit: input.heldMessageLimit,
       offset,
@@ -221,7 +250,7 @@ export class SessionPushBridge {
     register(
       project,
       input.pid,
-      input.sessionId,
+      sessionId,
       undefined,
       this.#client.client,
       PUSH_CAPABILITIES,
@@ -234,8 +263,9 @@ export class SessionPushBridge {
       version: SESSION_PUSH_PROTOCOL_VERSION,
       type: "connected",
       project,
-      sessionId: input.sessionId,
-      address: sessionNames(input.sessionId, undefined, project).fullName,
+      requestedSessionId: input.sessionId,
+      sessionId,
+      address: sessionNames(sessionId, undefined, project).fullName,
     });
     const resumeMessages = this.#resumeMessages.get(key) ?? [];
     this.#resumeMessages.delete(key);

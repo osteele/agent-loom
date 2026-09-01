@@ -570,12 +570,17 @@ export function matchSessions<T extends SessionAddress>(
   query: string,
 ): T[] {
   const normalized = query.toLocaleLowerCase();
-  return candidates.filter(
-    (c) =>
-      c.sessionId === query ||
-      c.fullName === query ||
-      c.displayName.toLocaleLowerCase() === normalized,
-  );
+  const matches = new Map<string, T>();
+  for (const candidate of candidates) {
+    if (
+      candidate.sessionId === query ||
+      candidate.fullName === query ||
+      candidate.displayName.toLocaleLowerCase() === normalized
+    ) {
+      matches.set(candidate.sessionId, candidate);
+    }
+  }
+  return [...matches.values()];
 }
 
 export type SessionQueryResult<T> =

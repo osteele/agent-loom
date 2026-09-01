@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+  agentMailSessionId,
+  descendantProcessIds,
   parseGitStatus,
   parseJjStatus,
   parseListeningDevPorts,
@@ -24,15 +26,33 @@ test("OMP status rejects malformed counts instead of implying zero", () => {
   expect(parseMailStatus("Quiet Lantern\t2\t0\tpush\t-1\n")).toBeUndefined();
 });
 
-test("OMP widget finds only configured listening development ports", () => {
-  const output = [
-    "tcp4 0 0 127.0.0.1.3000 *.* LISTEN",
-    "tcp6 0 0 *.8080 *.* LISTEN",
-    "tcp 0 0 127.0.0.1:8000 0.0.0.0:* LISTEN",
-    "tcp 0 0 127.0.0.1:5432 0.0.0.0:* LISTEN",
-    "tcp4 0 0 127.0.0.1.3000 127.0.0.1.50000 ESTABLISHED",
+test("OMP shares the launcher identity with its MCP server", () => {
+  expect(agentMailSessionId("omp-native", "launcher-shared", "42", 42)).toBe(
+    "launcher-shared",
+  );
+  expect(agentMailSessionId("omp-native", "parent-agent", "41", 42)).toBe(
+    "omp-native",
+  );
+  expect(agentMailSessionId("omp-native", "  ", "42", 42)).toBe(
+    "omp-native",
+  );
+});
+
+test("OMP widget shows only development servers descended from OMP", () => {
+  const processes = ["100 1", "101 100", "102 101", "200 1"].join("\n");
+  const listeners = [
+    "p101",
+    "n*:3000",
+    "p102",
+    "n127.0.0.1:8000",
+    "p102",
+    "n*:5432",
+    "p200",
+    "n*:8080",
   ].join("\n");
-  expect(parseListeningDevPorts(output)).toEqual([3000, 8000, 8080]);
+  const descendants = descendantProcessIds(processes, 100);
+  expect([...descendants].sort()).toEqual([100, 101, 102]);
+  expect(parseListeningDevPorts(listeners, descendants)).toEqual([3000, 8000]);
 });
 
 test("OMP widget reads branch and dirty state from Git porcelain v2", () => {
@@ -81,8 +101,8 @@ test("OMP widget puts aligned progress bars last", () => {
     110,
   );
   expect(lines).toEqual([
-    "GPT-5.6 Sol · effort high · agent-mail · ⅉ main* ·                   ctx ███░░░░░  42%",
-    "Evergreen Cake · ✉︎ 2 · ⚙︎ 3 · 2 peers · py .venv · bun · :3000,8000 · wk  ███░░░░░  37%",
+    "GPT-5.6 Sol/high · 📁 agent-mail · 2 peers · ⅉ main* ·       ctx █████████████████░░░░░░░░░░░░░░░░░░░░░░░  42%",
+    "Evergreen Cake · ✉️ 2 · ⚙️ 3 · py .venv · bun · :3000,8000 ·  wk ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░  37%",
   ]);
   const barColumns = lines.map((line) =>
     Bun.stringWidth(line.slice(0, line.indexOf("█"))),
@@ -112,8 +132,8 @@ test("OMP widget drops lower-priority fields at half-pane width", () => {
       38,
     ),
   ).toEqual([
-    "model ? · effort high · ctx ?",
-    "Evergreen Cake · ✉︎ 0 · ⚙︎ 0 · wk ?",
+    "model ?/high · 2 peers · ctx ?",
+    "Evergreen Cake · py .venv · bun · wk ?",
   ]);
 });
 
@@ -127,7 +147,7 @@ test("OMP widget truncates rather than overflowing a very narrow pane", () => {
     },
     14,
   );
-  expect(lines).toEqual(["model ?", "connecting"]);
+  expect(lines).toEqual(["model ?/xhigh", "connecting"]);
   expect(lines.every((line) => Bun.stringWidth(line) <= 14)).toBe(true);
 });
 
@@ -148,7 +168,19 @@ test("OMP widget uses the gitsync Jujutsu icon for a change id", () => {
       },
       80,
     )[0],
-  ).toBe("model ? · effort high · ⅉ qvtszkkm* · ctx ?");
+  ).toBe("model ?/high · 1 peer · ⅉ qvtszkkm* · ctx ?");
+});
+
+test("OMP widget renders unknown mail state without synthetic zeroes", () => {
+  expect(
+    renderResidualWidget(
+      {
+        address: "Innovative Dandelion",
+        push: "online",
+      },
+      80,
+    )[1],
+  ).toContain("Innovative Dandelion · ✉️ ? · ⚙️ ?");
 });
 
 test("OMP widget uses the gitsync Git icon", () => {

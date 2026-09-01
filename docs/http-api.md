@@ -16,7 +16,7 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | `GET /registry` | live channel-server registrations |
 | `GET /inbox?project=<path>&limit=N&unread=1` | read a project's spool |
 | `GET /receipts?project=<path>&message=<id>` | read delivery state changes |
-| `GET /api/v1/push/oh-my-pi?project=<path>&sessionId=<id>&pid=<pid>` | protocol-v1 NDJSON mail stream for the bundled OMP extension |
+| `GET /api/v1/push/oh-my-pi?project=<path>&sessionId=<id>&pid=<pid>` | protocol-v2 NDJSON mail stream for the bundled OMP extension |
 | `POST /api/v1/push/oh-my-pi/ack` | `{deliveryToken}` → record an OMP delivery after exact-session acceptance |
 
 Automation that wants presence or aggregate state should consume
@@ -30,9 +30,11 @@ submit text. The README's [security section](../README.md#security) covers
 what that exposes and the inbound policies that contain it.
 
 The OMP stream verifies that `pid` names a current process before adding a
-listener. Each mail event carries an opaque acknowledgement token. A
-token is valid only for its live stream generation and creates a `pushed`
-receipt only after the extension reports successful delivery. Consumers must
-validate the `X-Agent-Mail-Protocol: 1` response header, each event's `version`,
-and the exact project and session ID join. Unknown versions are incompatible,
-not partial data to guess through.
+listener. Its first event echoes the requested native OMP id and reports the
+routing id resolved by an exact host-pid join to the MCP registration. Each
+mail event carries an opaque acknowledgement token. A token is valid only for
+its live stream generation and creates a `pushed` receipt only after the
+extension reports successful delivery. Consumers must validate the
+`X-Agent-Mail-Protocol: 2` response header, each event's `version`, the echoed
+request id, and the exact project and resolved routing-id join. Unknown
+versions are incompatible, not partial data to guess through.

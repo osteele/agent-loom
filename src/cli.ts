@@ -120,6 +120,7 @@ import {
   type InboundPolicy,
   type Registration,
   capabilityLabels,
+  coalesceRegistrations,
   listLive,
   listLiveInProject,
   processInfo,
@@ -905,23 +906,27 @@ function cmdListeners(flags: Record<string, string | boolean>): void {
       : undefined;
   const snapshot =
     flags["no-sync"] === true ? readListenerSnapshot(project) : undefined;
-  const live = snapshot
-    ? snapshot.sessions
-    : listLive().filter(
-        (registration) =>
-          project === undefined ||
-          canonicalProject(registration.cwd) === project,
-      );
+  const live = coalesceRegistrations(
+    snapshot
+      ? snapshot.sessions
+      : listLive().filter(
+          (registration) =>
+            project === undefined ||
+            canonicalProject(registration.cwd) === project,
+        ),
+  );
   if (flags.json === true) {
     console.log(
       JSON.stringify(
-        snapshot ?? {
-          version: 1,
-          source: "live-registry",
-          fresh: true,
-          generatedAt: Date.now(),
-          sessions: live,
-        },
+        snapshot
+          ? { ...snapshot, sessions: live }
+          : {
+              version: 1,
+              source: "live-registry",
+              fresh: true,
+              generatedAt: Date.now(),
+              sessions: live,
+            },
         null,
         2,
       ),

@@ -6,6 +6,7 @@ import {
   OhMyPiPushBridge,
   SESSION_PUSH_PROTOCOL_VERSION,
   type SessionPushEvent,
+  resolveSessionPushId,
 } from "./sessionPush.ts";
 import { appendMessage, readReceipts } from "./spool.ts";
 
@@ -64,9 +65,10 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
   const reader = response.body.getReader();
   const buffered = { text: "" };
   expect(await nextEvent(reader, buffered)).toMatchObject({
-    version: 1,
+    version: SESSION_PUSH_PROTOCOL_VERSION,
     type: "connected",
     project,
+    requestedSessionId: "omp-session",
     sessionId: "omp-session",
     address: expect.any(String),
   });
@@ -107,4 +109,37 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
 
   await reader.cancel();
   bridge.close();
+});
+
+test("Oh My Pi push adopts the one MCP identity registered under its host", () => {
+  const project = "/project";
+  const registration = (sessionId: string, parentPid: number, pid: number) => ({
+    cwd: project,
+    pid,
+    parentPid,
+    sessionId,
+    started: "2026-09-01T13:00:00.000Z",
+  });
+  expect(
+    resolveSessionPushId(project, 42, "omp-native", [
+      registration("mcp-shared", 42, 101),
+    ]),
+  ).toBe("mcp-shared");
+  expect(
+    resolveSessionPushId(project, 42, "omp-native", [
+      registration("mcp-shared", 42, 101),
+      registration("mcp-shared", 42, 102),
+    ]),
+  ).toBe("mcp-shared");
+  expect(
+    resolveSessionPushId(project, 42, "omp-native", [
+      registration("one", 42, 101),
+      registration("two", 42, 102),
+    ]),
+  ).toBe("omp-native");
+  expect(
+    resolveSessionPushId(project, 42, "omp-native", [
+      registration("other-host", 41, 101),
+    ]),
+  ).toBe("omp-native");
 });

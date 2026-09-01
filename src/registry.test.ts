@@ -19,6 +19,7 @@ import {
   type SessionCapabilities,
   assignedGeneratedSessionNameForRegistration,
   capabilityLabels,
+  coalesceRegistrations,
   isCurrentProcess,
   listLiveInProject,
   parsePsLine,
@@ -133,6 +134,85 @@ test("the exact process preserves session state across re-registration", () => {
     });
   } finally {
     if (existsSync(path)) rmSync(path);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("components of one logical session share policy and presentation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-components-"));
+  const project = join(root, "project");
+  mkdirSync(project);
+  const mcp = register(
+    project,
+    process.pid,
+    "shared-session",
+    undefined,
+    "omp-coding-agent",
+    {
+      tools: true,
+      inboxPoll: true,
+      channelPush: false,
+      claims: true,
+      workLeases: true,
+      receipts: true,
+      nativePeerMessaging: false,
+    },
+  );
+  const child = Bun.spawn(["/bin/sleep", "30"]);
+  let push: string | undefined;
+  try {
+    expect(setMuted(project, process.pid, true)).toBe(true);
+    expect(setInboundPolicy(project, process.pid, "hold")).toBe(true);
+    push = register(
+      project,
+      child.pid,
+      "shared-session",
+      undefined,
+      "oh-my-pi",
+      {
+        tools: false,
+        inboxPoll: false,
+        channelPush: true,
+        claims: false,
+        workLeases: false,
+        receipts: true,
+        nativePeerMessaging: false,
+        channelPushStatus: "authorized",
+      },
+    );
+    expect(JSON.parse(readFileSync(push, "utf8"))).toMatchObject({
+      muted: true,
+      inboundPolicy: "hold",
+    });
+
+    expect(setMuted(project, process.pid, false)).toBe(true);
+    expect(setInboundPolicy(project, process.pid, "accept")).toBe(true);
+    expect(JSON.parse(readFileSync(push, "utf8"))).toMatchObject({
+      muted: false,
+      inboundPolicy: "accept",
+    });
+
+    const logical = coalesceRegistrations(listLiveInProject(project));
+    expect(logical).toHaveLength(1);
+    expect(logical[0]).toMatchObject({
+      sessionId: "shared-session",
+      client: "oh-my-pi",
+      muted: false,
+      inboundPolicy: "accept",
+      capabilities: {
+        tools: true,
+        inboxPoll: true,
+        channelPush: true,
+        claims: true,
+        workLeases: true,
+        receipts: true,
+      },
+    });
+  } finally {
+    child.kill();
+    await child.exited;
+    if (existsSync(mcp)) rmSync(mcp);
+    if (push && existsSync(push)) rmSync(push);
     rmSync(root, { recursive: true, force: true });
   }
 });

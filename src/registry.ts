@@ -80,6 +80,90 @@ export interface SessionCapabilities {
   channelPushStatus?: ChannelPushStatus;
 }
 
+function mergedCapabilities(
+  registrations: Registration[],
+): SessionCapabilities | undefined {
+  const capabilities = registrations
+    .map((registration) => registration.capabilities)
+    .filter((value): value is SessionCapabilities => value !== undefined);
+  if (capabilities.length === 0) return undefined;
+  const channelStatus = capabilities
+    .filter((value) => value.channelPush)
+    .map((value) => value.channelPushStatus)
+    .find((value) => value !== undefined);
+  return {
+    tools: capabilities.some((value) => value.tools),
+    inboxPoll: capabilities.some((value) => value.inboxPoll),
+    channelPush: capabilities.some((value) => value.channelPush),
+    claims: capabilities.some((value) => value.claims),
+    workLeases: capabilities.some((value) => value.workLeases),
+    receipts: capabilities.some((value) => value.receipts),
+    nativePeerMessaging: capabilities.some(
+      (value) => value.nativePeerMessaging,
+    ),
+    ...(channelStatus ? { channelPushStatus: channelStatus } : {}),
+  };
+}
+
+function latestTimestamp(values: (string | undefined)[]): string | undefined {
+  return values
+    .filter((value): value is string => value !== undefined)
+    .sort()
+    .at(-1);
+}
+
+/** Collapse exact (project, session-id) matches into one logical session.
+ *
+ * A harness can expose separate MCP and push components under the same routing
+ * id. Their registry entries retain separate process identities for liveness
+ * and cleanup, while routing and presentation must count one agent and combine
+ * its capabilities. Entries without a session id remain process-scoped. */
+export function coalesceRegistrations(
+  registrations: Registration[],
+): Registration[] {
+  const groups = new Map<string, Registration[]>();
+  for (const registration of registrations) {
+    const key = registration.sessionId
+      ? `${canonicalProject(registration.cwd)}\u0000${registration.sessionId}`
+      : `${canonicalProject(registration.cwd)}\u0000pid:${registration.pid}`;
+    const group = groups.get(key) ?? [];
+    group.push(registration);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => {
+    if (group.length === 1) return group[0];
+    const primary =
+      group.find((entry) => entry.capabilities?.channelPush) ??
+      group.find((entry) => entry.capabilities?.tools) ??
+      group[0];
+    const inboundPolicy = group.some(
+      (entry) => entry.inboundPolicy === "refuse",
+    )
+      ? "refuse"
+      : group.some((entry) => entry.inboundPolicy === "hold")
+        ? "hold"
+        : "accept";
+    const lastSeen = latestTimestamp(group.map((entry) => entry.lastSeen));
+    const lastInboxPoll = latestTimestamp(
+      group.map((entry) => entry.lastInboxPoll),
+    );
+    const parentPid =
+      primary.parentPid ?? group.find((entry) => entry.parentPid)?.parentPid;
+    const capabilities = mergedCapabilities(group);
+    return {
+      ...primary,
+      cwd: canonicalProject(primary.cwd),
+      ...(parentPid !== undefined ? { parentPid } : {}),
+      ...(capabilities ? { capabilities } : {}),
+      ...(group.some((entry) => entry.muted) ? { muted: true } : {}),
+      inboundPolicy,
+      ...(lastSeen ? { lastSeen } : {}),
+      ...(lastInboxPoll ? { lastInboxPoll } : {}),
+      started: group.map((entry) => entry.started).sort()[0],
+    };
+  });
+}
+
 /** Capability labels for one session, shared by every surface that renders
  * them. The predecessor of this function was copied into four renderers; only
  * one of them ever grew the degraded-channel branch, and it read a field
@@ -331,6 +415,35 @@ function mutateEntry(
   });
 }
 
+/** Apply session-level controls to every component registered under the exact
+ * same project and routing id. This keeps an MCP component's policy in step
+ * with a separate push component without weakening their process-level
+ * liveness and cleanup records. */
+function mutateLogicalSession(
+  cwd: string,
+  pid: number,
+  mutate: (entry: Registration) => void,
+): boolean {
+  const project = canonicalProject(cwd);
+  const entries = readEntries(
+    (entry) => canonicalProject(entry.cwd) === project,
+  );
+  const own = entries.find((candidate) => candidate.entry.pid === pid);
+  if (!own) return false;
+  const paths = own.entry.sessionId
+    ? entries
+        .filter(
+          (candidate) => candidate.entry.sessionId === own.entry.sessionId,
+        )
+        .map((candidate) => candidate.path)
+    : [own.path];
+  let changed = false;
+  for (const path of paths) {
+    changed = mutateEntry(path, mutate) || changed;
+  }
+  return changed;
+}
+
 /** Before assigning the new naming scheme, bank the syllable names of every
  * session already in the registry. Assignments are per session id and survive
  * unregister/restart; stale entries are included so an old session resumed
@@ -397,6 +510,17 @@ export function register(
   const procStart =
     knownProcStart ??
     (scan?.reliable ? scan.processes.get(pid)?.start : undefined);
+  const sessionSibling = sessionId
+    ? verifyLive(
+        readEntries(
+          (entry) =>
+            entry.pid !== pid &&
+            entry.sessionId === sessionId &&
+            canonicalProject(entry.cwd) === canonicalProject(cwd),
+        ),
+        false,
+      )[0]
+    : undefined;
   withEntryLock(path, () => {
     let previous: Registration | undefined;
     if (existsSync(path)) {
@@ -417,11 +541,12 @@ export function register(
       (procStart !== undefined && previous?.procStart === procStart)
         ? previous
         : undefined;
+    const sessionState = preserved ?? sessionSibling;
     const inboundPolicy =
-      preserved &&
-      (preserved.inboundPolicy === "hold" ||
-        preserved.inboundPolicy === "refuse")
-        ? preserved.inboundPolicy
+      sessionState &&
+      (sessionState.inboundPolicy === "hold" ||
+        sessionState.inboundPolicy === "refuse")
+        ? sessionState.inboundPolicy
         : defaultInboundPolicy;
     const entry: Registration = {
       cwd,
@@ -437,17 +562,17 @@ export function register(
       ...(name ? { name } : {}),
       ...(client ? { client } : {}),
       ...(capabilities ? { capabilities } : {}),
-      ...(preserved && typeof preserved.muted === "boolean"
-        ? { muted: preserved.muted }
+      ...(sessionState && typeof sessionState.muted === "boolean"
+        ? { muted: sessionState.muted }
         : {}),
       inboundPolicy,
-      ...(preserved?.lastSeen ? { lastSeen: preserved.lastSeen } : {}),
-      ...(preserved?.lastInboxPoll
-        ? { lastInboxPoll: preserved.lastInboxPoll }
+      ...(sessionState?.lastSeen ? { lastSeen: sessionState.lastSeen } : {}),
+      ...(sessionState?.lastInboxPoll
+        ? { lastInboxPoll: sessionState.lastInboxPoll }
         : {}),
       started:
-        preserved && typeof preserved.started === "string"
-          ? preserved.started
+        sessionState && typeof sessionState.started === "string"
+          ? sessionState.started
           : new Date().toISOString(),
     };
     writeEntry(path, entry);
@@ -462,7 +587,7 @@ export function setInboundPolicy(
   pid: number,
   policy: InboundPolicy,
 ): boolean {
-  return mutateEntry(entryPath(cwd, pid), (entry) => {
+  return mutateLogicalSession(cwd, pid, (entry) => {
     entry.inboundPolicy = policy;
   });
 }
@@ -482,7 +607,7 @@ export function inboundPolicy(cwd: string, pid: number): InboundPolicy {
 /** Toggle a session's channel-push mute. Returns false if no entry exists (the
  * session isn't/no longer listening). */
 export function setMuted(cwd: string, pid: number, muted: boolean): boolean {
-  return mutateEntry(entryPath(cwd, pid), (entry) => {
+  return mutateLogicalSession(cwd, pid, (entry) => {
     entry.muted = muted;
   });
 }

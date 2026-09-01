@@ -223,7 +223,7 @@ test("self is excluded by session id, not by pid", () => {
     reg({ pid: 2, sessionId: "self" }),
   ];
   const meta = metaMap({ self: { status: "busy", name: "Self Name" } });
-  expect(peersInProject(sessions, "self", meta, NOW)).toHaveLength(1);
+  expect(peersInProject(sessions, "self", meta, NOW)).toHaveLength(0);
   expect(statusLineName("/proj", "self", meta)).toBe("Self Name");
 });
 

@@ -170,10 +170,19 @@ test("listeners --no-sync emits snapshot JSON without pruning registry", async (
         {
           cwd: project,
           pid: process.pid,
-          sessionId: "poller",
-          capabilities: { inboxPoll: true, channelPush: false },
+          sessionId: "shared-session",
+          client: "omp-coding-agent",
+          capabilities: { inboxPoll: true, claims: true },
           lastInboxPoll: "2026-08-12T12:00:00.000Z",
           started: "2026-08-12T11:00:00.000Z",
+        },
+        {
+          cwd: project,
+          pid: process.pid + 1,
+          sessionId: "shared-session",
+          client: "oh-my-pi",
+          capabilities: { channelPush: true, receipts: true },
+          started: "2026-08-12T11:00:01.000Z",
         },
       ],
     }),
@@ -193,12 +202,26 @@ test("listeners --no-sync emits snapshot JSON without pruning registry", async (
       { env: { ...process.env, HOME: home }, stdout: "pipe", stderr: "pipe" },
     );
     expect(await child.exited).toBe(0);
-    const report = JSON.parse(
-      await new Response(child.stdout).text(),
-    ) as Record<string, unknown>;
+    const report = JSON.parse(await new Response(child.stdout).text()) as {
+      source: string;
+      fresh: boolean;
+      sessions: Array<{
+        client: string;
+        capabilities: Record<string, boolean>;
+      }>;
+    };
     expect(report.source).toBe("presence-snapshot");
     expect(report.fresh).toBe(true);
     expect(report.sessions).toHaveLength(1);
+    expect(report.sessions[0]).toMatchObject({
+      client: "oh-my-pi",
+      capabilities: {
+        inboxPoll: true,
+        channelPush: true,
+        claims: true,
+        receipts: true,
+      },
+    });
     expect(existsSync(untouched)).toBe(true);
   } finally {
     rmSync(root, { recursive: true });

@@ -25,6 +25,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { PRESENCE_SNAPSHOT_PATH, canonicalProject } from "./paths.ts";
 import {
   type Registration,
+  coalesceRegistrations,
   listLive,
   listLiveInProject,
   scanParentPids,
@@ -223,10 +224,17 @@ export function peersInProject(
     nowMs,
     hostPids,
   );
-  if (self) return present.filter((r) => r !== self);
+  if (self) {
+    return coalesceRegistrations(
+      present.filter((r) =>
+        self.sessionId ? r.sessionId !== self.sessionId : r !== self,
+      ),
+    );
+  }
   // Unidentified: assume one of these entries is us and discount it, so the
   // count stays right even when the name cannot be recovered.
-  return present.slice(0, Math.max(0, present.length - 1));
+  const logical = coalesceRegistrations(present);
+  return logical.slice(0, Math.max(0, logical.length - 1));
 }
 
 /** The session's display name, whether or not anyone shares the project.

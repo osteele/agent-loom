@@ -71,6 +71,7 @@ import {
   type SessionCapabilities,
   assignedGeneratedSessionNameForRegistration,
   capabilityLabels,
+  coalesceRegistrations,
   inboundPolicy,
   isMuted,
   listLive,
@@ -250,25 +251,27 @@ function liveSessions(dir?: string): {
   pid: number;
 }[] {
   const meta = claudeSessions();
-  return listLive()
-    .filter((r) => r.sessionId && (!dir || canonicalProject(r.cwd) === dir))
-    .map((r) => {
-      const sid = r.sessionId as string;
-      const m = meta.get(sid);
-      const names = sessionNames(sid, m, canonicalProject(r.cwd));
-      return {
-        sessionId: sid,
-        cwd: canonicalProject(r.cwd),
-        fullName: names.fullName,
-        displayName: names.displayName,
-        activity: activityTag(m?.status, lastActivityMs(r, m)),
-        client: r.client,
-        capabilities: r.capabilities,
-        inboundPolicy: r.inboundPolicy ?? "accept",
-        muted: r.muted,
-        pid: r.pid,
-      };
-    });
+  return coalesceRegistrations(
+    listLive().filter(
+      (r) => r.sessionId && (!dir || canonicalProject(r.cwd) === dir),
+    ),
+  ).map((r) => {
+    const sid = r.sessionId as string;
+    const m = meta.get(sid);
+    const names = sessionNames(sid, m, canonicalProject(r.cwd));
+    return {
+      sessionId: sid,
+      cwd: canonicalProject(r.cwd),
+      fullName: names.fullName,
+      displayName: names.displayName,
+      activity: activityTag(m?.status, lastActivityMs(r, m)),
+      client: r.client,
+      capabilities: r.capabilities,
+      inboundPolicy: r.inboundPolicy ?? "accept",
+      muted: r.muted,
+      pid: r.pid,
+    };
+  });
 }
 
 /** One-line snippet of a message body, for reply previews. */

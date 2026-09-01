@@ -47,14 +47,15 @@ statusLine:
   rightSegments: []
 ```
 
-The first widget row carries the former native status information: model,
-reasoning effort, project, revision, and a context-window bar. The second row
-carries the routable agent-mail display name, unread messages (`✉︎`), pending
-terminal Weft jobs (`⚙︎`), peer count, active Python environment, JavaScript
-runtime, common listening development ports, and weekly subscription use. Both
-rows use `·` separators and independently drop lower-priority fields to fit a
-narrow pane. When both progress bars are available, they are the final fields
-and align vertically.
+The first widget row carries the former native status information: the
+model/effort pair, project (`📁`), peer count, revision, and context-window bar.
+The second row carries the routable agent-mail display name, unread messages
+(`✉️`), pending terminal Weft jobs (`⚙️`), active Python environment, JavaScript
+runtime, development-server ports, and weekly subscription use. Zero mail and
+job counts are omitted; an unavailable count renders as `?`, never as zero.
+Both rows use `·` separators and independently drop lower-priority fields to fit
+a narrow pane. Available progress bars are the final fields, expand through the
+remaining width, and use right-aligned `ctx` and `wk` labels.
 
 In a jj workspace the revision comes from a tagged `jj log` template and Git is
 not queried or shown. A dirty working copy adds `*`; `ⅉ` identifies Jujutsu and
@@ -71,7 +72,22 @@ session cost, hourly run rate, and token count instead.
 The human-facing mail name comes from the same registered, routable address
 used for delivery; until that status snapshot resolves, the extension falls
 back to the full address supplied by the push connection. Unknown counts render
-as `?` rather than zero. Status refreshes consume the documented
+as `?` rather than zero. The daemon joins OMP's extension to its agent-mail MCP
+registration only by the verified OMP host pid recorded by that subprocess; one
+exact match supplies the routing id, while zero or several matches retain the
+extension's requested id rather than guessing. When a launcher-minted identity
+is available, its process marker must name this OMP process, which rejects an id
+inherited from an outer agent. Push, tools, status, policies, and receipts then
+describe one logical mailbox even though the MCP and push components retain
+separate process-liveness records. Unread counts are the current session's
+visible unread mail rather than a project total: self-sent mail, messages
+directed to a different session, and refused or expired deliveries do not
+count.
+
+Development ports come from `lsof`'s field output joined to a `ps` parent table.
+Only common listening ports owned by OMP or one of its descendants are shown;
+an unrelated server elsewhere on the machine cannot produce `:3000`. Other
+status refreshes consume the documented
 `agent-mail status-line --fields`, Git porcelain v2, jj template output, and OMP
 extension APIs instead of reading another tool's private state.
 
@@ -80,10 +96,11 @@ explicit external/untrusted envelope, and are queued after an active turn or
 start a turn when the session is idle.
 
 The extension uses OMP's public, versioned extension API and the daemon's
-versioned loopback NDJSON endpoint. It verifies the event protocol, project,
-and exact OMP session ID before injecting a message. Acknowledgement happens
-only after OMP accepts the custom message; only then does agent-mail write a
-`pushed` receipt with detail `oh-my-pi`.
+versioned loopback NDJSON endpoint. The connection response echoes the native
+requested id and reports the resolved routing id; later events must carry that
+exact project and routing id before the extension injects them. Acknowledgement
+happens only after OMP accepts the custom message; only then does agent-mail
+write a `pushed` receipt with detail `oh-my-pi`.
 
 ## Non-default daemon port
 

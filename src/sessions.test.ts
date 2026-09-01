@@ -424,6 +424,15 @@ test("every match is returned so callers can decide what ambiguity means", () =>
   ]);
 });
 
+test("multiple components under one session id resolve as one address", () => {
+  const components = [
+    { sessionId: "same", fullName: "p-same", displayName: "Same" },
+    { sessionId: "same", fullName: "p-same", displayName: "Same" },
+  ];
+  expect(matchSessions(components, "Same")).toEqual([components[1]]);
+  expect(resolveSessionQuery(components, "Same").kind).toBe("unique");
+});
+
 test("resolveSessionQuery separates unique, absent, and ambiguous names", () => {
   // The three cases callers branch on. Which of them count as errors is the
   // caller's policy: send_mail refuses on none/ambiguous because an agent is

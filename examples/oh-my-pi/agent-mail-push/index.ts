@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const STATUS_KEY = "agent-mail";
 const WIDGET_KEY = "agent-mail-status";
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:8377";
@@ -14,8 +14,9 @@ const DEV_PORTS = new Set([3000, 3001, 4000, 8000, 8001, 8080, 9000]);
 const FIELD_SEPARATOR = " · ";
 const GIT_ICON = "⎇";
 const JJ_ICON = "ⅉ";
-const MAIL_ICON = "✉︎";
-const JOB_ICON = "⚙︎";
+const DIRECTORY_ICON = "📁";
+const MAIL_ICON = "✉️";
+const JOB_ICON = "⚙️";
 
 interface MailStatus {
   name: string;
@@ -26,6 +27,7 @@ interface MailStatus {
 
 interface StatusState {
   address?: string;
+  sessionId?: string;
   billing?: BillingStatus;
   billingRefreshedAt?: number;
   devPorts?: number[];
@@ -74,6 +76,7 @@ interface StyledField {
   align?: "progress";
   paddingBefore?: number;
   priority: number;
+  progress?: { label: string; suffix?: string; used: number };
   text: string;
   tone: "accent" | "dim" | "error" | "success" | "warning";
 }
@@ -82,6 +85,7 @@ interface ConnectedEvent {
   version: typeof PROTOCOL_VERSION;
   type: "connected";
   project: string;
+  requestedSessionId: string;
   sessionId: string;
   address: string;
 }
@@ -142,13 +146,64 @@ export function parseMailStatus(row: string): MailStatus | undefined {
   return { name: fields[0], peers, unread, unprocessed };
 }
 
-/** Parse the local-address column from macOS or Linux netstat output. */
-export function parseListeningDevPorts(output: string): number[] {
-  const ports = new Set<number>();
+/** Use a proven launcher identity; otherwise request the join with OMP's id. */
+export function agentMailSessionId(
+  nativeSessionId: string,
+  launcherSessionId = process.env.AGENT_SESSION_ID,
+  launcherSessionPid = process.env.AGENT_SESSION_PID,
+  currentPid = process.pid,
+): string {
+  const launcherId = launcherSessionId?.trim();
+  if (launcherId && Number(launcherSessionPid) === currentPid) return launcherId;
+  return nativeSessionId;
+}
+
+/** Parse a portable `ps -axo pid=,ppid=` table into the host's descendants. */
+export function descendantProcessIds(
+  output: string,
+  rootPid: number,
+): Set<number> {
+  const children = new Map<number, number[]>();
   for (const line of output.split("\n")) {
-    const columns = line.trim().split(/\s+/);
-    if (columns.at(-1) !== "LISTEN" || columns.length < 4) continue;
-    const match = columns[3].match(/[.:](\d+)$/);
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s*$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const parentPid = Number(match[2]);
+    const siblings = children.get(parentPid) ?? [];
+    siblings.push(pid);
+    children.set(parentPid, siblings);
+  }
+  const descendants = new Set([rootPid]);
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    const parent = pending.pop();
+    if (parent === undefined) break;
+    for (const child of children.get(parent) ?? []) {
+      if (descendants.has(child)) continue;
+      descendants.add(child);
+      pending.push(child);
+    }
+  }
+  return descendants;
+}
+
+/** Parse lsof's stable field output, keeping listeners owned by this agent. */
+export function parseListeningDevPorts(
+  output: string,
+  processIds: ReadonlySet<number>,
+): number[] {
+  const ports = new Set<number>();
+  let processId: number | undefined;
+  for (const line of output.split("\n")) {
+    if (line.startsWith("p")) {
+      const parsed = Number(line.slice(1));
+      processId = Number.isSafeInteger(parsed) ? parsed : undefined;
+      continue;
+    }
+    if (!line.startsWith("n") || !processId || !processIds.has(processId)) {
+      continue;
+    }
+    const match = line.slice(1).match(/:(\d+)$/);
     if (!match) continue;
     const port = Number(match[1]);
     if (DEV_PORTS.has(port)) ports.add(port);
@@ -267,40 +322,58 @@ function alignTrailingProgress(
   width: number,
 ): StyledField[][] {
   const starts = rows.map(progressStart);
-  if (starts.some((start) => start === undefined)) return rows;
-  const target = Math.max(...(starts as number[]));
+  const progressStarts = starts.filter(
+    (start): start is number => start !== undefined,
+  );
+  if (progressStarts.length === 0) return rows;
+  const target = Math.max(...progressStarts);
   if (
-    rows.some((fields) => {
+    rows.some((fields, rowIndex) => {
       const last = fields.at(-1);
-      return !last || target + Bun.stringWidth(last.text) > width;
+      if (starts[rowIndex] === undefined || !last?.progress) return false;
+      return target + Bun.stringWidth(progressText(last.progress, 1)) > width;
     })
   ) {
     return rows;
   }
   return rows.map((fields, rowIndex) => {
     const last = fields.at(-1);
-    if (!last) return fields;
+    const start = starts[rowIndex];
+    if (!last?.progress || start === undefined) return fields;
+    const fixedWidth = Bun.stringWidth(progressText(last.progress, 0));
+    const barWidth = Math.max(1, width - target - fixedWidth);
     return [
       ...fields.slice(0, -1),
-      { ...last, paddingBefore: target - (starts[rowIndex] ?? target) },
+      {
+        ...last,
+        paddingBefore: target - start,
+        text: progressText(last.progress, barWidth),
+      },
     ];
   });
 }
 
 function statusFields(state: StatusWidgetState): StyledField[] {
   const fields: StyledField[] = [];
+  const modelName = state.modelName ?? "model ?";
   fields.push({
     priority: 100,
-    text: state.modelName ?? "model ?",
+    text: state.effort ? `${modelName}/${state.effort}` : modelName,
     tone: state.modelName ? "accent" : "dim",
   });
-  fields.push({
-    priority: 45,
-    text: state.effort ? `effort ${state.effort}` : "effort ?",
-    tone: state.effort ? "accent" : "dim",
-  });
   if (state.path) {
-    fields.push({ priority: 55, text: state.path, tone: "dim" });
+    fields.push({
+      priority: 70,
+      text: `${DIRECTORY_ICON} ${state.path}`,
+      tone: "dim",
+    });
+  }
+  if (state.peers !== undefined) {
+    fields.push({
+      priority: 60,
+      text: `${state.peers} ${state.peers === 1 ? "peer" : "peers"}`,
+      tone: "accent",
+    });
   }
   const revision = state.jj ?? state.git;
   if (revision) {
@@ -314,10 +387,12 @@ function statusFields(state: StatusWidgetState): StyledField[] {
   }
   if (state.contextPercent !== undefined) {
     const used = Math.round(state.contextPercent);
+    const progress = { label: "ctx", used };
     fields.push({
       align: "progress",
       priority: 90,
-      text: `ctx ${usageBar(used)} ${String(used).padStart(3)}%`,
+      progress,
+      text: progressText(progress, 1),
       tone: used >= 80 ? "error" : used >= 50 ? "warning" : "success",
     });
   } else {
@@ -353,38 +428,28 @@ function mailFields(state: StatusWidgetState): StyledField[] {
   }
 
   if (state.mail) {
-    fields.push({
-      priority: 90,
-      text: `${MAIL_ICON} ${state.mail.unread}`,
-      tone: state.mail.unread > 0 ? "warning" : "dim",
-    });
-    fields.push({
-      priority: 80,
-      text:
-        state.mail.unprocessed === undefined
-          ? `${JOB_ICON} ?`
-          : `${JOB_ICON} ${state.mail.unprocessed}`,
-      tone:
-        state.mail.unprocessed === undefined
-          ? "dim"
-          : state.mail.unprocessed > 0
-            ? "warning"
-            : "dim",
-    });
+    if (state.mail.unread > 0) {
+      fields.push({
+        priority: 90,
+        text: `${MAIL_ICON} ${state.mail.unread}`,
+        tone: "warning",
+      });
+    }
+    if (state.mail.unprocessed === undefined) {
+      fields.push({ priority: 80, text: `${JOB_ICON} ?`, tone: "dim" });
+    } else if (state.mail.unprocessed > 0) {
+      fields.push({
+        priority: 80,
+        text: `${JOB_ICON} ${state.mail.unprocessed}`,
+        tone: "warning",
+      });
+    }
   } else if (identity) {
     fields.push(
       { priority: 90, text: `${MAIL_ICON} ?`, tone: "dim" },
       { priority: 80, text: `${JOB_ICON} ?`, tone: "dim" },
     );
   }
-  fields.push({
-    priority: 35,
-    text:
-      state.peers === undefined
-        ? "peers ?"
-        : `${state.peers} ${state.peers === 1 ? "peer" : "peers"}`,
-    tone: state.peers === undefined ? "dim" : "accent",
-  });
   if (state.pythonEnvironment) {
     fields.push({
       priority: 15,
@@ -408,10 +473,18 @@ function mailFields(state: StatusWidgetState): StyledField[] {
   return fields;
 }
 
-function usageBar(usedPercent: number): string {
+function usageBar(usedPercent: number, width: number): string {
   const percent = Math.max(0, Math.min(100, usedPercent));
-  const filled = Math.round((percent / 100) * 8);
-  return `${"█".repeat(filled)}${"░".repeat(8 - filled)}`;
+  const filled = Math.round((percent / 100) * width);
+  return `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
+}
+
+function progressText(
+  progress: { label: string; suffix?: string; used: number },
+  barWidth: number,
+): string {
+  const label = progress.label.padStart(3);
+  return `${label} ${usageBar(progress.used, barWidth)} ${String(progress.used).padStart(3)}%${progress.suffix ?? ""}`;
 }
 
 function compactNumber(value: number): string {
@@ -439,10 +512,16 @@ function billingField(billing: BillingStatus | undefined): StyledField {
     };
   }
   const used = Math.round(billing.weeklyUsed);
+  const progress = {
+    label: "wk",
+    suffix: billing.stale ? " ~" : undefined,
+    used,
+  };
   return {
     align: "progress",
     priority: 95,
-    text: `wk  ${usageBar(used)} ${String(used).padStart(3)}%${billing.stale ? " ~" : ""}`,
+    progress,
+    text: progressText(progress, 1),
     tone: billing.stale
       ? "dim"
       : used >= 80
@@ -604,7 +683,8 @@ async function refreshStatus(
   ctx: ExtensionContext,
   state: StatusState,
 ): Promise<void> {
-  const sessionId = ctx.sessionManager.getSessionId();
+  const sessionId =
+    state.sessionId ?? agentMailSessionId(ctx.sessionManager.getSessionId());
   const mailCommand = process.env.AGENT_MAIL_BIN || "agent-mail";
   const mailPromise = pi
     .exec(
@@ -646,13 +726,18 @@ async function refreshStatus(
           result.code === 0 ? parseGitStatus(result.stdout) : undefined,
         );
 
-  const netstatArgs =
-    process.platform === "darwin" ? ["-an", "-p", "tcp"] : ["-ant"];
-  const netstatPromise = pi
-    .exec("netstat", netstatArgs, { timeout: 5_000 })
-    .then((result) =>
-      result.code === 0 ? parseListeningDevPorts(result.stdout) : undefined,
+  const serverPortsPromise = Promise.all([
+    pi.exec("ps", ["-axo", "pid=,ppid="], { timeout: 5_000 }),
+    pi.exec("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"], {
+      timeout: 5_000,
+    }),
+  ]).then(([processes, listeners]) => {
+    if (processes.code !== 0 || listeners.code !== 0) return undefined;
+    return parseListeningDevPorts(
+      listeners.stdout,
+      descendantProcessIds(processes.stdout, process.pid),
     );
+  });
 
   const immediateBilling = billingStatus(ctx);
   const shouldRefreshSubscription =
@@ -663,12 +748,12 @@ async function refreshStatus(
     ? subscriptionBillingStatus(ctx)
     : Promise.resolve(immediateBilling ?? state.billing);
 
-  const [mailResult, jjResult, gitResult, netstatResult, billingResult] =
+  const [mailResult, jjResult, gitResult, serverPortsResult, billingResult] =
     await Promise.allSettled([
       mailPromise,
       jjPromise,
       gitPromise,
-      netstatPromise,
+      serverPortsPromise,
       billingPromise,
     ]);
   state.mail = mailResult.status === "fulfilled" ? mailResult.value : undefined;
@@ -697,10 +782,10 @@ async function refreshStatus(
     state.gitFailed = true;
   }
   if (
-    netstatResult.status === "fulfilled" &&
-    netstatResult.value !== undefined
+    serverPortsResult.status === "fulfilled" &&
+    serverPortsResult.value !== undefined
   ) {
-    state.devPorts = netstatResult.value;
+    state.devPorts = serverPortsResult.value;
     state.devPortsFailed = false;
   } else {
     state.devPorts = undefined;
@@ -736,7 +821,9 @@ function isPushEvent(value: unknown): value is PushEvent {
     event.version === PROTOCOL_VERSION &&
     (event.type === "connected" || event.type === "mail") &&
     typeof event.project === "string" &&
-    typeof event.sessionId === "string"
+    typeof event.sessionId === "string" &&
+    (event.type !== "connected" ||
+      typeof event.requestedSessionId === "string")
   );
 }
 
@@ -777,10 +864,12 @@ async function consumeStream(
   signal: AbortSignal,
 ): Promise<void> {
   const baseUrl = daemonUrl();
-  const sessionId = ctx.sessionManager.getSessionId();
+  const requestedSessionId = agentMailSessionId(
+    ctx.sessionManager.getSessionId(),
+  );
   const url = new URL("/api/v1/push/oh-my-pi", baseUrl);
   url.searchParams.set("project", ctx.cwd);
-  url.searchParams.set("sessionId", sessionId);
+  url.searchParams.set("sessionId", requestedSessionId);
   url.searchParams.set("pid", String(process.pid));
 
   const response = await fetch(url, { signal });
@@ -789,13 +878,16 @@ async function consumeStream(
       `agent-mail OMP push connection failed (${response.status}): ${await response.text()}`,
     );
   }
-  if (response.headers.get("x-agent-mail-protocol") !== "1") {
+  if (
+    response.headers.get("x-agent-mail-protocol") !== String(PROTOCOL_VERSION)
+  ) {
     throw new Error("agent-mail returned an unsupported OMP push protocol.");
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
+  let sessionId: string | undefined;
   while (!signal.aborted) {
     const result = await reader.read();
     if (result.done) break;
@@ -810,16 +902,28 @@ async function consumeStream(
       if (!isPushEvent(value)) {
         throw new Error("agent-mail returned a malformed OMP push event.");
       }
-      if (value.sessionId !== sessionId || value.project !== ctx.cwd) {
+      if (value.project !== ctx.cwd) {
         throw new Error(
           "agent-mail returned an event whose exact OMP session join failed.",
         );
       }
       if (value.type === "connected") {
+        if (value.requestedSessionId !== requestedSessionId) {
+          throw new Error(
+            "agent-mail returned a connection for another OMP session.",
+          );
+        }
+        sessionId = value.sessionId;
+        state.sessionId = sessionId;
         state.address = value.address;
         state.push = "online";
         state.requestWidgetRender?.();
         continue;
+      }
+      if (!sessionId || value.sessionId !== sessionId) {
+        throw new Error(
+          "agent-mail returned mail for another routed session.",
+        );
       }
       pi.sendMessage(
         {

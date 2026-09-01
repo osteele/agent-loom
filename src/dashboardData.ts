@@ -15,6 +15,7 @@ import {
   type ProcessScan,
   type Registration,
   capabilityLabels,
+  coalesceRegistrations,
   listLive,
 } from "./registry.ts";
 import {
@@ -142,7 +143,7 @@ function preview(text: string, max = 120): string {
 
 function presence(registrations: Registration[]): PresenceEntry[] {
   const meta = claudeSessions();
-  return registrations
+  return coalesceRegistrations(registrations)
     .map((r) => {
       // Derive the label from live Claude meta + cwd; the registry `name`
       // snapshot may be stale (a rename) or a legacy synthetic id.
