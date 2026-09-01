@@ -11,7 +11,8 @@
  *   sender names, all of which are peer-claimed and untrusted.
  * - **Edge-triggered.** A reminder fires when the newest visible unread
  *   message id changes; while mail stays unread, a bounded re-reminder fires
- *   after RE_REMINDER_MS. No per-event wallpaper.
+ *   after RE_REMINDER_MS. Stop hooks may continue only on one of those
+ *   reminder edges, never merely because the inbox remains unread.
  * - **Stale means silent.** A missing or stale summary snapshot produces no
  *   count claim — never an implied 0 — and the only trace is a rate-limited
  *   diagnostics line, decided by `diagnosticDue`.
@@ -20,8 +21,14 @@
 import type { AnnouncedState } from "./announced.ts";
 import type { UnreadSummaryEntry } from "./unreadSummary.ts";
 
-export type ReminderFormat = "codex" | "kimi" | "gemini";
+export type ReminderFormat = "codex" | "kimi" | "gemini" | "pi";
 export type ReminderDecision = "silent" | "remind" | "stale";
+
+export interface ReminderHookResponse {
+  stdout: string;
+  stderr: string;
+  exitCode: 0 | 2;
+}
 
 /** How long unread mail sits before a session is re-reminded about the same
  * newest message. A constant by design; promote to config only if asked. */
@@ -62,7 +69,7 @@ export function decideReminder(opts: {
   snapshotStale: boolean;
   announced: AnnouncedState | undefined;
   nowMs: number;
-  reReminderMs?: number;
+  reReminderMs?: number | null;
 }): ReminderDecision {
   const { sessionId, entry, snapshotStale, announced, nowMs } = opts;
   if (!sessionId) return "silent";
@@ -71,6 +78,7 @@ export function decideReminder(opts: {
   if (entry.newestId !== announced?.lastNewestId) return "remind";
   if (
     announced &&
+    opts.reReminderMs !== null &&
     nowMs - announced.announcedAt > (opts.reReminderMs ?? RE_REMINDER_MS)
   ) {
     return "remind";
@@ -90,12 +98,12 @@ export function reminderText(unread: number, newestTs: string): string {
 
 /** Wrap the reminder text for one harness's hook protocol.
  *
- * Codex and Gemini read a JSON envelope off stdout; Kimi takes the bare
- * line. Gemini's event is fixed at BeforeAgent regardless of what fired the
- * hook — the output schema keys on the event the harness is injecting into,
- * not the one that happened to run the command. Any non-JSON stdout breaks a
- * JSON harness's parsing, which is why the caller prints nothing at all on
- * "silent". */
+ * Codex and Gemini read a JSON envelope off stdout; Kimi and the Pi extension
+ * take the bare line. Gemini's event is fixed at BeforeAgent regardless of
+ * what fired the hook — the output schema keys on the event the harness is
+ * injecting into, not the one that happened to run the command. Any non-JSON
+ * stdout breaks a JSON harness's parsing, which is why the caller prints
+ * nothing at all on "silent". */
 export function formatReminder(
   format: ReminderFormat,
   text: string,
@@ -103,6 +111,7 @@ export function formatReminder(
 ): string {
   switch (format) {
     case "kimi":
+    case "pi":
       return text;
     case "gemini":
       return JSON.stringify({
@@ -119,6 +128,31 @@ export function formatReminder(
         },
       });
   }
+}
+
+/** Map a reminder edge to the harness process contract.
+ *
+ * Codex and Kimi both reserve exit 2 plus stderr for a blocking Stop result.
+ * The Pi example extension treats the same result as its signal to enqueue a
+ * follow-up turn. Ordinary reminder events retain each harness's stdout
+ * protocol. The caller must persist the announced edge before emitting this
+ * response so a re-entered Stop hook cannot repeat the same continuation. */
+export function reminderHookResponse(
+  format: ReminderFormat,
+  text: string,
+  event = "UserPromptSubmit",
+): ReminderHookResponse {
+  if (
+    event === "Stop" &&
+    (format === "codex" || format === "kimi" || format === "pi")
+  ) {
+    return { stdout: "", stderr: text, exitCode: 2 };
+  }
+  return {
+    stdout: formatReminder(format, text, event),
+    stderr: "",
+    exitCode: 0,
+  };
 }
 
 /** The announced state after firing a reminder: new edge id and timestamp,

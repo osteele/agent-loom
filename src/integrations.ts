@@ -77,7 +77,7 @@ export function removeNativeAuditHook(
 //
 // Codex, Kimi, and Gemini never learn about unread mail unless they ask, so
 // `agent-mail hooks install` registers harness hooks that run `agent-mail
-// remind` per turn. Every transform keys on the command string (the hook's
+// remind` on turn activity and, where supported, Stop. Every transform keys on the command string (the hook's
 // routing identity), preserves neighbor hooks, and returns {document, changed}
 // like the native-audit transforms above.
 
@@ -152,6 +152,7 @@ function removeReminderHandlers(
 export const CODEX_REMINDER_EVENTS = [
   "UserPromptSubmit",
   "PostToolUse",
+  "Stop",
 ] as const;
 
 /** Add the Codex reminder hooks to a hooks.json document.
@@ -159,7 +160,8 @@ export const CODEX_REMINDER_EVENTS = [
  * `command` is the base command (`<runtime> <cli> remind --format codex`); the
  * per-event handler appends `--event <name>`. PostToolUse runs `async` so the
  * hook never blocks the tool call — Codex delivers its additionalContext at
- * the next safe point instead. */
+ * the next safe point instead. Stop is synchronous because exit 2 is the
+ * documented continuation signal. */
 export function addReminderHookCodex(
   document: Record<string, unknown>,
   command: string,
@@ -284,6 +286,40 @@ export function geminiReminderHookEvents(
 /** Markers delimiting the agent-mail block in ~/.kimi-code/config.toml. */
 export const KIMI_REMIND_BEGIN_MARKER = "# agent-mail-remind-begin";
 export const KIMI_REMIND_END_MARKER = "# agent-mail-remind-end";
+export const KIMI_REMINDER_EVENTS = ["UserPromptSubmit", "Stop"] as const;
+
+function kimiReminderBlock(command: string): string {
+  const hookLines = KIMI_REMINDER_EVENTS.flatMap((event, index) => {
+    const eventCommand = `${command} --event ${event}`;
+    const escaped = eventCommand
+      .replaceAll("\\", "\\\\")
+      .replaceAll('"', '\\"');
+    return [
+      ...(index === 0 ? [] : [""]),
+      "[[hooks]]",
+      `event = "${event}"`,
+      `command = "${escaped}"`,
+      "timeout = 5",
+    ];
+  });
+  return [
+    KIMI_REMIND_BEGIN_MARKER,
+    ...hookLines,
+    KIMI_REMIND_END_MARKER,
+    "",
+  ].join("\n");
+}
+
+/** Events present inside agent-mail's owned Kimi marker block. */
+export function kimiReminderHookEvents(text: string): string[] {
+  const begin = text.indexOf(KIMI_REMIND_BEGIN_MARKER);
+  if (begin === -1) return [];
+  const endMarker = text.indexOf(KIMI_REMIND_END_MARKER, begin);
+  const block = text.slice(begin, endMarker === -1 ? text.length : endMarker);
+  return KIMI_REMINDER_EVENTS.filter((event) =>
+    block.includes(`event = "${event}"`),
+  );
+}
 
 /** Append the Kimi reminder hook block to config.toml text.
  *
@@ -294,19 +330,18 @@ export function addReminderHookKimi(
   text: string,
   command: string,
 ): { document: string; changed: boolean } {
-  if (text.includes(KIMI_REMIND_BEGIN_MARKER)) {
-    return { document: text, changed: false };
+  const block = kimiReminderBlock(command);
+  const begin = text.indexOf(KIMI_REMIND_BEGIN_MARKER);
+  if (begin !== -1) {
+    const endMarker = text.indexOf(KIMI_REMIND_END_MARKER, begin);
+    let end =
+      endMarker === -1
+        ? text.length
+        : endMarker + KIMI_REMIND_END_MARKER.length;
+    if (text[end] === "\n") end += 1;
+    const document = text.slice(0, begin) + block + text.slice(end);
+    return { document, changed: document !== text };
   }
-  const escaped = command.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-  const block = [
-    KIMI_REMIND_BEGIN_MARKER,
-    "[[hooks]]",
-    'event = "UserPromptSubmit"',
-    `command = "${escaped}"`,
-    "timeout = 5",
-    KIMI_REMIND_END_MARKER,
-    "",
-  ].join("\n");
   const separator = text === "" || text.endsWith("\n") ? "" : "\n";
   return { document: `${text}${separator}${block}`, changed: true };
 }

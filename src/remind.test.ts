@@ -8,6 +8,7 @@ import {
   displayedUnreadCount,
   formatReminder,
   nextAnnouncedState,
+  reminderHookResponse,
   reminderText,
   startupUnreadText,
 } from "./remind.ts";
@@ -113,6 +114,15 @@ test("a custom re-reminder interval is honored", () => {
   ).toBe("silent");
 });
 
+test("re-reminders can be disabled for Stop events", () => {
+  expect(
+    decide({
+      announced: announced({ announcedAt: NOW - RE_REMINDER_MS - 1 }),
+      reReminderMs: null,
+    }),
+  ).toBe("silent");
+});
+
 // --- reminderText --------------------------------------------------------------
 
 test("startup text is omitted for zero and reports a fixed-text backlog", () => {
@@ -181,6 +191,40 @@ test("gemini output always keys on BeforeAgent", () => {
       },
     }),
   );
+});
+
+test("a Codex or Kimi Stop reminder requests one continuation on stderr", () => {
+  expect(reminderHookResponse("codex", "TEXT", "Stop")).toEqual({
+    stdout: "",
+    stderr: "TEXT",
+    exitCode: 2,
+  });
+  expect(reminderHookResponse("kimi", "TEXT", "Stop")).toEqual({
+    stdout: "",
+    stderr: "TEXT",
+    exitCode: 2,
+  });
+});
+
+test("the Pi extension receives the same Stop signal", () => {
+  expect(reminderHookResponse("pi", "TEXT", "Stop")).toEqual({
+    stdout: "",
+    stderr: "TEXT",
+    exitCode: 2,
+  });
+});
+
+test("ordinary reminder events retain their harness stdout protocol", () => {
+  expect(reminderHookResponse("codex", "TEXT", "UserPromptSubmit")).toEqual({
+    stdout: formatReminder("codex", "TEXT", "UserPromptSubmit"),
+    stderr: "",
+    exitCode: 0,
+  });
+  expect(reminderHookResponse("kimi", "TEXT", "UserPromptSubmit")).toEqual({
+    stdout: "TEXT",
+    stderr: "",
+    exitCode: 0,
+  });
 });
 
 // --- announced bookkeeping -------------------------------------------------------

@@ -9,8 +9,9 @@ content.
 Codex, Kimi Code, and Gemini CLI receive no channel push after startup.
 Reminder hooks close that later-arrival gap: a hook registered with the
 harness runs `agent-mail remind` on turn events, and whatever it prints enters
-the model's context. An idle session gets nothing, because hooks fire only
-when the harness is already doing something.
+the model's context. Codex and Kimi also run one check at Stop, where a newly
+unannounced mail edge requests one follow-up turn. There is no timer or
+background polling loop.
 
 Four parts make this work:
 
@@ -22,10 +23,11 @@ Four parts make this work:
   10-second presence tick: a per-session unread count with the newest visible
   message id and timestamp. Muted sessions are omitted. The snapshot has a
   30-second TTL and is a presentation cache, never a routing input.
-- `agent-mail remind --format codex|kimi|gemini` reads that snapshot and
+- `agent-mail remind --format codex|kimi|gemini|pi` reads that snapshot and
   prints a harness-formatted reminder, or nothing. It edge-triggers on a new
   newest-message id and re-reminds after 15 minutes while the same mail stays
-  unread. It always exits 0.
+  unread during activity. At Codex/Kimi Stop, only a different newest-message
+  id can request one continuation; time-based re-reminders are disabled.
 - `agent-mail hooks install` registers the hook command with each harness.
 
 The reminder text carries only facts the daemon computed:
@@ -43,13 +45,16 @@ reaches the model through this path.
 These rules are what make reminders safe to install; they are tested in
 `src/remind.test.ts` and should not regress.
 
-1. **Piggyback, not periodic.** Hooks fire on harness events
+1. **Event-driven, not periodic.** Hooks fire on harness events
    (`UserPromptSubmit` or `BeforeAgent` per turn, plus `PostToolUse` or
-   `AfterTool` where cheap). Nothing polls on a timer, so an idle session
-   burns no tokens on reminders.
-2. **Never block Stop for ordinary mail.** Peer mail is untrusted, and
-   letting it force continuation is a token-burn and availability attack. No
-   Stop hooks are installed.
+   `AfterTool` where cheap, and Stop where bounded continuation is supported).
+   Nothing polls on a timer.
+2. **One Stop continuation per new mail edge.** Codex and Kimi persist the
+   newest announced message id before requesting continuation. Re-entering
+   Stop with the same newest id is silent, and the 15-minute re-reminder does
+   not apply at Stop. A peer can still force another continuation by sending
+   another message; that bounded risk is recorded in
+   [decision 0015](decisions/0015-stop-hooks-continue-once-per-new-mail-edge.md).
 3. **Harness-owned facts only.** The payload is a capped count, a timestamp,
    and a fixed instruction. Peer-authored text, including sender names, stays
    out.
@@ -82,11 +87,13 @@ string, so they preserve neighboring hooks and can be re-run safely.
 `status` reports, per harness, whether the hooks are installed and on which
 events.
 
-- **Codex**: `~/.codex/hooks.json` gains a synchronous `UserPromptSubmit`
-  hook and an asynchronous `PostToolUse` hook. The async hook delivers its
-  context at the next safe point without blocking the tool call.
-- **Kimi**: `~/.kimi-code/config.toml` gains a marker-delimited `[[hooks]]`
-  block for `UserPromptSubmit`, appended at the end of the file.
+- **Codex**: `~/.codex/hooks.json` gains synchronous `UserPromptSubmit` and
+  `Stop` hooks plus an asynchronous `PostToolUse` hook. The async hook delivers
+  its context at the next safe point without blocking the tool call. A Stop
+  reminder uses exit 2 and fixed stderr text to request the follow-up turn.
+- **Kimi**: `~/.kimi-code/config.toml` gains marker-delimited `[[hooks]]`
+  entries for `UserPromptSubmit` and `Stop`, appended at the end of the file.
+  Stop uses the same exit-2 contract.
 - **Gemini**: `~/.gemini/settings.json` gains a `BeforeAgent` hook.
   `AfterTool` is opt-in via `--gemini-after-tool`, because Gemini hooks are
   synchronous: the CLI waits for each one, so a per-tool-call spawn taxes the
@@ -150,12 +157,16 @@ them.
   checkout, `bun src/cli.ts restart`.
 - **The reminder already fired for this mail.** The edge trigger fires once
   per newest-message id, then again only after 15 unread minutes. The
-   bookkeeping in `~/.claude/agent-mail/announced/<slug>-<sessionId>.json`
+  bookkeeping in `~/.claude/agent-mail/announced/<slug>-<sessionId>.json`
   records what was announced; deleting the file resets the edge.
+- **Stop did not continue.** If `UserPromptSubmit` or `PostToolUse` already
+  announced the newest id, Stop correctly stays silent. Time-based
+  re-reminders also never request continuation.
 - **The hook printed nothing on a manual run.** Run
   `agent-mail remind --format codex --session <id> --project <dir>` by hand.
   Empty stdout with exit 0 covers both "nothing to say" and "something
-  failed"; the diagnostics log separates the two.
+  failed"; the diagnostics log separates the two. A manual `--event Stop`
+  run exits 2 only for a newly unannounced edge, so it also advances the edge.
 
 ## OpenCode
 
@@ -163,10 +174,37 @@ OpenCode stays pull-only for now. Push through its `/prompt_async` endpoint
 is a deferred follow-up: it needs a delivery-semantics spike and launcher
 port registration in agent-command-guards before it can land.
 
-## Periodic wake-up in Kimi
+## Pi and DeepSeek Harness
 
-A Kimi session that must notice mail while idle can opt into periodic
-wake-up by scheduling its own cron task that calls `check_inbox`. Each fire
-costs a turn and the task lives only for that session, so this suits
-long-running delegates rather than everyday sessions. The hook reminders
-above remain the default: they cost nothing while the session is idle.
+Pi exposes a settled-turn event and an API for enqueueing a follow-up turn.
+The example extension in `examples/pi/agent-mail-reminder.ts` maps the same
+edge-triggered `agent-mail remind --format pi --event Stop` result to that API.
+It does not poll. Pi still needs agent-mail's MCP server and the same stable
+session identity in both the MCP process and extension process; the extension
+is only the reminder adapter. Copy it into Pi's global extension directory and
+reload Pi:
+
+```bash
+cp examples/pi/agent-mail-reminder.ts \
+  ~/.pi/agent/extensions/agent-mail-reminder.ts
+```
+
+Set `AGENT_MAIL_BIN` only when `agent-mail` is not on Pi's `PATH`. See Pi's
+[extension documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md)
+for extension discovery and trust behavior.
+
+DeepSeek Harness can load the normal Codex hooks file through its first-party
+Codex hook bridge. Once agent-mail's MCP server is registered under the same
+session identity, no separate reminder format is needed: the bridge preserves
+Codex's Stop exit-2 contract and the announced-edge guard remains authoritative.
+Point the bridge at the file written by `agent-mail hooks install --codex`:
+
+```yaml
+- name: "@deepseek-ai/dsh-hooks-codex"
+  config:
+    configPath: /absolute/path/to/.codex/hooks.json
+```
+
+The bridge skips Codex's asynchronous `PostToolUse` entry, but the synchronous
+`UserPromptSubmit` and `Stop` entries work. See the bridge's
+[package reference](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/hooks/hooks-codex/README.md).

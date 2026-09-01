@@ -61,4 +61,4 @@ exists. The edits are additive and removable (`agent-mail hooks uninstall`),
 and `agent-mail hooks status` reports what is in place. Restart the harness
 sessions afterward; hooks are read at launch.
 [reminders.md](reminders.md) covers what each harness gets and how to verify
-it reaches the model.
+it reaches the model, including the bounded Codex and Kimi Stop behavior.

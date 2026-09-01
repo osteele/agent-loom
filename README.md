@@ -208,8 +208,11 @@ Every agent-mail MCP server reports an existing unread backlog in its initial
 instructions. Codex, Kimi Code, and Gemini CLI have no channel push for mail
 that arrives afterward, so reminder hooks close that gap: the harness runs
 `agent-mail remind` on turn events, and unread counts enter the model's context
-when there is mail waiting. The later-arrival reminders need the daemon, which
-computes the per-session unread summary.
+when there is mail waiting. Codex and Kimi also check once at Stop: a newly
+unannounced mail edge requests one follow-up turn, while unchanged unread mail
+allows the session to stop. The later-arrival reminders need the daemon, which
+computes the per-session unread summary. Reminder text never includes a sender,
+subject, topic, preview, or body.
 
 ```bash
 agent-mail hooks install

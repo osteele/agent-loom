@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; its rejection of Stop-blocking is superseded by [0015](0015-stop-hooks-continue-once-per-new-mail-edge.md)
 date: 2026-08-22
 ---
 

@@ -139,16 +139,19 @@ and Kimi Code adapters.
 ### `remind`
 
 ```
-agent-mail remind --format codex|kimi|gemini [--event <name>] [--session <id>] [--project <dir>]
+agent-mail remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
 ```
 
 Prints an unread-mail reminder for a harness hook, or nothing. Harnesses
-without channel push (Codex, Kimi, Gemini) run this command from their hooks
-and inject its stdout into the model's context. The answer comes from the
-daemon's unread-summary snapshot: the command edge-triggers on a new newest
-message and re-reminds after 15 minutes while the same mail stays unread. It
-always exits 0 and keeps stdout machine-clean; a stale or missing snapshot
-prints nothing and appends a rate-limited line to
+without channel push run this command from their hooks and inject its output
+into the model's context. The answer comes from the daemon's unread-summary
+snapshot: the command edge-triggers on a new newest message and re-reminds
+after 15 minutes while the same mail stays unread. At Codex or Kimi `Stop`, a
+new edge is persisted and then exits 2 with fixed reminder text on stderr to
+request one continuation; the same edge cannot continue twice. The `pi`
+format exposes that signal to the example Pi extension. All failures fail open
+with exit 0; a stale or missing snapshot prints nothing and appends a
+rate-limited line to
 `~/.claude/agent-mail/remind-diagnostics.log`. The session id resolves from
 `--session`, then the stdin hook payload's `session_id`, then
 `GEMINI_SESSION_ID`, then the session identity environment variables.
@@ -451,10 +454,11 @@ agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemin
 Installs, removes, or reports the unread-mail reminder hooks for pull-only
 harnesses. With no harness flag, install and uninstall apply to every harness
 whose config directory exists (`~/.codex`, `~/.kimi-code`, `~/.gemini`). Codex
-gains a synchronous `UserPromptSubmit` hook and an asynchronous `PostToolUse`
-hook in `~/.codex/hooks.json`; Kimi gains a marker-delimited `[[hooks]]`
-`UserPromptSubmit` block in `~/.kimi-code/config.toml`; Gemini gains a
-`BeforeAgent` hook in `~/.gemini/settings.json`. `--gemini-after-tool`
+gains synchronous `UserPromptSubmit` and `Stop` hooks plus an asynchronous
+`PostToolUse` hook in `~/.codex/hooks.json`; Kimi gains marker-delimited
+`[[hooks]]` entries for `UserPromptSubmit` and `Stop` in
+`~/.kimi-code/config.toml`; Gemini gains a `BeforeAgent` hook in
+`~/.gemini/settings.json`. `--gemini-after-tool`
 additionally installs Gemini's `AfterTool` hook, which is opt-in because
 Gemini waits for each hook to finish. `status` prints, per harness, whether
 the hooks are installed and on which events. The transforms are additive and

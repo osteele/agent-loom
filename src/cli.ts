@@ -26,7 +26,7 @@
  *   agent-mail status-line [--project <dir>] [--session <id>] [--debug]
  *
  * Reminders (hook-driven, for pull-only harnesses):
- *   agent-mail remind --format codex|kimi|gemini [--event <name>] [--session <id>] [--project <dir>]
+ *   agent-mail remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
  *   agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemini-after-tool]
  *
  * Daemon management (launchd-aware: uses launchctl when the LaunchAgent is
@@ -79,7 +79,6 @@ import { openBrowser, serveDashboard } from "./dashboard.ts";
 import { buildReadOnlyState } from "./dashboardData.ts";
 import { classifyFallback, settled, withAttemptKey } from "./delivery.ts";
 import {
-  KIMI_REMIND_BEGIN_MARKER,
   addNativeAuditHook,
   addReminderHookCodex,
   addReminderHookGemini,
@@ -89,6 +88,7 @@ import {
   codexReminderHookEvents,
   enabledAgentMailPlugin,
   geminiReminderHookEvents,
+  kimiReminderHookEvents,
   removeNativeAuditHook,
   removeOpenCodeMcpRegistration,
   removeReminderHookCodex,
@@ -130,8 +130,8 @@ import {
 import {
   decideReminder,
   diagnosticDue,
-  formatReminder,
   nextAnnouncedState,
+  reminderHookResponse,
   reminderText,
 } from "./remind.ts";
 import { readStdinText, sleepSync } from "./runtime.ts";
@@ -1119,26 +1119,31 @@ async function cmdStatusLine(
 
 /** Print an unread-mail reminder for a harness hook, or nothing at all.
  *
- * Codex, Kimi, and Gemini never learn about unread mail unless they ask, so
+ * Pull-only harnesses never learn about unread mail unless they ask, so
  * their hooks run this command on harness events and inject whatever it
  * prints into the model's context. The answer comes from the daemon's
  * unread-summary snapshot — a hook fires per turn and cannot afford a spool
  * scan per event.
  *
- * Always exits 0, including on error, and stdout is machine-clean: a
- * non-zero exit or a stray stdout line can break the harness's hook
- * parsing (Gemini treats any non-JSON stdout as a protocol error), and a
- * reminder must never block the harness. "Nothing to say" and "something
- * failed" are deliberately indistinguishable on stdout; failures and stale
- * snapshots leave a rate-limited line in the diagnostics log instead. */
+ * Ordinary events and every failure exit 0 with machine-clean stdout. A new
+ * reminder edge at Codex/Kimi Stop exits 2 with fixed text on stderr, asking
+ * the harness for one more turn. The announced edge is written first, so the
+ * same unread state cannot create a Stop loop. */
 async function cmdRemind(
   flags: Record<string, string | boolean>,
 ): Promise<void> {
   try {
     const format = flags.format;
-    if (format !== "codex" && format !== "kimi" && format !== "gemini") {
+    if (
+      format !== "codex" &&
+      format !== "kimi" &&
+      format !== "gemini" &&
+      format !== "pi"
+    ) {
       // Operator error, not a hook event: stderr is safe, stdout stays clean.
-      console.error("agent-mail remind: --format codex|kimi|gemini required");
+      console.error(
+        "agent-mail remind: --format codex|kimi|gemini|pi required",
+      );
       return;
     }
     const payload = await readStatusLinePayload();
@@ -1164,25 +1169,28 @@ async function cmdRemind(
     const announced = sessionId
       ? readAnnouncedState(project, sessionId)
       : undefined;
+    const event = typeof flags.event === "string" ? flags.event : undefined;
     const decision = decideReminder({
       sessionId,
       entry,
       snapshotStale: snapshot === undefined,
       announced,
       nowMs,
+      // Time-based re-reminders may add context to an active turn, but must
+      // never manufacture another Stop continuation for the same mail edge.
+      reReminderMs: event === "Stop" ? null : undefined,
     });
     if (decision === "remind" && entry && sessionId) {
       const text = reminderText(entry.unread, entry.newestTs ?? "");
-      console.log(
-        formatReminder(
-          format,
-          text,
-          typeof flags.event === "string" ? flags.event : undefined,
-        ),
-      );
+      const response = reminderHookResponse(format, text, event);
+      // Commit the edge before asking a Stop hook to continue. If the harness
+      // immediately re-enters Stop, this edge is already silent.
       writeAnnouncedState(
         nextAnnouncedState(announced, entry, sessionId, project, nowMs),
       );
+      if (response.stdout) console.log(response.stdout);
+      if (response.stderr) console.error(response.stderr);
+      process.exitCode = response.exitCode;
     } else if (decision === "stale" && sessionId) {
       if (diagnosticDue(announced?.lastDiagAt, nowMs)) {
         // State first: its write creates the state root the log lives under.
@@ -1205,8 +1213,10 @@ async function cmdRemind(
     }
     // "silent": nothing on stdout, nothing stamped.
   } catch {
-    // Hooks must never block the harness: any failure leaves stdout empty
-    // and exits 0, same as "nothing to say".
+    // Fail open: any failure leaves stdout empty and exits 0, same as
+    // "nothing to say". Only a fully computed, persisted reminder edge may
+    // request continuation.
+    process.exitCode = 0;
   }
 }
 
@@ -1225,10 +1235,6 @@ const HOOK_CONFIG_PATHS: Record<HookHarness, string> = {
  * checkout (.ts) and from the published package (.js) alike. */
 function remindCommandBase(format: HookHarness): string {
   return `${runtimePath()} ${SELF} remind --format ${format}`;
-}
-
-function remindCommand(format: HookHarness, event: string): string {
-  return `${remindCommandBase(format)} --event ${event}`;
 }
 
 function readJsonDocument(path: string): Record<string, unknown> {
@@ -1256,9 +1262,7 @@ function hookTargets(flags: Record<string, string | boolean>): HookHarness[] {
 function hookEventsInstalled(harness: HookHarness, path: string): string[] {
   if (harness === "kimi") {
     if (!existsSync(path)) return [];
-    return readFileSync(path, "utf8").includes(KIMI_REMIND_BEGIN_MARKER)
-      ? ["UserPromptSubmit"]
-      : [];
+    return kimiReminderHookEvents(readFileSync(path, "utf8"));
   }
   const document = readJsonDocument(path);
   return harness === "codex"
@@ -1274,16 +1278,13 @@ function installHooks(harness: HookHarness, geminiAfterTool: boolean): void {
   }
   if (harness === "kimi") {
     const text = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const result = addReminderHookKimi(
-      text,
-      remindCommand("kimi", "UserPromptSubmit"),
-    );
+    const result = addReminderHookKimi(text, remindCommandBase("kimi"));
     if (!result.changed) {
       console.log("kimi: reminder hook already installed");
       return;
     }
     writeFileSync(path, result.document);
-    console.log(`kimi: installed UserPromptSubmit hook in ${path}`);
+    console.log(`kimi: installed UserPromptSubmit + Stop hooks in ${path}`);
     return;
   }
   const document = readJsonDocument(path);
@@ -1295,7 +1296,7 @@ function installHooks(harness: HookHarness, geminiAfterTool: boolean): void {
     }
     writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
     console.log(
-      `codex: installed UserPromptSubmit + PostToolUse hooks in ${path}`,
+      `codex: installed UserPromptSubmit + PostToolUse + Stop hooks in ${path}`,
     );
     return;
   }
@@ -2612,12 +2613,13 @@ Status line:
                         payload on stdin and falls back to session-id env vars.
 
 Reminders (hook-driven, for pull-only harnesses):
-  remind --format codex|kimi|gemini [--event <name>] [--session <id>]
+  remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>]
          [--project <dir>]
                         Print an unread-mail reminder for a harness hook, or
                         nothing when there is nothing new to say. Reads the
-                        daemon's unread summary; always exits 0 and keeps
-                        stdout machine-clean.
+                        daemon's unread summary. A new Codex/Kimi Stop edge
+                        exits 2 with fixed reminder text on stderr; failures
+                        exit 0 and keep stdout machine-clean.
   hooks install [--codex] [--kimi] [--gemini] [--gemini-after-tool]
   hooks uninstall [--codex] [--kimi] [--gemini]
   hooks status [--codex] [--kimi] [--gemini]

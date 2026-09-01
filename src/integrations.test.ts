@@ -9,6 +9,7 @@ import {
   codexReminderHookEvents,
   enabledAgentMailPlugin,
   geminiReminderHookEvents,
+  kimiReminderHookEvents,
   removeNativeAuditHook,
   removeOpenCodeMcpRegistration,
   removeReminderHookCodex,
@@ -270,7 +271,7 @@ test("OpenCode registration rejects malformed schema containers", () => {
 
 // --- reminder hooks (pull-only harnesses) -------------------------------------
 
-test("codex reminder hook adds both event groups to an empty document", () => {
+test("codex reminder hook adds activity and Stop event groups", () => {
   const result = addReminderHookCodex({}, `${remindBase} codex`);
   expect(result.changed).toBe(true);
   expect(result.document).toEqual({
@@ -294,6 +295,17 @@ test("codex reminder hook adds both event groups to an empty document", () => {
               command: `${remindBase} codex --event PostToolUse`,
               timeout: 30,
               async: true,
+            },
+          ],
+        },
+      ],
+      Stop: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `${remindBase} codex --event Stop`,
+              timeout: 5,
             },
           ],
         },
@@ -334,6 +346,7 @@ test("codex reminder hook removal preserves neighbor hooks", () => {
       ],
       PreToolUse: [{ hooks: [{ type: "command", command: "guard" }] }],
       PostToolUse: [],
+      Stop: [],
     },
   });
   // Removal from a document without the hook is a no-op.
@@ -348,6 +361,7 @@ test("codex reminder hook events report what is installed", () => {
   expect(codexReminderHookEvents(installed, `${remindBase} codex`)).toEqual([
     "UserPromptSubmit",
     "PostToolUse",
+    "Stop",
   ]);
 });
 
@@ -448,10 +462,7 @@ test("gemini reminder hook events report what is installed", () => {
 });
 
 test("kimi reminder hook appends a marked block at EOF", () => {
-  const result = addReminderHookKimi(
-    "",
-    `${remindBase} kimi --event UserPromptSubmit`,
-  );
+  const result = addReminderHookKimi("", `${remindBase} kimi`);
   expect(result.changed).toBe(true);
   expect(result.document).toBe(
     [
@@ -459,6 +470,11 @@ test("kimi reminder hook appends a marked block at EOF", () => {
       "[[hooks]]",
       'event = "UserPromptSubmit"',
       `command = "${remindBase} kimi --event UserPromptSubmit"`,
+      "timeout = 5",
+      "",
+      "[[hooks]]",
+      'event = "Stop"',
+      `command = "${remindBase} kimi --event Stop"`,
       "timeout = 5",
       "# agent-mail-remind-end",
       "",
@@ -470,10 +486,7 @@ test("kimi reminder hook appends cleanly after another table section", () => {
   // A config ending mid-table (no trailing newline) must still produce valid
   // TOML: the new [[hooks]] header starts its own table.
   const existing = '[mcp_servers.agent-mail]\ncommand = "bun"';
-  const result = addReminderHookKimi(
-    existing,
-    `${remindBase} kimi --event UserPromptSubmit`,
-  );
+  const result = addReminderHookKimi(existing, `${remindBase} kimi`);
   expect(result.changed).toBe(true);
   expect(result.document.startsWith(`${existing}\n`)).toBe(true);
   expect(result.document).toContain(
@@ -482,16 +495,45 @@ test("kimi reminder hook appends cleanly after another table section", () => {
 });
 
 test("kimi reminder hook re-add is a no-op", () => {
-  const first = addReminderHookKimi(
-    "# existing\n",
-    `${remindBase} kimi --event UserPromptSubmit`,
-  );
-  const second = addReminderHookKimi(
-    first.document,
-    `${remindBase} kimi --event UserPromptSubmit`,
-  );
+  const first = addReminderHookKimi("# existing\n", `${remindBase} kimi`);
+  const second = addReminderHookKimi(first.document, `${remindBase} kimi`);
   expect(second.changed).toBe(false);
   expect(second.document).toBe(first.document);
+});
+
+test("kimi reminder hook upgrades the old single-event owned block", () => {
+  const legacy = [
+    "# before",
+    "# agent-mail-remind-begin",
+    "[[hooks]]",
+    'event = "UserPromptSubmit"',
+    `command = "${remindBase} kimi --event UserPromptSubmit"`,
+    "timeout = 5",
+    "# agent-mail-remind-end",
+    "[after]",
+    "key = 1",
+    "",
+  ].join("\n");
+  const result = addReminderHookKimi(legacy, `${remindBase} kimi`);
+  expect(result.changed).toBe(true);
+  expect(result.document).toContain('event = "Stop"');
+  expect(result.document).toContain("# before\n# agent-mail-remind-begin");
+  expect(result.document).toContain("# agent-mail-remind-end\n[after]");
+});
+
+test("kimi reminder status reads only the owned marker block", () => {
+  const installed = addReminderHookKimi("", `${remindBase} kimi`).document;
+  expect(kimiReminderHookEvents(installed)).toEqual([
+    "UserPromptSubmit",
+    "Stop",
+  ]);
+  const legacy = installed.replace(
+    `\n\n[[hooks]]\nevent = "Stop"\ncommand = "${remindBase} kimi --event Stop"\ntimeout = 5`,
+    "",
+  );
+  expect(kimiReminderHookEvents(`${legacy}\nevent = "Stop"`)).toEqual([
+    "UserPromptSubmit",
+  ]);
 });
 
 test("kimi reminder hook removal strips exactly the marked region", () => {
@@ -499,7 +541,7 @@ test("kimi reminder hook removal strips exactly the marked region", () => {
   const tail = "[other]\nkey = 1\n";
   const installed = addReminderHookKimi(
     `${head}\n`,
-    `${remindBase} kimi --event UserPromptSubmit`,
+    `${remindBase} kimi`,
   ).document;
   const withTail = installed + tail;
   const result = removeReminderHookKimi(withTail);
