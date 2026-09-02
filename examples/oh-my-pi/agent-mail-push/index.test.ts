@@ -20,6 +20,35 @@ test("OMP status preserves an unknown final Weft field", () => {
   });
 });
 
+test("OMP status validates the versioned execution-work field", () => {
+  expect(
+    parseMailStatus(
+      'Quiet Lantern\t2\t0\tpush\t0\t{"version":1,"items":[{"id":"lease-1","resourceType":"research-plan","resourceKey":"blinded-determinacy-calibration","state":"waiting","activity":"measurement · EXP-042","updatedAt":"2026-09-01T12:01:00.000Z"}]}\n',
+    ),
+  ).toEqual({
+    name: "Quiet Lantern",
+    peers: 2,
+    unread: 0,
+    unprocessed: 0,
+    work: {
+      version: 1,
+      items: [
+        {
+          id: "lease-1",
+          resourceType: "research-plan",
+          resourceKey: "blinded-determinacy-calibration",
+          state: "waiting",
+          activity: "measurement · EXP-042",
+          updatedAt: "2026-09-01T12:01:00.000Z",
+        },
+      ],
+    },
+  });
+  expect(
+    parseMailStatus('Quiet Lantern\t2\t0\tpush\t0\t{"version":2,"items":[]}\n'),
+  ).toBeUndefined();
+});
+
 test("OMP status rejects malformed counts instead of implying zero", () => {
   expect(parseMailStatus("Quiet Lantern\tmany\t0\tpush\t0\n")).toBeUndefined();
   expect(parseMailStatus("Quiet Lantern\t2\tmany\tpush\t0\n")).toBeUndefined();
@@ -108,6 +137,73 @@ test("OMP widget puts aligned progress bars last", () => {
   expect(barColumns[0]).toBe(barColumns[1]);
   expect(lines[0]?.endsWith("42%")).toBe(true);
   expect(lines[1]?.endsWith("37%")).toBe(true);
+});
+
+test("OMP widget adds a third row for active plan execution", () => {
+  const lines = renderResidualWidget(
+    {
+      effort: "high",
+      mail: {
+        name: "Evergreen Cake",
+        peers: 2,
+        unread: 0,
+        unprocessed: 0,
+        work: {
+          version: 1,
+          items: [
+            {
+              id: "lease-1",
+              resourceType: "research-plan",
+              resourceKey: "blinded-determinacy-calibration",
+              label: "Blinded determinacy calibration",
+              state: "waiting",
+              activity: "measurement · EXP-042",
+              updatedAt: "2026-09-01T12:01:00.000Z",
+            },
+          ],
+        },
+      },
+      peers: 2,
+      push: "online",
+    },
+    80,
+  );
+  expect(lines[2]).toBe(
+    "▶ blinded-determinacy-calibration · waiting · measurement · EXP-042",
+  );
+});
+
+test("OMP widget names an autonomous loop from its work lease", () => {
+  const lines = renderResidualWidget(
+    {
+      mail: {
+        name: "Evergreen Cake",
+        peers: 1,
+        unread: 0,
+        unprocessed: 0,
+        work: {
+          version: 1,
+          items: [
+            {
+              id: "loop-lease",
+              resourceType: "autonomous-loop",
+              resourceKey: "AUTONOMOUS",
+              label: "Autonomous Research Loop",
+              state: "working",
+              activity: "Review · tick 12 · EXP-042",
+              updatedAt: "2026-09-01T12:01:00.000Z",
+            },
+          ],
+        },
+      },
+      peers: 1,
+      push: "online",
+    },
+    80,
+  );
+  expect(lines[2]).toBe(
+    "▶ Autonomous Research Loop · Review · tick 12 · EXP-042",
+  );
 });
 
 test("OMP widget drops lower-priority fields at half-pane width", () => {

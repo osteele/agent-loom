@@ -360,6 +360,11 @@ invocation, rather than reimplementing agent-mail's registry and spool
 semantics in shell. Fields are only ever appended, so a consuming script can
 split positionally.
 
+`--fields --work` opts into a sixth, versioned JSON field containing the
+resolved session's logical-work leases. Status widgets can use it to show an
+executing research plan or autonomous loop without reading agent-mail's private
+state or parsing human-readable coordination output.
+
 #### Claude Code
 
 It reads Claude Code's [statusLine](https://code.claude.com/docs/en/statusline)

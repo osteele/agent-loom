@@ -150,6 +150,150 @@ test("status-line accepts Kimi cwd payload and launcher session id", async () =>
   }
 });
 
+test("status-line exposes this session's work through an opt-in versioned field", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-statusline-work-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(project, { recursive: true });
+  const canonical = realpathSync(project);
+  const workDirectory = join(
+    home,
+    ".claude",
+    "agent-mail",
+    "work",
+    projectSlug(canonical),
+  );
+  mkdirSync(workDirectory, { recursive: true });
+  mkdirSync(join(home, ".claude", "agent-mail"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude", "agent-mail", "presence.json"),
+    JSON.stringify({
+      version: 1,
+      generatedAt: Date.now(),
+      generatedBy: process.pid,
+      sessions: [
+        {
+          cwd: canonical,
+          pid: process.pid,
+          instanceId: "mcp-instance",
+          sessionId: "status-session",
+          client: "omp-coding-agent",
+          capabilities: { workLeases: true },
+          started: "2026-09-01T12:00:00.000Z",
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(workDirectory, "plan-lease.json"),
+    JSON.stringify({
+      version: 1,
+      id: "plan-lease",
+      project: canonical,
+      resource: {
+        type: "research-plan",
+        key: "blinded-determinacy-calibration",
+        label: "Blinded determinacy calibration",
+        sourcePath: join(
+          canonical,
+          "lab-notebook",
+          "plans",
+          "active",
+          "blinded-determinacy-calibration.md",
+        ),
+      },
+      owner: {
+        id: "status-session",
+        label: "Quiet Lantern",
+        sessionId: "status-session",
+        pid: process.pid,
+        instanceId: "mcp-instance",
+      },
+      state: "waiting",
+      activity: "measurement · EXP-042",
+      createdAt: "2026-09-01T12:00:00.000Z",
+      updatedAt: "2026-09-01T12:01:00.000Z",
+      revision: 1,
+    }),
+  );
+  writeFileSync(
+    join(workDirectory, "stale-plan-lease.json"),
+    JSON.stringify({
+      version: 1,
+      id: "stale-plan-lease",
+      project: canonical,
+      resource: {
+        type: "research-plan",
+        key: "stale-plan",
+      },
+      owner: {
+        id: "status-session",
+        label: "Old Quiet Lantern",
+        sessionId: "status-session",
+        pid: process.pid + 1,
+        instanceId: "old-mcp-instance",
+      },
+      state: "working",
+      activity: "must not be attributed to the resumed session",
+      createdAt: "2026-08-31T12:00:00.000Z",
+      updatedAt: "2026-08-31T12:01:00.000Z",
+      revision: 1,
+    }),
+  );
+  const cli = join(import.meta.dir, "cli.ts");
+  const env = {
+    ...process.env,
+    HOME: home,
+    CLAUDE_CODE_SESSION_ID: undefined,
+    CODEX_THREAD_ID: undefined,
+    AGENT_SESSION_ID: undefined,
+  };
+
+  try {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        cli,
+        "status-line",
+        "--fields",
+        "--work",
+        "--project",
+        project,
+        "--session",
+        "status-session",
+      ],
+      { stdin: "pipe", stdout: "pipe", stderr: "pipe", env },
+    );
+    child.stdin.end();
+    expect(await child.exited).toBe(0);
+    const fields = (await new Response(child.stdout).text()).trim().split("\t");
+    expect(fields).toHaveLength(6);
+    expect(JSON.parse(fields[5] ?? "")).toEqual({
+      version: 1,
+      items: [
+        {
+          id: "plan-lease",
+          resourceType: "research-plan",
+          resourceKey: "blinded-determinacy-calibration",
+          label: "Blinded determinacy calibration",
+          sourcePath: join(
+            canonical,
+            "lab-notebook",
+            "plans",
+            "active",
+            "blinded-determinacy-calibration.md",
+          ),
+          state: "waiting",
+          activity: "measurement · EXP-042",
+          updatedAt: "2026-09-01T12:01:00.000Z",
+        },
+      ],
+    });
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
 test("listeners --no-sync emits snapshot JSON without pruning registry", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-listeners-"));
   const home = join(root, "home");

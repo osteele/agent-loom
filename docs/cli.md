@@ -126,13 +126,15 @@ audit record. The default policy comes from the `inbound_policy` config key.
 ### `status-line`
 
 ```
-agent-mail status-line [--project <dir>] [--session <id>] [--fields] [--debug]
+agent-mail status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
 ```
 
 Prints this session's display name for a supported client status line, or one
 tab-separated line of identity fields with `--fields`. The command accepts
 explicit project and session flags, reads a client payload on stdin, and falls
 back to the session identity environment variables. It always exits 0.
+With `--fields --work`, it appends a versioned JSON document containing the
+resolved session's logical-work leases.
 [status-line.md](status-line.md) specifies the field order and the Claude Code
 and Kimi Code adapters.
 

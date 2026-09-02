@@ -23,7 +23,7 @@
  *   agent-mail slack-dashboard [--watch <seconds>]
  *
  * Status line:
- *   agent-mail status-line [--project <dir>] [--session <id>] [--debug]
+ *   agent-mail status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
  *
  * Reminders (hook-driven, for pull-only harnesses):
  *   agent-mail remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
@@ -1053,6 +1053,63 @@ function weftJobsField(sessionId: string | undefined): string {
   return count === undefined ? "" : String(count);
 }
 
+/** Versioned execution-work document for status clients that opt into it.
+ *
+ * Work is read from agent-mail's own supported store here, not by the display
+ * scraping `work list` output or opening the store itself. An empty field means
+ * the source could not be read; a successful read with no work is the explicit
+ * `{version: 1, items: []}` document. */
+function statusLineWorkField(
+  project: string,
+  sessionId: string | undefined,
+  sessions: Registration[],
+  debug: boolean,
+): string {
+  if (!sessionId) return "";
+  try {
+    const registrations = sessions.filter(
+      (registration) => registration.sessionId === sessionId,
+    );
+    const items = work
+      .list(project)
+      .filter(
+        (lease) =>
+          lease.owner.sessionId === sessionId &&
+          registrations.some((registration) => {
+            if (lease.owner.instanceId !== undefined) {
+              return lease.owner.instanceId === registration.instanceId;
+            }
+            if (lease.owner.procStart !== undefined) {
+              return (
+                lease.owner.pid === registration.pid &&
+                lease.owner.procStart === registration.procStart
+              );
+            }
+            return (
+              lease.owner.pid !== undefined &&
+              lease.owner.pid === registration.pid
+            );
+          }),
+      )
+      .map((lease) => ({
+        id: lease.id,
+        resourceType: lease.resource.type,
+        resourceKey: lease.resource.key,
+        ...(lease.resource.label ? { label: lease.resource.label } : {}),
+        ...(lease.resource.sourcePath
+          ? { sourcePath: lease.resource.sourcePath }
+          : {}),
+        state: lease.state,
+        ...(lease.activity ? { activity: lease.activity } : {}),
+        updatedAt: lease.updatedAt,
+      }));
+    return JSON.stringify({ version: 1, items });
+  } catch (error) {
+    if (debug) console.error(`status-line work failed: ${error}`);
+    return "";
+  }
+}
+
 async function cmdStatusLine(
   flags: Record<string, string | boolean>,
 ): Promise<void> {
@@ -1100,18 +1157,20 @@ async function cmdStatusLine(
       // spool — the second is how a display layer starts owning facts it does
       // not compute.
       const peers = peersInProject(sessions, sessionId, names, now, hostPids);
-      console.log(
-        [
-          name,
-          peers.length,
-          address ? unreadForSession(project, address) : 0,
-          pushDeliveryFor(sessions, address),
-          // Appended, never inserted: the consuming shell script splits
-          // positionally and lives outside this repo, so reordering silently
-          // mislabels every field after the one that moved.
-          weftJobsField(address),
-        ].join("\t"),
-      );
+      const fields = [
+        name,
+        peers.length,
+        address ? unreadForSession(project, address) : 0,
+        pushDeliveryFor(sessions, address),
+        // Appended, never inserted: the consuming shell script splits
+        // positionally and lives outside this repo, so reordering silently
+        // mislabels every field after the one that moved.
+        weftJobsField(address),
+      ];
+      if (flags.work === true) {
+        fields.push(statusLineWorkField(project, address, sessions, debug));
+      }
+      console.log(fields.join("\t"));
       return;
     }
     if (debug) {
@@ -2630,10 +2689,11 @@ Dashboards:
                         Post / refresh the editable Slack dashboard
 
 Status line:
-  status-line [--project <dir>] [--session <id>] [--fields] [--debug]
+  status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
                         Print this session's display name, or tab-separated
                         identity fields with --fields. Reads a supported client
                         payload on stdin and falls back to session-id env vars.
+                        --work appends versioned logical-work JSON to --fields.
 
 Reminders (hook-driven, for pull-only harnesses):
   remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>]

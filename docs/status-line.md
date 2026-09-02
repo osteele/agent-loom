@@ -74,6 +74,20 @@ significant; use a non-whitespace separator when parsing them in shell. The
 [Kimi example](../examples/status-lines/kimi.sh) replaces tabs with an ASCII
 unit separator before calling `read`.
 
+Pass `--work` with `--fields` to append a sixth field containing this exact
+session's logical work as a versioned JSON document:
+
+```json
+{"version":1,"items":[{"id":"…","resourceType":"research-plan","resourceKey":"blinded-determinacy-calibration","label":"Blinded determinacy calibration","sourcePath":"/project/lab-notebook/plans/active/blinded-determinacy-calibration.md","state":"waiting","activity":"measurement · EXP-042","updatedAt":"2026-09-01T12:01:00.000Z"}]}
+```
+
+The document is `{ "version": 1, "items": [] }` when the session owns no
+work. The field is empty when the work source cannot be read or the session has
+no resolved address. Consumers must validate the version and item schema before
+rendering it. `resourceKey` is the stable plan filename stem; `sourcePath` is
+optional provenance rather than identity. The JSON is opt-in so existing shell
+adapters that bind the fifth field as the remainder of the row keep working.
+
 ### The push/pull field
 
 The fourth field is `push` when channel push is expected to land, `pull` when it
@@ -104,7 +118,8 @@ this session has nothing pending.
   projects where agent-mail may not be installed.
 - Redirect stderr. `--debug` reports the resolved project, session ID, and peer
   recency there; ordinary status lines should not render it.
-- Keep one `agent-mail status-line --fields` call. Separate calls repeat process
+- Keep one `agent-mail status-line --fields` call. Add `--work` to that call
+  when execution state is displayed. Separate calls repeat process
   startup and can observe different snapshots.
 - The command always exits 0, including on errors. Empty output means there is
   nothing to show.

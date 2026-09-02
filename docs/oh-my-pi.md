@@ -42,7 +42,7 @@ discovery can therefore continue to import the existing Codex and
 agent-neutral instructions, skills, and MCP configuration instead of shadowing
 them with a second configuration tree.
 
-The extension replaces OMP's native status row with a responsive two-row widget.
+The extension replaces OMP's native status row with a responsive widget.
 To remove the native duplicate, configure an empty custom status line:
 
 ```yaml
@@ -61,10 +61,16 @@ name, peer count, and unread messages (`✉️`), followed by the active Python
 environment, JavaScript runtime, development-server ports, and weekly
 subscription use. Zero mail and job counts are omitted; an unavailable count
 renders as `?`, never as zero.
-Both rows use `·` separators and independently drop lower-priority fields to fit
-a narrow pane. Available progress bars are the final fields, expand through the
-remaining width, and use right-aligned `ctx` and `wk` labels. Both meters use
-the same shorter block and green for healthy headroom; the lower row's top gap
+When the resolved session owns a `research-plan` or `autonomous-loop` work
+lease, a third row shows the stable plan filename stem or `Autonomous Research
+Loop`, its waiting state, and the producer-owned activity text. The row is
+absent when neither lease exists. Plans and loops publish phase, tick, current
+experiment, or job details through the lease activity rather than making the
+widget parse notebook files or infer them from aggregate Weft counts.
+The first two rows use `·` separators and independently drop lower-priority
+fields to fit a narrow pane. Available progress bars are the final fields,
+expand through the remaining width, and use right-aligned `ctx` and `wk` labels.
+Both meters use the same shorter block and green for healthy headroom; the lower row's top gap
 separates the bars, and empty cells are dimmed. The aligned meter begins after
 whitespace rather than a `·`, so the final ordinary field does not carry a
 dangling separator.
@@ -100,7 +106,7 @@ Development ports come from `lsof`'s field output joined to a `ps` parent table.
 Only common listening ports owned by OMP or one of its descendants are shown;
 an unrelated server elsewhere on the machine cannot produce `:3000`. Other
 status refreshes consume the documented
-`agent-mail status-line --fields`, Git porcelain v2, jj template output, and OMP
+`agent-mail status-line --fields --work`, Git porcelain v2, jj template output, and OMP
 extension APIs instead of reading another tool's private state.
 
 Incoming messages use OMP custom messages with agent attribution, carry an

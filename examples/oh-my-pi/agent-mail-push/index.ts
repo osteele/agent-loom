@@ -23,6 +23,23 @@ interface MailStatus {
   peers: number;
   unread: number;
   unprocessed: number | undefined;
+  work?: ExecutionWorkSnapshot;
+}
+
+export interface ExecutionWorkItem {
+  id: string;
+  resourceType: string;
+  resourceKey: string;
+  label?: string;
+  sourcePath?: string;
+  state: "working" | "waiting";
+  activity?: string;
+  updatedAt: string;
+}
+
+export interface ExecutionWorkSnapshot {
+  version: 1;
+  items: ExecutionWorkItem[];
 }
 
 interface StatusState {
@@ -135,6 +152,49 @@ function renderedMail(event: MailEvent): string {
   ].join("\n");
 }
 
+function parseExecutionWork(value: string): ExecutionWorkSnapshot | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    !isObject(parsed) ||
+    parsed.version !== 1 ||
+    !Array.isArray(parsed.items)
+  ) {
+    return undefined;
+  }
+  const items: ExecutionWorkItem[] = [];
+  for (const item of parsed.items) {
+    if (
+      !isObject(item) ||
+      typeof item.id !== "string" ||
+      typeof item.resourceType !== "string" ||
+      typeof item.resourceKey !== "string" ||
+      (item.label !== undefined && typeof item.label !== "string") ||
+      (item.sourcePath !== undefined && typeof item.sourcePath !== "string") ||
+      (item.state !== "working" && item.state !== "waiting") ||
+      (item.activity !== undefined && typeof item.activity !== "string") ||
+      typeof item.updatedAt !== "string"
+    ) {
+      return undefined;
+    }
+    items.push({
+      id: item.id,
+      resourceType: item.resourceType,
+      resourceKey: item.resourceKey,
+      ...(item.label ? { label: item.label } : {}),
+      ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}),
+      state: item.state,
+      ...(item.activity ? { activity: item.activity } : {}),
+      updatedAt: item.updatedAt,
+    });
+  }
+  return { version: 1, items };
+}
+
 /** Parse agent-mail's documented append-only status-line field contract. */
 export function parseMailStatus(row: string): MailStatus | undefined {
   const line = row.endsWith("\n") ? row.slice(0, -1) : row;
@@ -153,7 +213,16 @@ export function parseMailStatus(row: string): MailStatus | undefined {
   ) {
     return undefined;
   }
-  return { name: fields[0], peers, unread, unprocessed };
+  const workField = fields[5];
+  const work = workField ? parseExecutionWork(workField) : undefined;
+  if (workField && !work) return undefined;
+  return {
+    name: fields[0],
+    peers,
+    unread,
+    unprocessed,
+    ...(work ? { work } : {}),
+  };
 }
 
 /** Use a proven launcher identity; otherwise request the join with OMP's id. */
@@ -489,6 +558,29 @@ function mailFields(state: StatusWidgetState): StyledField[] {
   return fields;
 }
 
+function executionFields(state: StatusWidgetState): StyledField[] {
+  const items = (state.mail?.work?.items ?? []).filter(
+    (item) =>
+      item.resourceType === "research-plan" ||
+      item.resourceType === "autonomous-loop",
+  );
+  return items.map((item) => {
+    const name =
+      item.resourceType === "research-plan"
+        ? item.resourceKey
+        : (item.label ?? "Autonomous Research Loop");
+    const details = [
+      item.state === "waiting" ? "waiting" : undefined,
+      item.activity,
+    ].filter((value): value is string => Boolean(value));
+    return {
+      priority: 100,
+      text: `▶ ${name}${details.length ? ` · ${details.join(" · ")}` : ""}`,
+      tone: item.state === "waiting" ? "warning" : "accent",
+    };
+  });
+}
+
 function usageBarParts(
   usedPercent: number,
   width: number,
@@ -568,8 +660,8 @@ export function renderResidualWidget(
   width: number,
 ): string[] {
   return alignTrailingProgress(
-    [statusFields(state), mailFields(state)].map((fields) =>
-      fitStyledFields(fields, width),
+    [statusFields(state), mailFields(state), executionFields(state)].map(
+      (fields) => fitStyledFields(fields, width),
     ),
     width,
   )
@@ -595,8 +687,8 @@ export function renderStyledResidualWidget(
   theme: { fg(color: string, text: string): string },
 ): string[] {
   return alignTrailingProgress(
-    [statusFields(state), mailFields(state)].map((fields) =>
-      fitStyledFields(fields, width),
+    [statusFields(state), mailFields(state), executionFields(state)].map(
+      (fields) => fitStyledFields(fields, width),
     ),
     width,
   )
@@ -752,10 +844,24 @@ async function refreshStatus(
   const mailPromise = pi
     .exec(
       mailCommand,
-      ["status-line", "--fields", "--project", ctx.cwd, "--session", sessionId],
+      [
+        "status-line",
+        "--fields",
+        "--work",
+        "--project",
+        ctx.cwd,
+        "--session",
+        sessionId,
+      ],
       { timeout: 5_000 },
     )
-    .then((result) => parseMailStatus(result.stdout));
+    .then((result) => {
+      const parsed = parseMailStatus(result.stdout);
+      if (result.stdout.trim() && !parsed) {
+        pi.logger.warn("Agent Mail returned an invalid status-line document.");
+      }
+      return parsed;
+    });
 
   const jjRoot = findJjRoot(ctx.cwd);
   const jjPromise = jjRoot
