@@ -48,14 +48,19 @@ statusLine:
 ```
 
 The first widget row carries the former native status information: the
-model/effort pair, project (`📁`), peer count, revision, and context-window bar.
-The second row carries the routable agent-mail display name, unread messages
-(`✉️`), pending terminal Weft jobs (`⚙️`), active Python environment, JavaScript
-runtime, development-server ports, and weekly subscription use. Zero mail and
-job counts are omitted; an unavailable count renders as `?`, never as zero.
+model/effort pair, project (`📁`), revision, pending terminal Weft jobs (`⚙️`),
+and context-window bar. The second row groups the routable agent-mail display
+name, peer count, and unread messages (`✉️`), followed by the active Python
+environment, JavaScript runtime, development-server ports, and weekly
+subscription use. Zero mail and job counts are omitted; an unavailable count
+renders as `?`, never as zero.
 Both rows use `·` separators and independently drop lower-priority fields to fit
 a narrow pane. Available progress bars are the final fields, expand through the
-remaining width, and use right-aligned `ctx` and `wk` labels.
+remaining width, and use right-aligned `ctx` and `wk` labels. Both meters use
+the same shorter block and green for healthy headroom; the lower row's top gap
+separates the bars, and empty cells are dimmed. The aligned meter begins after
+whitespace rather than a `·`, so the final ordinary field does not carry a
+dangling separator.
 
 In a jj workspace the revision comes from a tagged `jj log` template and Git is
 not queried or shown. A dirty working copy adds `*`; `ⅉ` identifies Jujutsu and

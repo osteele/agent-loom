@@ -33,9 +33,7 @@ test("OMP shares the launcher identity with its MCP server", () => {
   expect(agentMailSessionId("omp-native", "parent-agent", "41", 42)).toBe(
     "omp-native",
   );
-  expect(agentMailSessionId("omp-native", "  ", "42", 42)).toBe(
-    "omp-native",
-  );
+  expect(agentMailSessionId("omp-native", "  ", "42", 42)).toBe("omp-native");
 });
 
 test("OMP widget shows only development servers descended from OMP", () => {
@@ -101,11 +99,11 @@ test("OMP widget puts aligned progress bars last", () => {
     110,
   );
   expect(lines).toEqual([
-    "GPT-5.6 Sol/high · 📁 agent-mail · 2 peers · ⅉ main* ·       ctx █████████████████░░░░░░░░░░░░░░░░░░░░░░░  42%",
-    "Evergreen Cake · ✉️ 2 · ⚙️ 3 · py .venv · bun · :3000,8000 ·  wk ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░  37%",
+    "GPT-5.6 Sol/high · 📁 agent-mail · ⅉ main* · ⚙️ 3               ctx ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇░░░░░░░░░░░░░░░░░░░░░  42%",
+    "Evergreen Cake · 2 peers · ✉️ 2 · py .venv · bun · :3000,8000    wk ▇▇▇▇▇▇▇▇▇▇▇▇▇▇░░░░░░░░░░░░░░░░░░░░░░░  37%",
   ]);
   const barColumns = lines.map((line) =>
-    Bun.stringWidth(line.slice(0, line.indexOf("█"))),
+    Bun.stringWidth(line.slice(0, line.search(/[█▇]/u))),
   );
   expect(barColumns[0]).toBe(barColumns[1]);
   expect(lines[0]?.endsWith("42%")).toBe(true);
@@ -131,10 +129,7 @@ test("OMP widget drops lower-priority fields at half-pane width", () => {
       },
       38,
     ),
-  ).toEqual([
-    "model ?/high · 2 peers · ctx ?",
-    "Evergreen Cake · py .venv · bun · wk ?",
-  ]);
+  ).toEqual(["model ?/high · ctx ?", "Evergreen Cake · 2 peers · wk ?"]);
 });
 
 test("OMP widget truncates rather than overflowing a very narrow pane", () => {
@@ -152,35 +147,35 @@ test("OMP widget truncates rather than overflowing a very narrow pane", () => {
 });
 
 test("OMP widget uses the gitsync Jujutsu icon for a change id", () => {
-  expect(
-    renderResidualWidget(
-      {
-        effort: "high",
-        jj: "qvtszkkm*",
-        mail: {
-          name: "Evergreen Cake",
-          peers: 1,
-          unread: 0,
-          unprocessed: 0,
-        },
+  const lines = renderResidualWidget(
+    {
+      effort: "high",
+      jj: "qvtszkkm*",
+      mail: {
+        name: "Evergreen Cake",
         peers: 1,
-        push: "online",
+        unread: 0,
+        unprocessed: 0,
       },
-      80,
-    )[0],
-  ).toBe("model ?/high · 1 peer · ⅉ qvtszkkm* · ctx ?");
+      peers: 1,
+      push: "online",
+    },
+    80,
+  );
+  expect(lines[0]).toBe("model ?/high · ⅉ qvtszkkm* · ctx ?");
+  expect(lines[1]).toContain("Evergreen Cake · 1 peer");
 });
 
 test("OMP widget renders unknown mail state without synthetic zeroes", () => {
-  expect(
-    renderResidualWidget(
-      {
-        address: "Innovative Dandelion",
-        push: "online",
-      },
-      80,
-    )[1],
-  ).toContain("Innovative Dandelion · ✉️ ? · ⚙️ ?");
+  const lines = renderResidualWidget(
+    {
+      address: "Innovative Dandelion",
+      push: "online",
+    },
+    80,
+  );
+  expect(lines[0]).toContain("⚙️ ?");
+  expect(lines[1]).toContain("Innovative Dandelion · ✉️ ?");
 });
 
 test("OMP widget uses the gitsync Git icon", () => {
@@ -223,6 +218,32 @@ test("OMP widget colors dirty and API-billed signals as warnings", () => {
   );
   expect(lines[0]).toContain("<warning>ⅉ main*</warning>");
   expect(lines[1]).toContain("<error>API $1.25 · $2.50/h · 12k tok</error>");
+});
+
+test("OMP widget visually separates context and weekly progress", () => {
+  const theme = {
+    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  };
+  const lines = renderStyledResidualWidget(
+    {
+      billing: { mode: "subscription", weeklyUsed: 19 },
+      contextPercent: 15,
+      mail: {
+        name: "Gentle Anemone",
+        peers: 2,
+        unread: 0,
+        unprocessed: 0,
+      },
+      peers: 2,
+      push: "online",
+    },
+    80,
+    theme,
+  );
+  expect(lines[0]).toContain("<success>ctx ▇");
+  expect(lines[1]).toContain("<success> wk ▇");
+  expect(lines[0]).toContain("<dim>░");
+  expect(lines[1]).toContain("<dim>░");
 });
 
 test("OMP weekly usage accepts exactly one active-provider weekly bucket", () => {

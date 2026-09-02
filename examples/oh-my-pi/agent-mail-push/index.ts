@@ -72,13 +72,23 @@ export type BillingStatus =
     }
   | { mode: "unknown" };
 
+type Tone = "accent" | "dim" | "error" | "success" | "warning";
+
+interface ProgressDescriptor {
+  barWidth?: number;
+  filledCharacter?: "█" | "▇";
+  label: string;
+  suffix?: string;
+  used: number;
+}
+
 interface StyledField {
   align?: "progress";
   paddingBefore?: number;
   priority: number;
-  progress?: { label: string; suffix?: string; used: number };
+  progress?: ProgressDescriptor;
   text: string;
-  tone: "accent" | "dim" | "error" | "success" | "warning";
+  tone: Tone;
 }
 
 interface ConnectedEvent {
@@ -154,7 +164,8 @@ export function agentMailSessionId(
   currentPid = process.pid,
 ): string {
   const launcherId = launcherSessionId?.trim();
-  if (launcherId && Number(launcherSessionPid) === currentPid) return launcherId;
+  if (launcherId && Number(launcherSessionPid) === currentPid)
+    return launcherId;
   return nativeSessionId;
 }
 
@@ -347,6 +358,7 @@ function alignTrailingProgress(
       {
         ...last,
         paddingBefore: target - start,
+        progress: { ...last.progress, barWidth },
         text: progressText(last.progress, barWidth),
       },
     ];
@@ -368,13 +380,6 @@ function statusFields(state: StatusWidgetState): StyledField[] {
       tone: "dim",
     });
   }
-  if (state.peers !== undefined) {
-    fields.push({
-      priority: 60,
-      text: `${state.peers} ${state.peers === 1 ? "peer" : "peers"}`,
-      tone: "accent",
-    });
-  }
   const revision = state.jj ?? state.git;
   if (revision) {
     fields.push({
@@ -385,9 +390,25 @@ function statusFields(state: StatusWidgetState): StyledField[] {
   } else if (state.jjFailed || state.gitFailed) {
     fields.push({ priority: 80, text: "revision ?", tone: "dim" });
   }
+  const identity = state.mail?.name ?? state.address;
+  if (state.mail?.unprocessed === undefined) {
+    if (identity) {
+      fields.push({ priority: 60, text: `${JOB_ICON} ?`, tone: "dim" });
+    }
+  } else if (state.mail.unprocessed > 0) {
+    fields.push({
+      priority: 60,
+      text: `${JOB_ICON} ${state.mail.unprocessed}`,
+      tone: "warning",
+    });
+  }
   if (state.contextPercent !== undefined) {
     const used = Math.round(state.contextPercent);
-    const progress = { label: "ctx", used };
+    const progress: ProgressDescriptor = {
+      filledCharacter: "▇",
+      label: "ctx",
+      used,
+    };
     fields.push({
       align: "progress",
       priority: 90,
@@ -427,28 +448,23 @@ function mailFields(state: StatusWidgetState): StyledField[] {
     });
   }
 
+  if (state.peers !== undefined) {
+    fields.push({
+      priority: 90,
+      text: `${state.peers} ${state.peers === 1 ? "peer" : "peers"}`,
+      tone: "accent",
+    });
+  }
   if (state.mail) {
     if (state.mail.unread > 0) {
       fields.push({
-        priority: 90,
+        priority: 80,
         text: `${MAIL_ICON} ${state.mail.unread}`,
         tone: "warning",
       });
     }
-    if (state.mail.unprocessed === undefined) {
-      fields.push({ priority: 80, text: `${JOB_ICON} ?`, tone: "dim" });
-    } else if (state.mail.unprocessed > 0) {
-      fields.push({
-        priority: 80,
-        text: `${JOB_ICON} ${state.mail.unprocessed}`,
-        tone: "warning",
-      });
-    }
   } else if (identity) {
-    fields.push(
-      { priority: 90, text: `${MAIL_ICON} ?`, tone: "dim" },
-      { priority: 80, text: `${JOB_ICON} ?`, tone: "dim" },
-    );
+    fields.push({ priority: 80, text: `${MAIL_ICON} ?`, tone: "dim" });
   }
   if (state.pythonEnvironment) {
     fields.push({
@@ -473,18 +489,31 @@ function mailFields(state: StatusWidgetState): StyledField[] {
   return fields;
 }
 
-function usageBar(usedPercent: number, width: number): string {
+function usageBarParts(
+  usedPercent: number,
+  width: number,
+  filledCharacter: "█" | "▇" = "█",
+): { empty: string; filled: string } {
   const percent = Math.max(0, Math.min(100, usedPercent));
   const filled = Math.round((percent / 100) * width);
-  return `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
+  return {
+    empty: "░".repeat(width - filled),
+    filled: filledCharacter.repeat(filled),
+  };
 }
 
-function progressText(
-  progress: { label: string; suffix?: string; used: number },
-  barWidth: number,
+function usageBar(
+  usedPercent: number,
+  width: number,
+  filledCharacter: "█" | "▇" = "█",
 ): string {
+  const parts = usageBarParts(usedPercent, width, filledCharacter);
+  return `${parts.filled}${parts.empty}`;
+}
+
+function progressText(progress: ProgressDescriptor, barWidth: number): string {
   const label = progress.label.padStart(3);
-  return `${label} ${usageBar(progress.used, barWidth)} ${String(progress.used).padStart(3)}%${progress.suffix ?? ""}`;
+  return `${label} ${usageBar(progress.used, barWidth, progress.filledCharacter)} ${String(progress.used).padStart(3)}%${progress.suffix ?? ""}`;
 }
 
 function compactNumber(value: number): string {
@@ -512,7 +541,8 @@ function billingField(billing: BillingStatus | undefined): StyledField {
     };
   }
   const used = Math.round(billing.weeklyUsed);
-  const progress = {
+  const progress: ProgressDescriptor = {
+    filledCharacter: "▇",
     label: "wk",
     suffix: billing.stale ? " ~" : undefined,
     used,
@@ -546,8 +576,16 @@ export function renderResidualWidget(
     .filter((fields) => fields.length > 0)
     .map((fields) =>
       fields
-        .map((field) => `${" ".repeat(field.paddingBefore ?? 0)}${field.text}`)
-        .join(FIELD_SEPARATOR),
+        .map((field, index) => {
+          const separator =
+            index === 0
+              ? ""
+              : field.progress
+                ? " ".repeat(Bun.stringWidth(FIELD_SEPARATOR))
+                : FIELD_SEPARATOR;
+          return `${separator}${" ".repeat(field.paddingBefore ?? 0)}${field.text}`;
+        })
+        .join(""),
     );
 }
 
@@ -565,14 +603,39 @@ export function renderStyledResidualWidget(
     .filter((fields) => fields.length > 0)
     .map((fields) =>
       fields
-        .map((field) => {
+        .map((field, index) => {
+          const separator =
+            index === 0
+              ? ""
+              : field.progress
+                ? " ".repeat(Bun.stringWidth(FIELD_SEPARATOR))
+                : FIELD_SEPARATOR;
           const padding = " ".repeat(field.paddingBefore ?? 0);
+          if (field.progress) {
+            const progress = field.progress;
+            const parts = usageBarParts(
+              progress.used,
+              progress.barWidth ?? 1,
+              progress.filledCharacter,
+            );
+            const label = progress.label.padStart(3);
+            const percent = String(progress.used).padStart(3);
+            return (
+              (separator || padding
+                ? theme.fg("dim", `${separator}${padding}`)
+                : "") +
+              theme.fg(field.tone, `${label} ${parts.filled}`) +
+              theme.fg("dim", parts.empty) +
+              theme.fg(field.tone, ` ${percent}%${progress.suffix ?? ""}`)
+            );
+          }
           return (
-            (padding ? theme.fg("dim", padding) : "") +
-            theme.fg(field.tone, field.text)
+            (separator || padding
+              ? theme.fg("dim", `${separator}${padding}`)
+              : "") + theme.fg(field.tone, field.text)
           );
         })
-        .join(theme.fg("dim", FIELD_SEPARATOR)),
+        .join(""),
     );
 }
 
@@ -822,8 +885,7 @@ function isPushEvent(value: unknown): value is PushEvent {
     (event.type === "connected" || event.type === "mail") &&
     typeof event.project === "string" &&
     typeof event.sessionId === "string" &&
-    (event.type !== "connected" ||
-      typeof event.requestedSessionId === "string")
+    (event.type !== "connected" || typeof event.requestedSessionId === "string")
   );
 }
 
@@ -921,9 +983,7 @@ async function consumeStream(
         continue;
       }
       if (!sessionId || value.sessionId !== sessionId) {
-        throw new Error(
-          "agent-mail returned mail for another routed session.",
-        );
+        throw new Error("agent-mail returned mail for another routed session.");
       }
       pi.sendMessage(
         {
