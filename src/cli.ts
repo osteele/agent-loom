@@ -98,10 +98,12 @@ import {
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
 } from "./integrations.ts";
+import { installMcpStartupDiagnostics } from "./mcpDiagnostics.ts";
 import {
   CONFIG_PATH,
   LAUNCHD_LABEL,
   LOG_PATH,
+  MCP_STARTUP_FAILURES_PATH,
   PID_PATH,
   REMIND_DIAGNOSTICS_PATH,
   canonicalProject,
@@ -496,16 +498,17 @@ async function cmdStatus(): Promise<void> {
     console.log(line);
 }
 
-function cmdLogs(follow: boolean): void {
-  if (!existsSync(LOG_PATH)) {
+function cmdLogs(follow: boolean, mcp: boolean): void {
+  const path = mcp ? MCP_STARTUP_FAILURES_PATH : LOG_PATH;
+  if (!existsSync(path)) {
     console.log("no log file yet");
     return;
   }
   if (follow) {
-    const child = spawn("tail", ["-f", LOG_PATH], { stdio: "inherit" });
+    const child = spawn("tail", ["-f", path], { stdio: "inherit" });
     process.on("SIGINT", () => child.kill());
   } else {
-    const lines = readFileSync(LOG_PATH, "utf8").split("\n");
+    const lines = readFileSync(path, "utf8").split("\n");
     console.log(lines.slice(-50).join("\n"));
   }
 }
@@ -2654,7 +2657,8 @@ Daemon (launchd-aware):
   start | stop | restart   Manage the daemon process
   graceful                 Reload config (SIGHUP) without a restart
   status                   Daemon health + listening sessions
-  logs [-f]                Show, or follow, the daemon log
+  logs [-f] [--mcp]        Show, or follow, the daemon log; --mcp selects
+                           sanitized pre-handshake MCP failures
 
 Setup:
   mcp                   Run the MCP server on stdio. This is what an agent's
@@ -2753,7 +2757,10 @@ switch (cmd) {
     await cmdStatus();
     break;
   case "logs":
-    cmdLogs(rest.includes("-f") || rest.includes("--follow"));
+    cmdLogs(
+      rest.includes("-f") || rest.includes("--follow"),
+      rest.includes("--mcp"),
+    );
     break;
   case "dashboard":
     await cmdDashboard(flags);
@@ -2772,6 +2779,7 @@ switch (cmd) {
     // what lets a client be configured in a single line without a prior global
     // install. The daemon is a separate, optional step: sending falls back to
     // appending to the spool directly when no daemon answers.
+    installMcpStartupDiagnostics();
     await import("./channel.ts");
     break;
   case "install":

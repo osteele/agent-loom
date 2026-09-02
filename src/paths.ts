@@ -14,6 +14,7 @@
  *   unread-summary.json    daemon snapshot of per-session unread counts
  *   announced/<slug>-<id>.json per-session announcement bookkeeping (NOT receipts)
  *   remind-diagnostics.log rate-limited stale-summary diagnostics from remind
+ *   mcp-startup-failures.jsonl sanitized pre-handshake MCP failure records
  *   daemon.pid, daemon.log daemon state
  * Config:     ~/.config/agent-mail/config.toml
  */
@@ -54,6 +55,13 @@ export const ANNOUNCED_DIR = join(STATE_DIR, "announced");
 export const REMIND_DIAGNOSTICS_PATH = join(
   STATE_DIR,
   "remind-diagnostics.log",
+);
+/** Sanitized failures before an MCP server completes initialization. This is
+ * agent-mail's durable copy of evidence that hosts commonly discard with the
+ * subprocess stderr stream. */
+export const MCP_STARTUP_FAILURES_PATH = join(
+  STATE_DIR,
+  "mcp-startup-failures.jsonl",
 );
 /** Append-only JSONL record of authority-forced coordination recoveries. A
  * forced recovery bypasses the liveness proof, so the declared authority is the

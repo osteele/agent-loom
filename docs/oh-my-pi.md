@@ -30,6 +30,13 @@ the browser login. Then use `/model` to assign the GPT model you want to the
 OMP stores its own login and does not give the agent-mail extension access to
 provider credentials.
 
+If OMP reports that the agent-mail MCP subprocess closed stdout before the
+handshake, inspect `agent-mail logs --mcp`. Agent-mail records the startup phase,
+runtime, exit status, and sanitized exception stack in
+`~/.claude/agent-mail/mcp-startup-failures.jsonl`, because some MCP hosts discard
+the subprocess stderr that normally carries this evidence. The record never
+contains environment variables, message contents, or MCP request bodies.
+
 The plugin does not install an OMP-specific `AGENTS.md`. OMP's context
 discovery can therefore continue to import the existing Codex and
 agent-neutral instructions, skills, and MCP configuration instead of shadowing

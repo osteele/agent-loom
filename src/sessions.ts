@@ -213,6 +213,12 @@ export function generatedNameNoun(
 }
 
 export const RECENT_NOUN_USE_MS = 30 * 24 * 60 * 60 * 1_000;
+/** Name selection scans the persisted assignment history while holding its
+ * global lock. OMP starts its MCP and push components together, and with a
+ * large history the winner can legitimately hold the lock longer than the
+ * generic transaction wait. This remains below MCP clients' 60 s startup
+ * timeout and applies only to the once-per-session name mint. */
+export const SESSION_NAME_LOCK_WAIT_MS = 30_000;
 
 export interface NameAssignmentOptions {
   /** Nouns held by currently registered sessions. */
@@ -305,37 +311,45 @@ export function assignedGeneratedSessionName(
   const existing = readGeneratedSessionName(sessionId, directory);
   if (existing) return existing;
   const nowMs = options.nowMs ?? Date.now();
-  return withFileLock(join(directory, ".mint.lock"), () => {
-    const lockedExisting = readGeneratedSessionName(sessionId, directory);
-    if (lockedExisting) return lockedExisting;
-    const selected = legacy
-      ? legacyGeneratedSessionName(sessionId)
-      : selectedAdjectiveNounName(
-          sessionId,
-          directory,
-          options.unavailableNouns ?? new Set(),
-          nowMs,
+  return withFileLock(
+    join(directory, ".mint.lock"),
+    () => {
+      const lockedExisting = readGeneratedSessionName(sessionId, directory);
+      if (lockedExisting) return lockedExisting;
+      const selected = legacy
+        ? legacyGeneratedSessionName(sessionId)
+        : selectedAdjectiveNounName(
+            sessionId,
+            directory,
+            options.unavailableNouns ?? new Set(),
+            nowMs,
+          );
+      mkdirSync(directory, { recursive: true });
+      const path = assignmentPath(sessionId, directory);
+      try {
+        writeFileSync(
+          path,
+          JSON.stringify(
+            {
+              sessionId,
+              assignedAt: new Date(nowMs).toISOString(),
+              ...selected,
+            },
+            null,
+            1,
+          ),
+          { flag: "wx" },
         );
-    mkdirSync(directory, { recursive: true });
-    const path = assignmentPath(sessionId, directory);
-    try {
-      writeFileSync(
-        path,
-        JSON.stringify(
-          { sessionId, assignedAt: new Date(nowMs).toISOString(), ...selected },
-          null,
-          1,
-        ),
-        { flag: "wx" },
-      );
-      return selected;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const raced = readGeneratedSessionName(sessionId, directory);
-      if (!raced) throw error;
-      return raced;
-    }
-  });
+        return selected;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const raced = readGeneratedSessionName(sessionId, directory);
+        if (!raced) throw error;
+        return raced;
+      }
+    },
+    { waitMs: SESSION_NAME_LOCK_WAIT_MS },
+  );
 }
 
 /** Project base (directory basename) for a session's label, mapped through the

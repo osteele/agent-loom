@@ -60,6 +60,11 @@ import {
   withAttemptKey,
 } from "./delivery.ts";
 import {
+  installMcpStartupDiagnostics,
+  markMcpInitialized,
+  setMcpStartupPhase,
+} from "./mcpDiagnostics.ts";
+import {
   canonicalProject,
   displayName,
   ensureDirs,
@@ -136,6 +141,8 @@ import {
   work,
 } from "./work.ts";
 
+installMcpStartupDiagnostics();
+setMcpStartupPhase("resolve-project");
 const cwd = canonicalProject(process.cwd());
 // Per-session identifier; see SESSION_ID_ENV_VARS for the resolution order.
 // Claude Code sets CLAUDE_CODE_SESSION_ID in the MCP server's environment
@@ -159,21 +166,26 @@ const cwd = canonicalProject(process.cwd());
 // identifies only this run. It comes after our own environment because that is
 // what the harness actually set for this process, and argv records only what
 // was asked for.
+setMcpStartupPhase("resolve-session-id");
 const sessionId =
   sessionIdFromEnv(process.env, process.ppid) ??
   resumeIdFromCommand(processCommand(process.ppid)) ??
   sessionIdFromHostEnviron(processEnviron(process.ppid), process.ppid) ??
   randomUUID();
+setMcpStartupPhase("read-session-metadata");
 const myMeta = claudeSessions().get(sessionId);
 const myName = myMeta?.name; // raw Claude name for the registry snapshot
+setMcpStartupPhase("resolve-session-name");
 const myGeneratedName = assignedGeneratedSessionNameForRegistration(sessionId);
 const mySessionNames = sessionNames(sessionId, myMeta, cwd, myGeneratedName);
 const myLabel = mySessionNames.displayName;
 const startupIdentity = `${mySessionNames.displayName} — address: ${mySessionNames.fullName}`;
 const selfLabel = `${mySessionNames.displayName} (${mySessionNames.fullName}; ${sessionId})`;
+setMcpStartupPhase("load-config");
 const config = loadConfig();
 const mySpool = spoolPath(cwd);
 const ownerInstanceId = randomUUID();
+setMcpStartupPhase("scan-processes");
 const ownerScan = scanProcesses([process.pid]);
 const ownerProcStart = ownerScan.reliable
   ? ownerScan.processes.get(process.pid)?.start
@@ -321,6 +333,7 @@ function describeSessions(
 // inject before the first turn. Scan the authoritative spool once at startup;
 // unlike hot-path hook reminders, this does not need the daemon's cached
 // summary. Only the count enters context, never peer-authored fields.
+setMcpStartupPhase("read-startup-inbox");
 const startupUnread = unreadVisibleForSession(cwd, sessionId);
 const startupUnreadEntry = {
   project: cwd,
@@ -353,6 +366,7 @@ const startupOrphans = (() => {
   );
 })();
 
+setMcpStartupPhase("construct-server");
 const mcp = new Server(
   { name: "agent-mail", version: "0.1.0" },
   {
@@ -1548,6 +1562,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 // host we're under ("claude-code", "codex", ...). Re-register with it; this is
 // the only reliable claude-vs-codex signal, since Codex sets no session env var.
 mcp.oninitialized = () => {
+  markMcpInitialized();
   const client = mcp.getClientVersion()?.name;
   if (client) {
     hostClient = client;
@@ -1581,7 +1596,9 @@ mcp.oninitialized = () => {
   }
 };
 
+setMcpStartupPhase("connect-transport");
 await mcp.connect(new StdioServerTransport());
+setMcpStartupPhase("waiting-for-initialize");
 
 ensureDirs();
 register(

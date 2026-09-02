@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import { NOUNS } from "./nameWords.ts";
 import {
   RECENT_NOUN_USE_MS,
+  SESSION_NAME_LOCK_WAIT_MS,
   activityTag,
   adjectiveNounSessionName,
   assignedGeneratedSessionName,
@@ -136,6 +138,38 @@ test("a persisted selection wins over a later requested scheme", () => {
     expect(stored).toContain('"scheme": "legacy-syllable"');
   } finally {
     rmSync(directory, { recursive: true });
+  }
+});
+
+test("name minting outwaits the generic two-second transaction budget", async () => {
+  expect(SESSION_NAME_LOCK_WAIT_MS).toBeGreaterThan(2_000);
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-name-lock-wait-"));
+  const lockPath = join(root, ".mint.lock");
+  const scriptPath = join(root, "holder.ts");
+  const lockModule = join(process.cwd(), "src", "lock.ts");
+  writeFileSync(
+    scriptPath,
+    `
+      import { withFileLock } from ${JSON.stringify(lockModule)};
+      withFileLock(process.argv[2], () => Bun.sleepSync(2100));
+    `,
+  );
+  const holder = Bun.spawn(["bun", scriptPath, lockPath], {
+    cwd: process.cwd(),
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  try {
+    while (!existsSync(lockPath)) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(
+      assignedGeneratedSessionName("waited-for-peer", false, root),
+    ).toMatchObject({ scheme: "adjective-noun" });
+    await holder.exited;
+  } finally {
+    holder.kill();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
