@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report a session's unread backlog when its MCP server starts.
 - Format agent-mail status information for Kimi Code status lines.
 
+### Changed
+
+- Keep the Oh My Pi integration in OMP's native status line and limit its
+  status fields to agent-mail identity, peers, unread mail, and Weft backlog.
+
 ### Fixed
 
 - Render message Markdown as Slack `mrkdwn` in per-message echoes and escape

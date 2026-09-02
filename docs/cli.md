@@ -433,7 +433,7 @@ agent-mail oh-my-pi-plugin-path
 
 Prints the absolute directory of the bundled Oh My Pi push extension. Pass the
 result to `omp plugin link --scope user`. See [oh-my-pi.md](oh-my-pi.md) for
-subscription login, status, provenance, and delivery behavior.
+session identity, native status, and delivery behavior.
 
 ### `install`
 
