@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Notify pull-only clients such as Codex, Kimi Code, and Gemini CLI about new
   mail through installable reminder hooks.
 - Report a session's unread backlog when its MCP server starts.
+- Remind live sessions about retained path and experiment claims at bounded
+  condition and age milestones.
 - Format agent-mail status information for Kimi Code status lines.
 
 ### Changed

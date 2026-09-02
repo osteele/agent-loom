@@ -322,6 +322,22 @@ reservations in one project or cross-project view. Each record has a condition:
 - `materialized` — the experiment file exists, so the reservation is redundant
   and its owner should release it.
 
+The daemon evaluates path and experiment claims every five minutes and sends
+one fixed-text, session-addressed reminder when any claim crosses a milestone:
+a materialized experiment reservation after 15 minutes, an absent path target
+after 30 minutes, any claim after 2 and 8 hours, and then daily starting at 24
+hours. A reminder aggregates all claims held by that exact live owner process;
+it carries counts and normalized conditions, not claimed paths or owner labels.
+Manual, offline, expired, and unverifiable owners have no live recipient and
+receive nothing. Work leases are excluded because they represent longer-lived
+responsibility and already carry explicit state and activity.
+
+Reminder bookkeeping is separate from coordination records and delivery
+receipts. It records the milestones already announced for each claim, prunes
+released claims, and supplies an idempotency key so a daemon restart cannot
+repeat the same edge. A reminder never makes a claim recoverable and never
+releases it.
+
 `recover_coordination` revalidates liveness and releases another session's
 record when that exact owner process is dead, or when a manual owner has
 expired. Live owners, unverifiable owners, and manual owners still inside their

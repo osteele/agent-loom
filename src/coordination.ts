@@ -154,7 +154,7 @@ export function ownerStatus(
   return processStartedAt <= recordCreatedAt ? "live" : "offline";
 }
 
-function ownerRegistration(
+export function ownerRegistration(
   owner: ClaimOwner | WorkOwner,
   registrations: Registration[],
 ): Registration | undefined {

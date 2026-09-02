@@ -283,6 +283,13 @@ daemon state:
 - **Experiment numbers** (`EXP-NNN`) are allocated atomically against a lab
   notebook, counting both existing files and outstanding reservations.
 
+The daemon reminds a live session when a claim reaches a condition or age
+milestone: a materialized experiment reservation after 15 minutes, an absent
+path target after 30 minutes, any claim after 2 and 8 hours, and then daily
+starting at 24 hours. Reminders are addressed only to the exact owning session
+and never release a live claim. Work leases are excluded because they represent
+longer-lived responsibility and carry explicit activity.
+
 `list_coordination` shows all three together, with owners and conditions.
 `recover_coordination` releases a record after revalidating that its owning
 process is dead or that a manual owner has expired. An explicit, user-supplied

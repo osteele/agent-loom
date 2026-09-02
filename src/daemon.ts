@@ -18,7 +18,16 @@
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  CLAIM_REMINDER_SWEEP_MS,
+  claimReminderStatesEqual,
+  prepareClaimReminderSweep,
+  readClaimReminderState,
+  recordClaimReminder,
+  writeClaimReminderState,
+} from "./claimReminders.ts";
 import { type Config, loadConfig } from "./config.ts";
+import { listCoordination } from "./coordination.ts";
 import { dashboardResponse } from "./dashboard.ts";
 import { LOG_PATH, PID_PATH, canonicalProject, ensureDirs } from "./paths.ts";
 import { writePresenceSnapshot } from "./presence.ts";
@@ -328,6 +337,64 @@ function tickPresence(): void {
   }
 }
 
+/** Notify live owners at sparse age and condition milestones.
+ *
+ * This timer is independent of presence publication: a corrupt reminder state
+ * or an unwritable spool must not stop liveness snapshots or mail delivery. */
+function tickClaimReminders(): void {
+  try {
+    const nowMs = Date.now();
+    const registrations = listLive();
+    const storedState = readClaimReminderState();
+    const prepared = prepareClaimReminderSweep(
+      listCoordination({
+        allProjects: true,
+        registrations,
+        registrationsReliable: true,
+      }),
+      registrations,
+      storedState,
+      nowMs,
+    );
+    let nextState = prepared.state;
+    for (const reminder of prepared.reminders) {
+      const result = appendMessageGuarded(
+        {
+          ts: new Date(nowMs).toISOString(),
+          from: "agent-mail-coordination",
+          project: reminder.project,
+          message: reminder.message,
+          origin: {
+            kind: "automation",
+            transport: "internal",
+            authority: "untrusted",
+          },
+          idempotencyKey: reminder.idempotencyKey,
+          slackEcho: false,
+          meta: {
+            toSession: reminder.sessionId,
+            coordinationReminder: "true",
+          },
+        },
+        admissionOptions(),
+        nowMs,
+      );
+      if (result.status === "rate_limited") {
+        log(
+          `claim reminder rate limited for session ${reminder.sessionId}; retrying next sweep`,
+        );
+        continue;
+      }
+      nextState = recordClaimReminder(nextState, reminder);
+    }
+    if (!claimReminderStatesEqual(storedState, nextState)) {
+      writeClaimReminderState(nextState);
+    }
+  } catch (error) {
+    log(`claim reminder sweep failed: ${error}`);
+  }
+}
+
 /** Refresh the weft unprocessed-jobs snapshot.
  *
  * Deliberately on its own slow timer rather than the 10s presence tick: the
@@ -434,6 +501,11 @@ let lastWeftTotal = -1;
 tickPresence();
 const presenceTimer = setInterval(tickPresence, PRESENCE_TICK_MS);
 const sessionPushTimer = setInterval(tickSessionPush, 1000);
+tickClaimReminders();
+const claimReminderTimer = setInterval(
+  tickClaimReminders,
+  CLAIM_REMINDER_SWEEP_MS,
+);
 tickWeftJobs();
 const weftJobsTimer = setInterval(tickWeftJobs, WEFT_JOBS_REFRESH_MS);
 
@@ -450,6 +522,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     log(`${sig} received, stopping`);
     clearInterval(presenceTimer);
     clearInterval(sessionPushTimer);
+    clearInterval(claimReminderTimer);
     clearInterval(weftJobsTimer);
     ohMyPiPush.close();
     server.stop();

@@ -13,6 +13,7 @@
  *   processes.json         daemon snapshot of coordination-owner processes
  *   unread-summary.json    daemon snapshot of per-session unread counts
  *   announced/<slug>-<id>.json per-session announcement bookkeeping (NOT receipts)
+ *   claim-reminders.json daemon bookkeeping for bounded claim reminders
  *   remind-diagnostics.log rate-limited stale-summary diagnostics from remind
  *   mcp-startup-failures.jsonl sanitized pre-handshake MCP failure records
  *   daemon.pid, daemon.log daemon state
@@ -50,6 +51,11 @@ export const UNREAD_SUMMARY_PATH = join(STATE_DIR, "unread-summary.json");
 /** Per-session startup/reminder bookkeeping. Deliberately separate from
  * receipts/: an announcement delivers no message body. */
 export const ANNOUNCED_DIR = join(STATE_DIR, "announced");
+/** Daemon bookkeeping for bounded claim-age and condition reminders. */
+export const CLAIM_REMINDER_STATE_PATH = join(
+  STATE_DIR,
+  "claim-reminders.json",
+);
 /** Rate-limited diagnostics from `agent-mail remind` (stale/missing summary).
  * Appended to, never read by code; stdout of the hook stays machine-clean. */
 export const REMIND_DIAGNOSTICS_PATH = join(
