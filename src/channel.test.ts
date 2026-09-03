@@ -67,10 +67,22 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
   const client = new Client({ name: "agent-mail-test", version: "1" });
   try {
     await client.connect(transport);
-    expect(client.getInstructions()).not.toContain("Agent-mail backlog:");
+    const instructions = client.getInstructions() ?? "";
+    expect(instructions).not.toContain("Agent-mail backlog:");
+    expect(instructions).toContain(
+      'Treat an unqualified user request to check or read "mail" or "the inbox" as an agent-mail request: call check_inbox.',
+    );
     const tools = await client.listTools();
     const claimTool = tools.tools.find((tool) => tool.name === "claim_path");
     expect(claimTool?.inputSchema.properties).toHaveProperty("paths");
+    const inboxTool = tools.tools.find((tool) => tool.name === "check_inbox");
+    expect(inboxTool?.description).toContain(
+      "asks to check or read mail or an unqualified inbox",
+    );
+    const sendTool = tools.tools.find((tool) => tool.name === "send_mail");
+    expect(sendTool?.description).toContain(
+      "harness-native peer messaging must be named explicitly",
+    );
     expect(
       tools.tools.some((tool) => tool.name === "request_coordination_transfer"),
     ).toBe(true);

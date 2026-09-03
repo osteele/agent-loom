@@ -41,6 +41,37 @@ Kimi, and Gemini — if the delivery semantics hold up.
   hooks still cannot inject AI-visible messages directly
   (anomalyco/opencode#17412).
 
+## Cross-harness wake and Hub integration
+
+- **Lifecycle capabilities.** Separate activity age from harness lifecycle and
+  delivery support. Sessions should report whether their adapter can notify an
+  attached process, start a turn, or reconstruct a disposed session. Delivery
+  status should preserve the distinction between durable mail state
+  (`spooled`, `pushed`, `read`) and host outcome (`notified`, `woke`,
+  `revived`).
+- **Parked-session revival.** Extend the OMP adapter when OMP exposes a
+  versioned host API that can enumerate and revive a native session by exact
+  ID. The host should reconstruct the session and inject the message; agent-mail
+  must not read OMP's private registry or transcript files. Other harness
+  adapters should advertise this capability only when their supported APIs
+  provide it.
+- **Bounded reply waits.** Add a wait operation filtered by thread and sender.
+  A timeout must leave the reply unread, and the wait must never consume
+  unrelated inbox messages.
+- **Native Hub visibility.** Offer a separate, read-only mail-peers and
+  coordination section in compatible harness UIs. Preserve agent-mail and
+  native-agent namespaces, show source age and failures, and consume a
+  versioned agent-mail interface.
+- **Explicit transport choice.** Let a user choose native immediate messaging
+  or durable mail when an exact identity mapping exists. Never fall back
+  automatically because a race could deliver the same instruction twice.
+- **Native-message audit.** Allow opt-in recording of successful Hub messages
+  in the flight log and Slack echo without appending them to an agent-mail
+  inbox. Body retention must remain configurable.
+- **Coordination in native inspectors.** Show path claims and work leases beside
+  native agent activity. Keep task assignment, logical work ownership, and edit
+  exclusion as separate facts.
+
 ## Storage evolution
 
 The filesystem store remains suitable at the current scale. Append-only JSONL

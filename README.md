@@ -96,6 +96,17 @@ by its noun alone. Names may eventually recycle; session IDs remain the durable
 identity. See [ADR 0012](docs/decisions/0012-allow-friendly-session-names-to-recycle.md)
 and [the third-party notice](THIRD_PARTY_NOTICES.md).
 
+### Mail vocabulary
+
+Use **mail** for agent-mail across harnesses. “Check mail,” “read mail,” and an
+unqualified “check the inbox” read the agent-mail inbox. “Send mail” uses
+agent-mail's durable delivery. Name a harness, Hub, teammate, or subagent when
+you want that harness's native peer messaging instead.
+
+An attached recipient with push support starts a turn when mail arrives. Mail
+for a disconnected or pull-only recipient remains in the spool until that
+session resumes or checks its inbox.
+
 ### Install only what you need
 
 | Component | What it adds | Setup |

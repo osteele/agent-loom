@@ -37,7 +37,7 @@ interface ConnectedEvent {
   address: string;
 }
 
-interface MailEvent {
+export interface MailEvent {
   version: typeof PROTOCOL_VERSION;
   type: "mail";
   deliveryToken: string;
@@ -70,6 +70,22 @@ function renderedMail(event: MailEvent): string {
     "",
     event.message,
   ].join("\n");
+}
+
+export function wakeRecipient(
+  pi: Pick<ExtensionAPI, "sendMessage">,
+  event: MailEvent,
+): void {
+  pi.sendMessage(
+    {
+      customType: "agent-mail",
+      content: renderedMail(event),
+      display: true,
+      attribution: "agent",
+      details: { messageId: event.id, from: event.from, ts: event.ts },
+    },
+    { deliverAs: "followUp", triggerTurn: true },
+  );
 }
 
 /** Parse agent-mail's documented append-only status-line field contract. */
@@ -286,16 +302,7 @@ async function consumeStream(
       if (!sessionId || value.sessionId !== sessionId) {
         throw new Error("agent-mail returned mail for another routed session.");
       }
-      pi.sendMessage(
-        {
-          customType: "agent-mail",
-          content: renderedMail(value),
-          display: true,
-          attribution: "agent",
-          details: { messageId: value.id, from: value.from, ts: value.ts },
-        },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
+      wakeRecipient(pi, value);
       await acknowledge(baseUrl, value.deliveryToken);
     }
   }

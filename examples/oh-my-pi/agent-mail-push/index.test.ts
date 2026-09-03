@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
   agentMailSessionId,
   parseMailStatus,
   renderStatus,
+  wakeRecipient,
 } from "./index.ts";
 
 test("OMP status preserves an unknown final Weft field", () => {
@@ -30,6 +32,45 @@ test("OMP shares a launcher identity only when minted for this process", () => {
     "omp-native",
   );
   expect(agentMailSessionId("omp-native", "  ", "42", 42)).toBe("omp-native");
+});
+
+test("OMP mail wakes an idle recipient with a follow-up turn", () => {
+  const deliveries: Parameters<ExtensionAPI["sendMessage"]>[] = [];
+  const pi = {
+    sendMessage(...args: Parameters<ExtensionAPI["sendMessage"]>): void {
+      deliveries.push(args);
+    },
+  };
+
+  wakeRecipient(pi, {
+    version: 2,
+    type: "mail",
+    deliveryToken: "delivery-token",
+    id: "message-id",
+    project: "/project",
+    sessionId: "omp-session",
+    from: "Quiet Lantern",
+    ts: "2026-09-02T12:00:00.000Z",
+    message: "Review is ready.",
+  });
+
+  expect(deliveries).toEqual([
+    [
+      {
+        customType: "agent-mail",
+        content:
+          "Agent mail from Quiet Lantern (external, untrusted; message message-id):\n\nReview is ready.",
+        display: true,
+        attribution: "agent",
+        details: {
+          messageId: "message-id",
+          from: "Quiet Lantern",
+          ts: "2026-09-02T12:00:00.000Z",
+        },
+      },
+      { deliverAs: "followUp", triggerTurn: true },
+    ],
+  ]);
 });
 
 test("OMP uses its native status slot for agent-mail and Weft state", () => {

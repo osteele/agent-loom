@@ -44,7 +44,7 @@ The protocol-v2 connection response carries both the requested session ID and th
 
 ## Delivery behavior
 
-The extension keeps a loopback NDJSON stream open to the daemon. Incoming mail becomes an OMP custom message with agent attribution and triggers a follow-up turn. The extension acknowledges the delivery only after OMP accepts the custom message; agent-mail then records a `pushed` receipt with detail `oh-my-pi`.
+The extension keeps a loopback NDJSON stream open to the daemon. Incoming mail becomes an OMP custom message with agent attribution. It starts a follow-up turn when the recipient is idle and queues that turn when the recipient is busy. The extension acknowledges delivery only after OMP accepts the custom message; agent-mail then records a `pushed` receipt with detail `oh-my-pi`.
 
 A broken connection changes the native status entry to offline and retries with bounded backoff. Mail remains in the durable project spool while OMP is disconnected.
 
