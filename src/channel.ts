@@ -82,6 +82,7 @@ import {
   listLive,
   processCommand,
   processEnviron,
+  processTty,
   pushIsKnownUnreachable,
   register,
   scanProcesses,
@@ -102,6 +103,7 @@ import {
   resumeIdFromCommand,
   sessionIdFromEnv,
   sessionIdFromHostEnviron,
+  sessionIdFromOmpTerminal,
   sessionNames,
 } from "./sessions.ts";
 import {
@@ -171,6 +173,11 @@ const sessionId =
   sessionIdFromEnv(process.env, process.ppid) ??
   resumeIdFromCommand(processCommand(process.ppid)) ??
   sessionIdFromHostEnviron(processEnviron(process.ppid), process.ppid) ??
+  sessionIdFromOmpTerminal(
+    processCommand(process.ppid),
+    cwd,
+    processTty(process.pid),
+  ) ??
   randomUUID();
 setMcpStartupPhase("read-session-metadata");
 const myMeta = claudeSessions().get(sessionId);

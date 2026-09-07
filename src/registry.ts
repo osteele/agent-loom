@@ -333,6 +333,20 @@ export function processCommand(pid: number): string {
   return res.stdout ?? "";
 }
 
+/** One process's controlling terminal as a bare device name ("ttys047"), or
+ * undefined when it has none — `ps` renders that as "??". An MCP server
+ * inherits its host agent's terminal, so this identifies the terminal the
+ * agent is running in. */
+export function processTty(pid: number): string | undefined {
+  const res = spawnSync("/bin/ps", ["-p", String(pid), "-o", "tty="], {
+    encoding: "utf8",
+  });
+  if (res.error || res.signal || res.status !== 0) return undefined;
+  const tty = (res.stdout ?? "").trim();
+  if (!tty || tty === "??" || tty === "?") return undefined;
+  return tty;
+}
+
 export function processInfo(pids: number[]): Map<number, ProcessInfo> {
   return scanProcesses(pids).processes;
 }

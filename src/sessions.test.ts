@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,7 @@ import {
   sessionFullName,
   sessionIdFromEnv,
   sessionIdFromHostEnviron,
+  sessionIdFromOmpTerminal,
   sessionNames,
 } from "./sessions.ts";
 
@@ -576,4 +578,128 @@ test("the harness's own environment outranks the command line", () => {
   expect(sessionIdFromEnv({ CLAUDE_CODE_SESSION_ID: "from-env" })).toBe(
     "from-env",
   );
+});
+
+const OMP_ID = "01a063ba-0726-7024-a8dc-28c05bed1a40";
+const OTHER_OMP_ID = "01a0653e-5474-74ab-94be-22a334f323e6";
+
+function ompTerminalDir(entries: Record<string, string>): {
+  directory: string;
+  project: string;
+} {
+  const directory = mkdtempSync(join(tmpdir(), "agent-mail-omp-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-mail-omp-cwd-"));
+  for (const [key, sessionFile] of Object.entries(entries)) {
+    writeFileSync(join(directory, key), `${project}\n${sessionFile}\n`);
+  }
+  return { directory, project };
+}
+
+function ompSessionFile(id: string): string {
+  return `/Users/x/.omp/agent/sessions/-proj/2026-09-02T20-05-31-046Z_${id}.jsonl`;
+}
+
+test("OMP's session id is read from the terminal it is running in", () => {
+  // OMP exports no id, so without this an OMP session is named at random and
+  // gets a different name every time it is resumed.
+  // A second, more recently written terminal in the same directory: the tty
+  // has to decide which record is ours, so a scan of the directory cannot
+  // stand in for it.
+  const { directory, project } = ompTerminalDir({
+    ttys047: ompSessionFile(OMP_ID),
+    ttys048: ompSessionFile(OTHER_OMP_ID),
+  });
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(join(directory, "ttys047"), past, past);
+  expect(
+    sessionIdFromOmpTerminal("omp", project, "ttys047", {}, directory),
+  ).toBe(OMP_ID);
+  // The absolute path OMP is usually launched by resolves the same.
+  expect(
+    sessionIdFromOmpTerminal(
+      "/Users/x/.local/share/mise/installs/omp/18.1.10/omp --continue",
+      project,
+      "ttys047",
+      {},
+      directory,
+    ),
+  ).toBe(OMP_ID);
+});
+
+test("a terminal keyed by TERM_SESSION_ID is found too", () => {
+  // OMP keys by tty for most terminals but by apple-$TERM_SESSION_ID for some.
+  const { directory, project } = ompTerminalDir({
+    "apple-w0t2p4:249F721E": ompSessionFile(OMP_ID),
+    ttys048: ompSessionFile(OTHER_OMP_ID),
+  });
+  const stale = new Date(Date.now() - 60_000);
+  utimesSync(join(directory, "apple-w0t2p4:249F721E"), stale, stale);
+  expect(
+    sessionIdFromOmpTerminal(
+      "omp",
+      project,
+      undefined,
+      { TERM_SESSION_ID: "w0t2p4:249F721E" },
+      directory,
+    ),
+  ).toBe(OMP_ID);
+});
+
+test("an unkeyed terminal falls back to the newest record for this directory", () => {
+  const { directory, project } = ompTerminalDir({
+    older: ompSessionFile("01a05f6f-f1df-736f-a5b3-df966e593338"),
+    newer: ompSessionFile(OMP_ID),
+  });
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(join(directory, "older"), past, past);
+  expect(
+    sessionIdFromOmpTerminal("omp", project, undefined, {}, directory),
+  ).toBe(OMP_ID);
+  // A record for a different directory is not this session's.
+  expect(
+    sessionIdFromOmpTerminal(
+      "omp",
+      "/somewhere/else",
+      undefined,
+      {},
+      directory,
+    ),
+  ).toBeUndefined();
+});
+
+test("a stale OMP record is not adopted by another agent", () => {
+  // These files outlive the run that wrote them. A Claude or Codex session
+  // started later in the same terminal must not answer to a finished OMP
+  // session's id, which would file its work under a different session.
+  const { directory, project } = ompTerminalDir({
+    ttys047: ompSessionFile(OMP_ID),
+  });
+  expect(
+    sessionIdFromOmpTerminal("claude", project, "ttys047", {}, directory),
+  ).toBeUndefined();
+  expect(
+    sessionIdFromOmpTerminal("", project, "ttys047", {}, directory),
+  ).toBeUndefined();
+  // "omp" must be the command, not merely somewhere in it.
+  expect(
+    sessionIdFromOmpTerminal(
+      "claude --resume omp",
+      project,
+      "ttys047",
+      {},
+      directory,
+    ),
+  ).toBeUndefined();
+});
+
+test("an OMP record without a parseable session file yields nothing", () => {
+  const { directory, project } = ompTerminalDir({
+    ttys047: "/Users/x/.omp/agent/sessions/-proj/no-uuid-here.jsonl",
+  });
+  expect(
+    sessionIdFromOmpTerminal("omp", project, "ttys047", {}, directory),
+  ).toBeUndefined();
+  expect(
+    sessionIdFromOmpTerminal("omp", project, "ttys999", {}, "/nonexistent"),
+  ).toBeUndefined();
 });

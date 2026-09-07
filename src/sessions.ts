@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { loadSessionAliases } from "./config.ts";
 import { withFileLock } from "./lock.ts";
 import { ADJECTIVES, NOUNS } from "./nameWords.ts";
-import { SESSION_NAMES_DIR } from "./paths.ts";
+import { SESSION_NAMES_DIR, canonicalProject } from "./paths.ts";
 
 const SESSIONS_DIR = join(
   process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
@@ -567,6 +567,117 @@ function mintedForHost(
   const marker = env[AGENT_SESSION_PID_ENV_VAR];
   if (!marker || hostPid === undefined) return true; // unverifiable, so trusted
   return Number(marker) === hostPid;
+}
+
+/** Where OMP (oh-my-pi) records, per terminal, the session it is writing. */
+export const OMP_TERMINAL_SESSIONS_DIR = join(
+  homedir(),
+  ".omp",
+  "agent",
+  "terminal-sessions",
+);
+
+/** The uuid ending an OMP session file name. */
+const OMP_SESSION_FILE_ID =
+  /_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+function hostIsOmp(command: string): boolean {
+  const first = command.trim().split(/\s+/)[0];
+  if (!first) return false;
+  return (first.split("/").pop() ?? first) === "omp";
+}
+
+/** `<cwd>\n<session file path>` — the two lines OMP writes. Later lines are a
+ * status word we have no use for. */
+function ompRecord(
+  path: string,
+): { cwd: string; sessionId: string } | undefined {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return undefined; // absent, or being rewritten as we read
+  }
+  const [recordedCwd, sessionFile] = text.split("\n");
+  if (!recordedCwd || !sessionFile) return undefined;
+  const id = OMP_SESSION_FILE_ID.exec(sessionFile.trim());
+  if (!id) return undefined;
+  return { cwd: canonicalProject(recordedCwd.trim()), sessionId: id[1] };
+}
+
+/** OMP's session id for the terminal this process is attached to.
+ *
+ * OMP exports no session id: not in its own environment, and not in the `env`
+ * block of the agent-mail entry in its mcp.json. So every earlier step of the
+ * chain finds nothing and the id would be minted at random, giving one session
+ * a different name on every launch — including each time it is resumed.
+ *
+ * What OMP does keep is a per-terminal pointer at the session file it is
+ * appending to: ~/.omp/agent/terminal-sessions/<key>, holding the working
+ * directory on one line and the session file path on the next. The uuid ending
+ * that file name is OMP's session id, it is what OMP's own `--resume` takes,
+ * and it survives a resume because OMP appends to the same file rather than
+ * opening a new one.
+ *
+ * `resumeIdFromCommand` already covers `omp --resume <full-uuid>`. This covers
+ * what it cannot see: a session started fresh, whose id appears nowhere on the
+ * command line; `--continue`; the interactive picker; and the id *prefixes*
+ * OMP accepts but the uuid pattern rejects.
+ *
+ * OMP keys the file by tty for most terminals and by `apple-$TERM_SESSION_ID`
+ * for some. Neither is guaranteed, so a directory scan matched on the recorded
+ * working directory is the last resort.
+ */
+export function sessionIdFromOmpTerminal(
+  hostCommand: string,
+  cwd: string,
+  tty?: string,
+  env: Record<string, string | undefined> = process.env,
+  directory = OMP_TERMINAL_SESSIONS_DIR,
+): string | undefined {
+  // Only when the host really is OMP. These files outlive the run that wrote
+  // them, so a different agent started later in the same terminal would
+  // otherwise answer to a finished OMP session's id — a specific wrong
+  // answer, and worse than having none.
+  if (!hostIsOmp(hostCommand)) return undefined;
+
+  const keys: string[] = [];
+  if (tty) keys.push(tty);
+  const termSession = env.TERM_SESSION_ID;
+  if (termSession) keys.push(`apple-${termSession}`, termSession);
+  for (const key of keys) {
+    // The tty identifies the terminal exactly, so its record is taken as
+    // current without comparing directories: OMP rewrites the file when it
+    // opens a session, and requiring a match here would only add a way to
+    // fail when the two sides spell the same directory differently.
+    const record = ompRecord(join(directory, key));
+    if (record) return record.sessionId;
+  }
+
+  // Both sides are canonicalised: the caller may pass a raw `process.cwd()`
+  // while OMP recorded a path through a symlink, or the reverse.
+  const wanted = canonicalProject(cwd);
+  let newest: { mtimeMs: number; sessionId: string } | undefined;
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch {
+    return undefined;
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry);
+    const record = ompRecord(path);
+    if (!record || record.cwd !== wanted) continue;
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(path).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (!newest || mtimeMs > newest.mtimeMs)
+      newest = { mtimeMs, sessionId: record.sessionId };
+  }
+  return newest?.sessionId;
 }
 
 /** The subset of a session's identity that `--session` can be matched against. */
