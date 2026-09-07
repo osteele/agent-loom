@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes it while its channel server is still running.
 - Confirm a pid individually before treating its absence from a whole-table
   process scan as proof that the session exited.
+- Annotate every push receipt with its channel status, so a healthy-looking
+  bare `pushed` no longer reads as proof a notification was received.
 
 ## [0.1.0] - 2026-08-19
 

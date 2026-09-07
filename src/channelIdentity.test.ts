@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type ChannelPushStatus,
   channelIdentity,
   describeChannelPush,
   diagnoseChannelPush,
@@ -53,7 +54,7 @@ describe("diagnoseChannelPush", () => {
       serverName: "agent-mail",
     });
     expect(d.status).toBe("authorized");
-    expect(pushReceiptDetail(d)).toBeUndefined();
+    expect(pushReceiptDetail(d)).toBe("channel:authorized");
     expect(describeChannelPush(d)).toBeUndefined();
   });
 
@@ -107,4 +108,21 @@ describe("diagnoseChannelPush", () => {
     expect(d.status).toBe("unknown");
     expect(pushReceiptDetail(d)).toBe("channel:unknown");
   });
+});
+
+test("every push diagnosis annotates its receipt, including the healthy one", () => {
+  // The asymmetry this guards against is invisible in any single receipt: it
+  // shows up only when an unannotated `pushed` sits beside an annotated one
+  // and reads as a positive claim of delivery. Assert the property over the
+  // whole union so a new status cannot reintroduce a bare receipt.
+  const statuses: ChannelPushStatus[] = [
+    "authorized",
+    "host-not-loaded",
+    "identity-unauthorized",
+    "unknown",
+  ];
+  for (const status of statuses) {
+    const detail = pushReceiptDetail({ status, identity: "plugin:agent-mail" });
+    expect(detail).toBe(`channel:${status}`);
+  }
 });

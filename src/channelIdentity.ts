@@ -79,13 +79,17 @@ export function diagnoseChannelPush(input: {
   return { status, identity, hostChannels };
 }
 
-/** Receipt detail for a push emitted under this diagnosis, or undefined when
- * the push is expected to land. A `pushed` receipt carrying one of these is
- * evidence the event was emitted and *not* that anything received it. */
-export function pushReceiptDetail(
-  diagnosis: ChannelPushDiagnosis,
-): string | undefined {
-  if (diagnosis.status === "authorized") return undefined;
+/** Receipt detail for a push emitted under this diagnosis. Every diagnosis
+ * yields one, `authorized` included.
+ *
+ * A `pushed` receipt attests that the notification was written to the
+ * transport, never that anything received it: `mcp.notification()` is
+ * fire-and-forget over stdio with no ack, so no value here can separate
+ * delivered from dropped. Annotating only the failures made that asymmetry
+ * read as the stronger claim — a bare `pushed` beside an annotated sibling
+ * looks like an assertion of health rather than the absence of a known
+ * problem, and a reader acted on exactly that. */
+export function pushReceiptDetail(diagnosis: ChannelPushDiagnosis): string {
   return `channel:${diagnosis.status}`;
 }
 
