@@ -85,6 +85,7 @@ import {
   processTty,
   pushIsKnownUnreachable,
   register,
+  registrationExists,
   scanProcesses,
   setInboundPolicy,
   setMuted,
@@ -246,6 +247,21 @@ function sessionCapabilities(client = hostClient): SessionCapabilities {
     nativePeerMessaging:
       claude && Boolean(process.env.CLAUDE_CODE_MESSAGING_SOCKET),
   };
+}
+
+function registerSelf(): void {
+  register(
+    cwd,
+    process.pid,
+    sessionId,
+    myName,
+    hostClient,
+    sessionCapabilities(),
+    config.inboundPolicy,
+    ownerProcStart,
+    ownerInstanceId,
+    process.ppid,
+  );
 }
 
 function capabilityTag(capabilities?: SessionCapabilities): string {
@@ -1575,18 +1591,7 @@ mcp.oninitialized = () => {
   const client = mcp.getClientVersion()?.name;
   if (client) {
     hostClient = client;
-    register(
-      cwd,
-      process.pid,
-      sessionId,
-      myName,
-      client,
-      sessionCapabilities(client),
-      config.inboundPolicy,
-      ownerProcStart,
-      ownerInstanceId,
-      process.ppid,
-    );
+    registerSelf();
   }
   // The initialization response has now delivered the startup instructions to
   // the host. Record that announcement outside receipts so the first turn hook
@@ -1610,18 +1615,7 @@ await mcp.connect(new StdioServerTransport());
 setMcpStartupPhase("waiting-for-initialize");
 
 ensureDirs();
-register(
-  cwd,
-  process.pid,
-  sessionId,
-  myName,
-  undefined,
-  sessionCapabilities(),
-  config.inboundPolicy,
-  ownerProcStart,
-  ownerInstanceId,
-  process.ppid,
-);
+registerSelf();
 
 // --- Spool watcher: push lines appended after startup -----------------------
 let offset = existsSync(mySpool) ? statSync(mySpool).size : 0;
@@ -1715,6 +1709,11 @@ async function settleHeld(
 }
 
 async function poll(): Promise<void> {
+  // The registry is presentation and routing state, not the transport itself.
+  // If a liveness sweep ever removes this live process by mistake, the server
+  // keeps polling but peers see no listener. Restore the exact entry here so
+  // the split cannot persist for the rest of a long-running host session.
+  if (!registrationExists(cwd, process.pid)) registerSelf();
   if (isMuted(cwd, process.pid)) return;
   const policy = inboundPolicy(cwd, process.pid);
   const receipts = refreshReceipts();

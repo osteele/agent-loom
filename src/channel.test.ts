@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -125,6 +126,58 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     await client.close();
   }
 });
+
+test("a live channel restores a missing registry entry without another tool call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-presence-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "registration-heartbeat",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+    // Ensure the initialized callback's second registration has completed;
+    // any later recreation can only come from the idle poll.
+    await client.listTools();
+    const registry = join(home, ".claude", "agent-mail", "registry");
+
+    // This integration test crosses a child-process timer; fake timers in
+    // the test process cannot advance the channel server's poll interval.
+    const [name] = readdirSync(registry);
+    const path = join(registry, name);
+    rmSync(path);
+
+    const deadline = Date.now() + 2_500;
+    while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(25);
+
+    expect(existsSync(path)).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      cwd: realpathSync(project),
+      sessionId: "registration-heartbeat",
+    });
+  } finally {
+    await client.close();
+  }
+}, 5_000);
 
 test("initial MCP instructions report the session's unread backlog only", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-backlog-"));

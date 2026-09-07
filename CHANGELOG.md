@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Install the correct runtime and entry-point format for package installations
   and development checkouts.
 - Prevent stale daemon pidfiles from reporting a running daemon as stopped.
+- Restore a live session's registry entry automatically if a liveness sweep
+  removes it while its channel server is still running.
+- Confirm a pid individually before treating its absence from a whole-table
+  process scan as proof that the session exited.
 
 ## [0.1.0] - 2026-08-19
 

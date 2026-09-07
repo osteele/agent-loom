@@ -70,6 +70,57 @@ test("a failed process inspection is distinguishable from an empty live set", ()
   expect(scanProcesses(manyPids, "/usr/bin/true").reliable).toBe(false);
 });
 
+/** A stand-in for `ps` whose whole-table output omits `hiddenPid`, as a
+ * truncated or unreadable table would. `singlePidAnswers` decides whether a
+ * direct query for that pid finds it (a live process the table lost) or exits
+ * 1 (a process that really is gone). */
+function fakePs(hiddenPid: number, singlePidAnswers: boolean): string {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-fake-ps-"));
+  const path = join(root, "ps");
+  writeFileSync(
+    path,
+    [
+      "#!/bin/sh",
+      'for a in "$@"; do',
+      '  if [ "$a" = "-A" ]; then',
+      '    echo "1 Mon Sep 7 01:00:00 2026 /sbin/launchd"',
+      "    exit 0",
+      "  fi",
+      "done",
+      'prev=""',
+      'for a in "$@"; do',
+      '  if [ "$prev" = "-p" ]; then',
+      singlePidAnswers
+        ? `    if [ "$a" = "${hiddenPid}" ]; then echo "$a Mon Sep 7 01:46:24 2026 /bin/bun channel.ts"; exit 0; fi`
+        : "    exit 1",
+      "  fi",
+      '  prev="$a"',
+      "done",
+      "exit 1",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return path;
+}
+
+test("a pid missing from the whole-table scan is confirmed before it counts as dead", () => {
+  const hidden = 424242;
+  const manyPids = [hidden, ...Array.from({ length: 13 }, (_, i) => i + 1)];
+
+  // The table cannot account for `hidden`, but a direct query finds it. It is
+  // alive, so the scan must report it rather than let the caller prune it.
+  const live = scanProcesses(manyPids, fakePs(hidden, true));
+  expect(live.reliable).toBe(true);
+  expect(live.processes.get(hidden)?.start).toBe("Mon Sep 7 01:46:24 2026");
+
+  // Same table, but the direct query agrees the process is gone. Pruning must
+  // still work, or dead registrations would accumulate forever.
+  const dead = scanProcesses(manyPids, fakePs(hidden, false));
+  expect(dead.reliable).toBe(true);
+  expect(dead.processes.has(hidden)).toBe(false);
+});
+
 test("register does not inherit state from a recycled pid", () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-register-recycled-"));
   const project = join(root, "project");

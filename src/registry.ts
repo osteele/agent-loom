@@ -259,7 +259,15 @@ const PS_EXECUTABLE = process.platform === "darwin" ? "/bin/ps" : "/usr/bin/ps";
  * A single-pid query exits 1 when that pid is gone; other nonzero statuses,
  * spawn errors, and signals make the scan unreliable. Whole-table queries
  * require status 0 and at least one parseable process row. An unavailable or
- * nonconforming process inspector is not proof that every process is dead. */
+ * nonconforming process inspector is not proof that every process is dead.
+ *
+ * Absence from a whole-table scan is likewise not proof. A truncated table, a
+ * row this parser cannot read, or a process `ps` skipped all look identical to
+ * an exited process, and the caller's response to "dead" is to delete a
+ * registration — so each pid the table fails to account for is confirmed with
+ * its own query before the verdict stands. In steady state every wanted pid
+ * appears in the table and this costs nothing; it is paid only for pids that
+ * really are gone, once, on the sweep that prunes them. */
 export function scanProcesses(
   pids: number[],
   executable = PS_EXECUTABLE,
@@ -268,37 +276,48 @@ export function scanProcesses(
   const wanted = new Set(pids);
   if (wanted.size === 0) return { processes: map, reliable: true };
   let reliable = true;
-  const queries =
-    wanted.size <= PS_LOOP_MAX
-      ? [...wanted].map((pid) => ["-ww", "-p", String(pid)])
-      : [["-ww", "-A"]];
-  for (const query of queries) {
+
+  const run = (
+    query: string[],
+  ): { ok: boolean; status: number | null; parsedAnyProcess: boolean } => {
     const res = spawnSync(
       executable,
       [...query, "-o", "pid=,lstart=,command="],
       { encoding: "utf8" },
     );
     const singlePid = query[1] === "-p";
-    if (
-      res.error ||
-      res.signal ||
-      (singlePid ? res.status !== 0 && res.status !== 1 : res.status !== 0)
-    ) {
-      reliable = false;
-    }
+    const ok =
+      !res.error &&
+      !res.signal &&
+      (singlePid ? res.status === 0 || res.status === 1 : res.status === 0);
     let parsedAnyProcess = false;
     for (const line of (res.stdout ?? "").split("\n")) {
       const parsed = parsePsLine(line);
-      if (parsed) {
-        parsedAnyProcess = true;
-        if (wanted.has(parsed.pid)) map.set(parsed.pid, parsed.info);
-      }
+      if (!parsed) continue;
+      parsedAnyProcess = true;
+      if (wanted.has(parsed.pid)) map.set(parsed.pid, parsed.info);
     }
-    if (singlePid && res.status === 0 && !map.has(Number(query[2]))) {
-      reliable = false;
-    }
-    if (!singlePid && !parsedAnyProcess) reliable = false;
+    return { ok, status: res.status, parsedAnyProcess };
+  };
+
+  /** Ask about one pid and record whether the answer can be trusted. `ps`
+   * exits 0 only when it matched the process, so a status of 0 with no row we
+   * could read means the parse failed rather than that the process exited. */
+  const confirm = (pid: number): void => {
+    const { ok, status } = run(["-ww", "-p", String(pid)]);
+    if (!ok || (status === 0 && !map.has(pid))) reliable = false;
+  };
+
+  if (wanted.size <= PS_LOOP_MAX) {
+    for (const pid of wanted) confirm(pid);
+    return { processes: map, reliable };
   }
+
+  const table = run(["-ww", "-A"]);
+  if (!table.ok || !table.parsedAnyProcess) {
+    return { processes: map, reliable: false };
+  }
+  for (const pid of wanted) if (!map.has(pid)) confirm(pid);
   return { processes: map, reliable };
 }
 
@@ -353,6 +372,13 @@ export function processInfo(pids: number[]): Map<number, ProcessInfo> {
 
 function entryPath(cwd: string, pid: number): string {
   return join(REGISTRY_DIR, `${projectSlug(cwd)}-${pid}.json`);
+}
+
+/** Whether this channel process still has a registry entry. A listener checks
+ * this cheaply on its existing one-second poll so a transient false prune does
+ * not leave a live session invisible until the host restarts. */
+export function registrationExists(cwd: string, pid: number): boolean {
+  return existsSync(entryPath(cwd, pid));
 }
 
 function withEntryLock<T>(path: string, fn: () => T): T {
