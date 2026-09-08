@@ -2659,6 +2659,11 @@ Messaging:
   listeners [--project <dir>] [--json] [--no-sync]
                         List sessions. --no-sync reads only the daemon's fresh
                         snapshot and never scans or prunes the registry.
+  unregistered [--window <minutes>]
+                        Name sessions that recorded delivery with no live
+                        registration — a session the registry has lost is
+                        still consuming mail but cannot be addressed. Exits 1
+                        when any are found. Default window 60 minutes.
   mute | unmute (--session <name-or-id> | --project <dir>)
                         Pause / resume channel push for matching sessions
   inbound --policy accept|hold|refuse (--session <name-or-id> | --project <dir>)

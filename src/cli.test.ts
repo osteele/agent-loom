@@ -1429,6 +1429,10 @@ test("--help after a subcommand explains rather than acts", async () => {
     const out = await new Response(child.stdout).text();
     expect(await child.exited).toBe(0);
     expect(out).toContain("Usage: agent-mail <command>");
+    // Every dispatched command must appear here, because this same string is
+    // what `<command> --help` prints: a command missing from it is one whose
+    // own help says nothing about it.
+    expect(out).toContain("unregistered [--window <minutes>]");
   }
 
   // The spool stays empty: `notify --help` must not have sent anything.
