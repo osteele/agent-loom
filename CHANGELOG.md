@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Suppress stale coordination reminders when claims change before admission and
+  coalesce sibling claims at each owner-level age milestone.
 - Render message Markdown as Slack `mrkdwn` in per-message echoes and escape
   Slack control characters in message bodies.
 - Keep session addresses routable after Claude Code rotates its session ID, and

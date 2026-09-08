@@ -43,6 +43,7 @@ export interface ClaimReminderBatch {
   sessionId: string;
   message: string;
   idempotencyKey: string;
+  claimIds: string[];
   updates: ClaimReminderUpdate[];
 }
 
@@ -161,20 +162,6 @@ function desiredProgress(
   };
 }
 
-function reminderDue(
-  previous: ClaimReminderProgress | undefined,
-  desired: ClaimReminderProgress,
-): boolean {
-  if (!previous || previous.ownerKey !== desired.ownerKey) {
-    return desired.ageStage > 0 || desired.targetAbsent || desired.materialized;
-  }
-  return (
-    desired.ageStage > previous.ageStage ||
-    (desired.targetAbsent && !previous.targetAbsent) ||
-    (desired.materialized && !previous.materialized)
-  );
-}
-
 function formatAge(age: number): string {
   if (age < 60 * 60_000) return `${Math.floor(age / 60_000)}m`;
   if (age < DAY_MS) return `${Math.floor(age / (60 * 60_000))}h`;
@@ -205,6 +192,12 @@ function reminderMessage(entries: CoordinationEntry[], nowMs: number): string {
       `${materialized} experiment ${materialized === 1 ? "reservation is" : "reservations are"} materialized and redundant.`,
     );
   }
+  sentences.push(
+    `Claim IDs: ${entries
+      .map((entry) => entry.id)
+      .sort()
+      .join(", ")}.`,
+  );
   sentences.push(
     "Call list_coordination with all_projects=true, then release completed claims with release_claim.",
   );
@@ -253,8 +246,10 @@ export function prepareClaimReminderSweep(
     string,
     {
       registration: Registration;
-      entries: CoordinationEntry[];
-      updates: ClaimReminderUpdate[];
+      claims: {
+        entry: CoordinationEntry;
+        desired: ClaimReminderProgress;
+      }[];
     }
   >();
   for (const entry of claimEntries) {
@@ -263,32 +258,113 @@ export function prepareClaimReminderSweep(
     if (!registration?.sessionId) continue;
     const key = ownerKey(entry);
     const desired = desiredProgress(entry, key, nowMs);
-    const groupKey = `${registration.cwd}\u0000${registration.sessionId}\u0000${key}`;
+    const groupKey = `${registration.cwd}\u0000${registration.sessionId}`;
     const group = groups.get(groupKey) ?? {
       registration,
-      entries: [],
-      updates: [],
+      claims: [],
     };
-    group.entries.push(entry);
-    if (reminderDue(state.claims[entry.id], desired)) {
-      group.updates.push({ claimId: entry.id, progress: desired });
-    }
+    group.claims.push({ entry, desired });
     groups.set(groupKey, group);
   }
 
-  const reminders = [...groups.values()]
-    .filter((group) => group.updates.length > 0)
-    .map((group) => ({
+  const reminders: ClaimReminderBatch[] = [];
+  for (const group of groups.values()) {
+    const previousAgeStage = Math.max(
+      0,
+      ...group.claims.map(({ entry, desired }) => {
+        const previous = state.claims[entry.id];
+        return previous?.ownerKey === desired.ownerKey ? previous.ageStage : 0;
+      }),
+    );
+    const desiredAgeStage = Math.max(
+      ...group.claims.map(({ desired }) => desired.ageStage),
+    );
+    const due =
+      desiredAgeStage > previousAgeStage ||
+      group.claims.some(({ entry, desired }) => {
+        const previous = state.claims[entry.id];
+        if (!previous || previous.ownerKey !== desired.ownerKey) {
+          return desired.targetAbsent || desired.materialized;
+        }
+        return (
+          (desired.targetAbsent && !previous.targetAbsent) ||
+          (desired.materialized && !previous.materialized)
+        );
+      });
+
+    for (const { entry, desired } of group.claims) {
+      const previous = state.claims[entry.id];
+      const sameOwner = previous?.ownerKey === desired.ownerKey;
+      prunedState.claims[entry.id] = {
+        ownerKey: desired.ownerKey,
+        ageStage: sameOwner ? previous.ageStage : 0,
+        targetAbsent:
+          Boolean(sameOwner && previous.targetAbsent) && desired.targetAbsent,
+        materialized:
+          Boolean(sameOwner && previous.materialized) && desired.materialized,
+      };
+    }
+    if (!due) continue;
+
+    const updates = group.claims.map(({ entry, desired }) => ({
+      claimId: entry.id,
+      progress: { ...desired, ageStage: desiredAgeStage },
+    }));
+    const claimIds = group.claims
+      .map(({ entry }) => entry.id)
+      .sort((left, right) => left.localeCompare(right));
+    reminders.push({
       project: group.registration.cwd,
       sessionId: group.registration.sessionId as string,
-      message: reminderMessage(group.entries, nowMs),
+      message: reminderMessage(
+        group.claims.map(({ entry }) => entry),
+        nowMs,
+      ),
       idempotencyKey: idempotencyKey(
         group.registration.sessionId as string,
-        group.updates,
+        updates,
       ),
-      updates: group.updates,
-    }));
-  return { state: prunedState, reminders };
+      claimIds,
+      updates,
+    });
+  }
+  return {
+    state: {
+      version: STATE_VERSION,
+      claims: Object.fromEntries(
+        Object.entries(prunedState.claims).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+      ),
+    },
+    reminders,
+  };
+}
+
+/** Whether a prepared reminder still describes the owner's exact live claim
+ * set immediately before admission. */
+export function claimReminderStillCurrent(
+  reminder: ClaimReminderBatch,
+  entries: CoordinationEntry[],
+  registrations: Registration[],
+): boolean {
+  const currentClaimIds = entries
+    .filter((entry) => {
+      if (entry.kind === "work" || entry.ownerStatus !== "live") return false;
+      const registration = ownerRegistration(entry.owner, registrations);
+      return (
+        registration?.cwd === reminder.project &&
+        registration.sessionId === reminder.sessionId
+      );
+    })
+    .map((entry) => entry.id)
+    .sort((left, right) => left.localeCompare(right));
+  return (
+    currentClaimIds.length === reminder.claimIds.length &&
+    currentClaimIds.every(
+      (claimId, index) => claimId === reminder.claimIds[index],
+    )
+  );
 }
 
 /** Record only reminders that were successfully spooled or deduplicated. */

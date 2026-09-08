@@ -30,6 +30,7 @@ import {
 import {
   CLAIM_REMINDER_SWEEP_MS,
   claimReminderStatesEqual,
+  claimReminderStillCurrent,
   prepareClaimReminderSweep,
   readClaimReminderState,
   recordClaimReminder,
@@ -434,6 +435,24 @@ function tickClaimReminders(): void {
     );
     let nextState = prepared.state;
     for (const reminder of prepared.reminders) {
+      const currentRegistrations = listLive();
+      const currentCoordination = listCoordination({
+        allProjects: true,
+        registrations: currentRegistrations,
+        registrationsReliable: true,
+      });
+      if (
+        !claimReminderStillCurrent(
+          reminder,
+          currentCoordination,
+          currentRegistrations,
+        )
+      ) {
+        log(
+          `stale claim reminder suppressed for session ${reminder.sessionId}`,
+        );
+        continue;
+      }
       const result = appendMessageGuarded(
         {
           ts: new Date(nowMs).toISOString(),
@@ -450,6 +469,7 @@ function tickClaimReminders(): void {
           meta: {
             toSession: reminder.sessionId,
             coordinationReminder: "true",
+            coordinationClaimIds: reminder.claimIds.join(","),
           },
         },
         admissionOptions(),

@@ -3,11 +3,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CLAIM_REMINDER_SWEEP_MS,
   type ClaimReminderState,
   FIRST_AGE_REMINDER_MS,
   MATERIALIZED_REMINDER_MS,
   SECOND_AGE_REMINDER_MS,
   TARGET_ABSENT_REMINDER_MS,
+  claimReminderStillCurrent,
   prepareClaimReminderSweep,
   readClaimReminderState,
   recordClaimReminder,
@@ -175,6 +177,8 @@ test("one fixed-text reminder aggregates a live owner's claims", () => {
   expect(reminder.message).toContain(
     "1 experiment reservation is materialized and redundant",
   );
+  expect(reminder.claimIds).toEqual(["experiment-a", "path-a"]);
+  expect(reminder.message).toContain("Claim IDs: experiment-a, path-a.");
   expect(reminder.message).toContain("all_projects=true");
   expect(reminder.message).not.toContain("/other-project");
   expect(reminder.message).not.toContain(owner.label);
@@ -218,6 +222,74 @@ test("a retry before bookkeeping uses the same idempotency key", () => {
 
   const announced = recordClaimReminder(first.state, first.reminders[0]);
   expect(remindersFor([claim], announced).reminders).toEqual([]);
+});
+
+test("one owner age milestone does not repeat as sibling claims age into it", () => {
+  const claims = [
+    entry({ id: "older", age: FIRST_AGE_REMINDER_MS }),
+    entry({
+      id: "younger",
+      age: FIRST_AGE_REMINDER_MS - CLAIM_REMINDER_SWEEP_MS,
+    }),
+  ];
+  const first = prepareClaimReminderSweep(
+    claims,
+    [registration],
+    emptyState(),
+    NOW,
+  );
+  expect(first.reminders).toHaveLength(1);
+  const announced = recordClaimReminder(first.state, first.reminders[0]);
+
+  const next = prepareClaimReminderSweep(
+    claims,
+    [registration],
+    announced,
+    NOW + CLAIM_REMINDER_SWEEP_MS,
+  );
+  expect(next.reminders).toEqual([]);
+});
+
+test("a claim acquired after a reminder retains its own age milestone", () => {
+  const older = entry({ id: "older", age: FIRST_AGE_REMINDER_MS });
+  const first = remindersFor([older]);
+  const announced = recordClaimReminder(first.state, first.reminders[0]);
+  const younger = entry({ id: "younger", age: 0 });
+
+  const joined = prepareClaimReminderSweep(
+    [older, younger],
+    [registration],
+    announced,
+    NOW,
+  );
+  expect(joined.reminders).toEqual([]);
+
+  const afterOlderReleased = prepareClaimReminderSweep(
+    [younger],
+    [registration],
+    joined.state,
+    NOW + FIRST_AGE_REMINDER_MS,
+  );
+  expect(afterOlderReleased.reminders).toHaveLength(1);
+  expect(afterOlderReleased.reminders[0].claimIds).toEqual(["younger"]);
+});
+
+test("a reminder is stale when its owner's live claim set changes", () => {
+  const claim = entry({ age: FIRST_AGE_REMINDER_MS });
+  const prepared = remindersFor([claim]);
+  const reminder = prepared.reminders[0];
+
+  expect(claimReminderStillCurrent(reminder, [claim], [registration])).toBe(
+    true,
+  );
+  expect(claimReminderStillCurrent(reminder, [], [registration])).toBe(false);
+  expect(
+    claimReminderStillCurrent(
+      reminder,
+      [claim, entry({ id: "new-claim", age: 0 })],
+      [registration],
+    ),
+  ).toBe(false);
 });
 
 test("claim reminder state round-trips and ignores malformed entries", () => {
