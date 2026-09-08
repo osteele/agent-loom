@@ -482,6 +482,76 @@ test("coordination tools expose and recover only dead-session records", async ()
   }
 });
 
+test("refusal counts only what it refused, and still reports what the limit withheld", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-refuse-count-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
+  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  mkdirSync(inboxDirectory, { recursive: true });
+  const seeded = ["m1", "m2", "m3"].map((id, index) => ({
+    id,
+    ts: `2026-09-01T12:0${index}:00.000Z`,
+    from: "peer",
+    project: canonical,
+    message: `body ${id}`,
+  }));
+  writeFileSync(
+    join(inboxDirectory, `${slug}.jsonl`),
+    `${seeded.map((m) => JSON.stringify(m)).join("\n")}\n`,
+  );
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "refuse-counting-session",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+
+    // Settle the newest message first: a normal pull records a terminal
+    // receipt for it while leaving it visible.
+    await client.callTool({ name: "check_inbox", arguments: { limit: 1 } });
+
+    await client.callTool({
+      name: "set_inbound_policy",
+      arguments: { policy: "refuse" },
+    });
+    const refused = await client.callTool({
+      name: "check_inbox",
+      arguments: { limit: 1 },
+    });
+    const text = textContent(refused);
+
+    // The page holds one already-settled message, so nothing was newly
+    // refused — counting the page would have reported a refusal that never
+    // happened and wrote no receipt.
+    expect(text).toContain("refused 0 of 3 matching");
+    // And the two the limit withheld were never acted on, so the hint that
+    // reaches them must survive the refuse branch.
+    expect(text).toContain("2 older match not shown");
+  } finally {
+    await client.close();
+  }
+}, 5_000);
+
 test("refused mail is reported as refused, not as a page the limit withheld", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-refuse-"));
   temporaryDirectories.push(root);

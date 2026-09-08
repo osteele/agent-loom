@@ -342,11 +342,18 @@ function sessionMessages(opts: {
  * project across every session. Rendered as bare integers they read as one
  * fact with three values, and an agent told the inbox was processed had in
  * fact seen a fraction of it. Name the scope wherever a count is shown. */
-function inboxScope(
-  returned: number,
-  matched: number,
-  refusedByPolicy = 0,
-): string {
+function inboxScope(opts: {
+  /** Rows handed to the caller. */
+  returned: number;
+  /** Everything this call's filters selected, before the limit. */
+  matched: number;
+  /** Rows this call acted on — the page, whether or not it was returned. */
+  acted: number;
+  /** Set when inbound policy is `refuse`; the count is what was newly
+   * refused, which is zero when the page held only settled messages. */
+  refused?: number;
+}): string {
+  const { returned, matched, acted, refused } = opts;
   const visible = visibleMessages(false);
   const unreadHere = visible.filter((msg) => !msg.read).length;
   const projectUnread = readMessages(cwd, {
@@ -358,18 +365,20 @@ function inboxScope(
   // read ones the caller excluded on purpose, and calling them "not shown"
   // would send a reader chasing a bigger limit for mail that is not there.
   const tail = `${visible.length} visible to this session; ${unreadHere} unread for this session; ${projectUnread} unread in this project across all sessions`;
-  // Refusal is not pagination. These messages were declined by this session's
-  // inbound policy and are now settled, so raising `limit` will never produce
-  // them — offering that hint would send a reader after mail that no limit can
-  // reach, the same misdirection this line exists to prevent.
-  if (refusedByPolicy > 0) {
-    return `[refused ${refusedByPolicy} of ${matched} matching by this session's inbound policy; ${tail}]`;
-  }
-  const omitted = matched - returned;
+  // Refusal and pagination are independent. What this call refused is settled
+  // and no limit will reproduce it; what the limit withheld was never acted on
+  // and a larger limit still reaches. Reporting only the first hid the second.
+  const omitted = matched - acted;
   const more =
     omitted > 0
       ? `; ${omitted} older match not shown — raise \`limit\` to see them`
       : "";
+  // Name the policy whenever it is in force, including when it refused
+  // nothing: under `refuse` an empty page is a consequence of the policy, and
+  // reporting it as a plain empty result hides why the caller got nothing.
+  if (refused !== undefined) {
+    return `[refused ${refused} of ${matched} matching by this session's inbound policy; ${tail}${more}]`;
+  }
   return `[returned ${returned} of ${matched} matching; ${tail}${more}]`;
 }
 
@@ -1141,14 +1150,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         ],
       };
     }
-    let refusedByPolicy = 0;
+    const acted = messages.length;
+    let refusedByPolicy: number | undefined;
     if (policy === "refuse") {
+      refusedByPolicy = 0;
       for (const msg of messages) {
-        if (!settled(receipts, msg.id, sessionId)) {
-          recordReceipt(receipts, msg.id, "refused", "policy");
-        }
+        // Already-terminal messages are not newly refused. `settled` counts
+        // pushed and read as terminal while `visibleMessages` filters only
+        // refused and expired, so a message this session has already seen is
+        // still on the page and must not be tallied as a refusal.
+        if (settled(receipts, msg.id, sessionId)) continue;
+        recordReceipt(receipts, msg.id, "refused", "policy");
+        refusedByPolicy += 1;
       }
-      refusedByPolicy = messages.length;
       messages = [];
     } else {
       for (const msg of messages) {
@@ -1195,8 +1209,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
                 })
                 .join(
                   "\n",
-                )}${marked > 0 ? `\nmarked ${marked} message(s) read` : ""}\n${inboxScope(messages.length, matched.length, refusedByPolicy)}`
-            : `inbox empty ${inboxScope(0, matched.length, refusedByPolicy)}`,
+                )}${marked > 0 ? `\nmarked ${marked} message(s) read` : ""}\n${inboxScope({ returned: messages.length, matched: matched.length, acted, refused: refusedByPolicy })}`
+            : `inbox empty ${inboxScope({ returned: 0, matched: matched.length, acted, refused: refusedByPolicy })}`,
         },
       ],
     };
