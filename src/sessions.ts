@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { loadSessionAliases } from "./config.ts";
 import { withFileLock } from "./lock.ts";
 import { ADJECTIVES, NOUNS } from "./nameWords.ts";
-import { SESSION_NAMES_DIR, canonicalProject } from "./paths.ts";
+import { REGISTRY_DIR, SESSION_NAMES_DIR, canonicalProject } from "./paths.ts";
 
 const SESSIONS_DIR = join(
   process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
@@ -202,6 +202,44 @@ function readGeneratedSessionName(
     displayName: value.displayName,
   };
 }
+/** Nouns already assigned to sessions represented in the registry.
+ *
+ * Registry entries are written only after their name assignment, so a missing
+ * assignment is a legacy registration rather than an in-flight generated
+ * name. Malformed registry entries are left for the registry's liveness sweep;
+ * malformed assignments remain fatal because they weaken name provenance. */
+function registeredGeneratedNameNouns(
+  assignmentDirectory: string,
+  registryDirectory: string,
+): Set<string> {
+  const nouns = new Set<string>();
+  if (!existsSync(registryDirectory)) return nouns;
+  for (const file of readdirSync(registryDirectory)) {
+    if (!file.endsWith(".json")) continue;
+    let sessionId: string | undefined;
+    try {
+      const value = JSON.parse(
+        readFileSync(join(registryDirectory, file), "utf8"),
+      ) as { sessionId?: unknown };
+      sessionId =
+        typeof value.sessionId === "string" ? value.sessionId : undefined;
+    } catch (error) {
+      if (
+        error instanceof SyntaxError ||
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    if (!sessionId) continue;
+    const path = assignmentPath(sessionId, assignmentDirectory);
+    if (!existsSync(path)) continue;
+    const noun = generatedNameNoun(readGeneratedSessionNameFile(path));
+    if (noun) nouns.add(noun);
+  }
+  return nouns;
+}
 
 /** Noun portion of a generated adjective–noun identity. */
 export function generatedNameNoun(
@@ -221,7 +259,7 @@ export const RECENT_NOUN_USE_MS = 30 * 24 * 60 * 60 * 1_000;
 export const SESSION_NAME_LOCK_WAIT_MS = 30_000;
 
 export interface NameAssignmentOptions {
-  /** Nouns held by currently registered sessions. */
+  /** Additional nouns that must not be selected. */
   unavailableNouns?: ReadonlySet<string>;
   /** Dependency injection for deterministic recency tests. */
   nowMs?: number;
@@ -316,12 +354,23 @@ export function assignedGeneratedSessionName(
     () => {
       const lockedExisting = readGeneratedSessionName(sessionId, directory);
       if (lockedExisting) return lockedExisting;
+      const unavailableNouns = new Set(options.unavailableNouns);
+      const registryDirectory =
+        directory === SESSION_NAMES_DIR ? REGISTRY_DIR : false;
+      if (!legacy && registryDirectory) {
+        for (const noun of registeredGeneratedNameNouns(
+          directory,
+          registryDirectory,
+        )) {
+          unavailableNouns.add(noun);
+        }
+      }
       const selected = legacy
         ? legacyGeneratedSessionName(sessionId)
         : selectedAdjectiveNounName(
             sessionId,
             directory,
-            options.unavailableNouns ?? new Set(),
+            unavailableNouns,
             nowMs,
           );
       mkdirSync(directory, { recursive: true });

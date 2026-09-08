@@ -63,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session IDs match.
 - Carry the acknowledgement instruction on the push itself, for transports that
   cannot mark read on their own.
+- Keep newly generated session nouns distinct from those held by registered
+  sessions after the 30-day cooldown pool is exhausted.
 
 ## [0.1.0] - 2026-08-19
 

@@ -18,7 +18,6 @@ import { join } from "node:path";
 import type { ChannelPushStatus } from "./channelIdentity.ts";
 import {
   REGISTRY_DIR,
-  SESSION_NAMES_DIR,
   canonicalProject,
   ensureDirs,
   projectSlug,
@@ -27,7 +26,6 @@ import { sleepSync } from "./runtime.ts";
 import {
   type GeneratedSessionName,
   assignedGeneratedSessionName,
-  generatedNameNoun,
   hasSeenSession,
 } from "./sessions.ts";
 
@@ -517,8 +515,7 @@ function mutateLogicalSession(
  * session already in the registry. Assignments are per session id and survive
  * unregister/restart; stale entries are included so an old session resumed
  * after the upgrade keeps the name its user already saw. */
-function preserveRegisteredSessionNames(): Set<string> {
-  const unavailableNouns = new Set<string>();
+function preserveRegisteredSessionNames(): void {
   for (const file of readdirSync(REGISTRY_DIR)) {
     if (!file.endsWith(".json")) continue;
     let entry: Registration;
@@ -537,13 +534,8 @@ function preserveRegisteredSessionNames(): Set<string> {
       }
       throw error;
     }
-    if (entry.sessionId) {
-      const assigned = assignedGeneratedSessionName(entry.sessionId, true);
-      const noun = generatedNameNoun(assigned);
-      if (noun) unavailableNouns.add(noun);
-    }
+    if (entry.sessionId) assignedGeneratedSessionName(entry.sessionId, true);
   }
-  return unavailableNouns;
 }
 
 /** Mint a name while reserving every noun already represented in the registry.
@@ -554,9 +546,8 @@ export function assignedGeneratedSessionNameForRegistration(
 ): GeneratedSessionName {
   ensureDirs();
   if (hasSeenSession(sessionId)) return assignedGeneratedSessionName(sessionId);
-  return assignedGeneratedSessionName(sessionId, false, SESSION_NAMES_DIR, {
-    unavailableNouns: preserveRegisteredSessionNames(),
-  });
+  preserveRegisteredSessionNames();
+  return assignedGeneratedSessionName(sessionId);
 }
 
 export function register(

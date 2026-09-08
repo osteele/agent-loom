@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -13,11 +14,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NOUNS } from "./nameWords.ts";
 import { REGISTRY_DIR, projectSlug } from "./paths.ts";
 import {
   type Registration,
   type SessionCapabilities,
-  assignedGeneratedSessionNameForRegistration,
   capabilityLabels,
   coalesceRegistrations,
   isCurrentProcess,
@@ -30,7 +31,6 @@ import {
   setMuted,
   touchInboxPoll,
 } from "./registry.ts";
-import { adjectiveNounSessionName, generatedNameNoun } from "./sessions.ts";
 
 test("parsePsLine handles macOS lstart (incl. padded day) and spaced commands", () => {
   const parsed = parsePsLine(
@@ -319,41 +319,55 @@ test("a process instance preserves state without a process-start scan", () => {
   }
 });
 
-test("pre-registration minting avoids a noun already represented in the registry", () => {
+test("production minting reserves registered nouns after cooldown exhaustion", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-register-nouns-"));
-  const project = join(root, "project");
-  mkdirSync(project);
-  const firstSession = "registered-noun-first";
-  const first = assignedGeneratedSessionNameForRegistration(firstSession);
-  const firstNoun = generatedNameNoun(first);
-  if (!firstNoun) throw new Error("expected an adjective-noun name");
-  const registration = register(
-    project,
-    1_000_001,
-    firstSession,
-    undefined,
-    undefined,
-    undefined,
-    "accept",
-    undefined,
-    "registered-noun-instance",
-  );
+  const home = join(root, "home");
+  const state = join(home, ".claude", "agent-mail");
+  const names = join(state, "session-names");
+  const registry = join(state, "registry");
+  const heldNoun = NOUNS[0];
+  const heldSession = "currently-registered-session";
+  mkdirSync(names, { recursive: true });
+  mkdirSync(registry);
   try {
-    let secondSession: string | undefined;
-    for (let index = 0; index < 10_000; index += 1) {
-      const candidate = `registered-noun-second-${index}`;
-      if (
-        generatedNameNoun(adjectiveNounSessionName(candidate)) === firstNoun
-      ) {
-        secondSession = candidate;
-        break;
-      }
+    const nowMs = Date.now();
+    for (const [index, noun] of NOUNS.entries()) {
+      const sessionId = noun === heldNoun ? heldSession : `history-${index}`;
+      const filename = `${createHash("sha256").update(sessionId).digest("hex")}.json`;
+      writeFileSync(
+        join(names, filename),
+        JSON.stringify({
+          sessionId,
+          assignedAt: new Date(nowMs - (noun === heldNoun ? 1_000 : 0)),
+          scheme: "adjective-noun",
+          slug: `test-${noun}`,
+          displayName: `Test ${noun}`,
+        }),
+      );
     }
-    if (!secondSession) throw new Error("could not find the preferred noun");
-    const second = assignedGeneratedSessionNameForRegistration(secondSession);
-    expect(generatedNameNoun(second)).not.toBe(firstNoun);
+    writeFileSync(
+      join(registry, "current.json"),
+      JSON.stringify({ sessionId: heldSession }),
+    );
+
+    const registrySource = join(import.meta.dir, "registry.ts");
+    const sessionsSource = join(import.meta.dir, "sessions.ts");
+    // The child import is intentional: paths.ts binds HOME at module load.
+    const script = [
+      `const { assignedGeneratedSessionNameForRegistration } = await import(${JSON.stringify(registrySource)});`,
+      `const { generatedNameNoun } = await import(${JSON.stringify(sessionsSource)});`,
+      'const assigned = assignedGeneratedSessionNameForRegistration("new-session-after-exhaustion");',
+      "console.log(generatedNameNoun(assigned));",
+    ].join("\n");
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stderr = await new Response(child.stderr).text();
+    expect(await child.exited, stderr).toBe(0);
+    expect((await new Response(child.stdout).text()).trim()).not.toBe(heldNoun);
   } finally {
-    if (existsSync(registration)) rmSync(registration);
     rmSync(root, { recursive: true, force: true });
   }
 });
