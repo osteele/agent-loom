@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Print help for `<command> --help` instead of running the command.
 - Name the scope of the unread count `agent-mail inbox` reports, so a
   project-wide total is not read as one session's mail.
+- Add `agent-mail unregistered`, which names sessions that recorded delivery
+  with no live registration — the shape of a session the registry has lost.
 
 ## [0.1.0] - 2026-08-19
 

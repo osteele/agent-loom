@@ -44,7 +44,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -105,6 +107,7 @@ import {
   LOG_PATH,
   MCP_STARTUP_FAILURES_PATH,
   PID_PATH,
+  RECEIPTS_DIR,
   REMIND_DIAGNOSTICS_PATH,
   canonicalProject,
   displayName,
@@ -137,7 +140,7 @@ import {
   reminderHookResponse,
   reminderText,
 } from "./remind.ts";
-import { readStdinText, sleepSync } from "./runtime.ts";
+import { readFileSliceSync, readStdinText, sleepSync } from "./runtime.ts";
 import {
   activityTag,
   claudeSessions,
@@ -152,6 +155,7 @@ import {
 } from "./slackDashboard.ts";
 import {
   type AdmissionResult,
+  type DeliveryReceipt,
   appendMessageGuarded,
   appendReceipt,
   knownProjects,
@@ -167,6 +171,7 @@ import {
 } from "./transfers.ts";
 import { unreadVisibleForSession } from "./unread.ts";
 import { readUnreadSummarySnapshot } from "./unreadSummary.ts";
+import { unregisteredActiveSessions } from "./unregistered.ts";
 import { weftJobsForSession } from "./weftJobs.ts";
 import { type WorkLease, type WorkState, work } from "./work.ts";
 import { WorkConflictError } from "./work.ts";
@@ -2759,6 +2764,80 @@ function printHelp(stream: "out" | "err" = "out"): void {
   (stream === "err" ? console.error : console.log)(HELP);
 }
 
+/** Report live sessions the registry has lost.
+ *
+ * Delivery is recipient-driven and never reads the registry, so a session
+ * whose entry was deleted keeps consuming mail and stamping receipts while no
+ * sender can address it. Comparing recent receipts against live registrations
+ * names that session directly, instead of waiting for a peer to hit a refusal.
+ *
+ * Reads the tail of each receipt log rather than the whole file: the logs are
+ * append-only and never pruned, so a full read grows without bound while only
+ * the recent window can carry a live fault. */
+function cmdUnregistered(flags: Record<string, string | boolean>): void {
+  const windowMinutes =
+    typeof flags.window === "string" ? Number(flags.window) : 60;
+  if (!Number.isFinite(windowMinutes) || windowMinutes <= 0) {
+    console.error("agent-mail: --window must be a positive number of minutes");
+    process.exit(1);
+  }
+  const live = new Set(
+    listLive()
+      .map((entry) => entry.sessionId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const receipts: DeliveryReceipt[] = [];
+  const TAIL_BYTES = 512 * 1024;
+  if (existsSync(RECEIPTS_DIR)) {
+    for (const name of readdirSync(RECEIPTS_DIR)) {
+      if (!name.endsWith(".jsonl")) continue;
+      const path = join(RECEIPTS_DIR, name);
+      const size = statSync(path).size;
+      const text = readFileSliceSync(
+        path,
+        Math.max(0, size - TAIL_BYTES),
+        size,
+      );
+      for (const line of text.split("\n")) {
+        if (!line) continue;
+        try {
+          receipts.push(JSON.parse(line) as DeliveryReceipt);
+        } catch {
+          // A torn or partly-sliced line is not evidence either way.
+        }
+      }
+    }
+  }
+  const found = unregisteredActiveSessions(
+    receipts,
+    live,
+    Date.now(),
+    windowMinutes * 60_000,
+  );
+  if (found.length === 0) {
+    console.log(
+      `no unregistered active sessions in the last ${windowMinutes}m`,
+    );
+    return;
+  }
+  // A session that exited cleanly also unregisters, and its receipts stay in
+  // the log — so a row here is "recorded activity with no live registration",
+  // which is the fault when the session is still running and merely history
+  // when it is not. Say that rather than let the reader assume the first.
+  console.log(
+    `${found.length} session(s) recorded delivery in the last ${windowMinutes}m with no live registration.`,
+  );
+  console.log(
+    "A session still running is unaddressable: senders will be told it is not listening.",
+  );
+  for (const session of found) {
+    console.log(
+      `${session.sessionId}  ${session.project}  last ${session.lastActivity}  ${session.receipts} receipt(s)`,
+    );
+  }
+  process.exit(1);
+}
+
 // --- dispatch -------------------------------------------------------------------
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -2815,6 +2894,9 @@ switch (cmd) {
     break;
   case "claim-path":
     cmdClaimPath(flags, rest);
+    break;
+  case "unregistered":
+    cmdUnregistered(flags);
     break;
   case "claims":
     cmdClaims(flags);
