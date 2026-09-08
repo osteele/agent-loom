@@ -79,6 +79,43 @@ test("receipts naming no session are skipped, not grouped together", () => {
   ).toEqual([]);
 });
 
+test("every session-stamped receipt proves recent activity", () => {
+  const found = unregisteredActiveSessions(
+    [
+      receipt({ sessionId: "refused", status: "refused" }),
+      receipt({ sessionId: "held", status: "held" }),
+      receipt({ sessionId: "spooled", status: "spooled" }),
+      receipt({ sessionId: "expired", status: "expired" }),
+      receipt({ sessionId: "pushed", status: "pushed" }),
+      receipt({ sessionId: "read", status: "read" }),
+    ],
+    new Set(),
+    NOW,
+    HOUR,
+  );
+  expect(found.map((session) => session.sessionId).sort()).toEqual([
+    "expired",
+    "held",
+    "pushed",
+    "read",
+    "refused",
+    "spooled",
+  ]);
+});
+
+test("project and session components cannot collide", () => {
+  const found = unregisteredActiveSessions(
+    [
+      receipt({ project: "/a", sessionId: "bc" }),
+      receipt({ project: "/ab", sessionId: "c" }),
+    ],
+    new Set(),
+    NOW,
+    HOUR,
+  );
+  expect(found).toHaveLength(2);
+});
+
 test("an unparseable or future timestamp is not treated as recent", () => {
   expect(
     unregisteredActiveSessions(

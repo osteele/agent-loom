@@ -209,6 +209,25 @@ session's own agent process is an ancestor of the CLI process, so a script or
 daemon cannot mark a peer's mail read by inheriting its id. When it cannot tell,
 it says so on stderr and leaves the mail unread.
 
+For project-level cleanup, run `agent-mail triage-candidates --project <dir>`
+with optional `--limit N`. It returns unread broadcasts, direct mail whose
+recipient has no current or recent delivery activity, and direct mail its
+live recipient refused. It excludes direct mail owned by a registered live
+session and conservatively protects a recipient that stamped any delivery
+receipt during the previous hour despite a missing registry entry. The default
+response contains the oldest 20 candidates, reports the total candidate count,
+and sets `truncated` when more remain. After handling the returned messages,
+pass their exact ids as repeated `--id` flags to `agent-mail mark-read`.
+Marking a broadcast read removes it from every session's unread view, including
+a live pull-only session that never received it, so this workflow assigns
+project broadcasts to the triaging agent. `--all` would also consume the
+excluded live-session mail.
+
+The local Claude plugin includes the `agent-mail-triage` skill for requests to
+process unattended mail or mail for terminated sessions. Other harnesses can
+load the same skill from
+`plugins/agent-mail/skills/agent-mail-triage/`.
+
 Sending has the mirror rule: `notify` stamps a resolvable sender identity when
 it can prove one, and otherwise sends with `--from` as a free-form label. A
 recipient sees such a label tagged `[label; not a reply address]`, because

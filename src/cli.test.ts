@@ -1129,6 +1129,240 @@ const INBOX_READER_ENV = {
   AGENT_SESSION_ID: "",
 };
 
+test("triage-candidates protects live and recently active recipients", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-triage-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    const { home, project, slug } = seedInbox(root);
+    const inbox = join(home, ".claude", "agent-mail", "inbox", `${slug}.jsonl`);
+    const messages = [
+      {
+        id: "broadcast",
+        ts: "2026-09-08T11:00:00.000Z",
+        from: "peer",
+        project,
+        message: "project work",
+      },
+      {
+        id: "inactive",
+        ts: "2026-09-08T11:01:00.000Z",
+        from: "peer",
+        project,
+        message: "abandoned direct work",
+        meta: { toSession: "inactive-session" },
+      },
+      {
+        id: "live-owned",
+        ts: "2026-09-08T11:02:00.000Z",
+        from: "peer",
+        project,
+        message: "owned direct work",
+        meta: { toSession: "cli-reader" },
+      },
+      {
+        id: "live-refused",
+        ts: "2026-09-08T11:03:00.000Z",
+        from: "peer",
+        project,
+        message: "refused direct work",
+        meta: { toSession: "cli-reader" },
+      },
+      {
+        id: "recently-active",
+        ts: "2026-09-08T11:04:00.000Z",
+        from: "peer",
+        project,
+        message: "work for a registry-lost session",
+        meta: { toSession: "registry-lost" },
+      },
+    ];
+    writeFileSync(
+      inbox,
+      `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`,
+    );
+    const receiptProject = realpathSync(project);
+    const receipts = [
+      {
+        messageId: "live-refused",
+        project: receiptProject,
+        ts: "2026-09-08T11:04:00.000Z",
+        status: "refused",
+        sessionId: "cli-reader",
+      },
+      {
+        messageId: "recently-active",
+        project: receiptProject,
+        ts: new Date().toISOString(),
+        status: "held",
+        sessionId: "registry-lost",
+      },
+    ];
+    writeFileSync(
+      join(home, ".claude", "agent-mail", "receipts", `${slug}.jsonl`),
+      `${receipts.map((receipt) => JSON.stringify(receipt)).join("\n")}\n`,
+    );
+
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        cli,
+        "triage-candidates",
+        "--project",
+        project,
+        "--limit",
+        "2",
+      ],
+      {
+        env: { ...process.env, HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await child.exited).toBe(0);
+    const result = JSON.parse(await new Response(child.stdout).text()) as {
+      schemaVersion: number;
+      liveSessionIds: string[];
+      recentlyActiveUnregisteredSessions: { sessionId: string }[];
+      protectedRecipientSessionIds: string[];
+      counts: Record<string, number>;
+      limit: number;
+      returned: number;
+      truncated: boolean;
+      messages: { id: string; triageReason: string }[];
+    };
+
+    expect(result.schemaVersion).toBe(1);
+    expect(result.liveSessionIds).toEqual(["cli-reader"]);
+    expect(result.recentlyActiveUnregisteredSessions).toEqual([
+      expect.objectContaining({ sessionId: "registry-lost" }),
+    ]);
+    expect(result.protectedRecipientSessionIds).toEqual([
+      "cli-reader",
+      "registry-lost",
+    ]);
+    expect(result.limit).toBe(2);
+    expect(result.returned).toBe(2);
+    expect(result.truncated).toBe(true);
+    expect(
+      result.messages.map(({ id, triageReason }) => ({ id, triageReason })),
+    ).toEqual([
+      { id: "broadcast", triageReason: "broadcast" },
+      { id: "inactive", triageReason: "recipient-not-live" },
+    ]);
+    expect(result.counts).toEqual({
+      unread: 5,
+      candidates: 3,
+      broadcast: 1,
+      recipientNotLive: 1,
+      recipientRefused: 1,
+      liveRecipient: 2,
+      nonDeliverable: 0,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("mark-read accepts an exact set through repeated id flags", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-mark-read-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    const { home, project } = seedInbox(root);
+    const mark = Bun.spawn(
+      [
+        process.execPath,
+        cli,
+        "mark-read",
+        "--project",
+        project,
+        "--id",
+        "note-a",
+        "--id",
+        "note-b",
+      ],
+      {
+        env: { ...process.env, HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await mark.exited).toBe(0);
+    expect(await new Response(mark.stdout).text()).toContain(
+      "marked 2 message(s) read",
+    );
+
+    const inbox = Bun.spawn(
+      [
+        process.execPath,
+        cli,
+        "inbox",
+        "--project",
+        project,
+        "--unread",
+        "--peek",
+      ],
+      {
+        env: { ...process.env, HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await inbox.exited).toBe(0);
+    expect(await new Response(inbox.stdout).text()).toStartWith("inbox empty");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("mark-read rejects a value-less id combined with all", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-mark-read-guard-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    const { home, project } = seedInbox(root);
+    const mark = Bun.spawn(
+      [
+        process.execPath,
+        cli,
+        "mark-read",
+        "--project",
+        project,
+        "--id",
+        "--all",
+      ],
+      {
+        env: { ...process.env, HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await mark.exited).toBe(1);
+    expect(await new Response(mark.stderr).text()).toContain(
+      "--all cannot be combined with --id",
+    );
+
+    const inbox = Bun.spawn(
+      [
+        process.execPath,
+        cli,
+        "inbox",
+        "--project",
+        project,
+        "--unread",
+        "--peek",
+      ],
+      {
+        env: { ...process.env, HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await inbox.exited).toBe(0);
+    expect(await new Response(inbox.stdout).text()).toContain("note-a unread");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("inbox read with a session id records the pull and marks messages read", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-read-"));
   const cli = join(import.meta.dir, "cli.ts");

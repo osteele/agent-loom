@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `agent-mail triage-candidates` for unread broadcasts, direct mail without
+  a live recipient, and direct mail its live recipient refused.
+- Accept repeated `--id` flags on `agent-mail mark-read` so triage can settle an
+  exact message set without consuming other sessions' direct mail.
 - Notify pull-only clients such as Codex, Kimi Code, and Gemini CLI about new
   mail through installable reminder hooks.
 - Report a session's unread backlog when its MCP server starts.

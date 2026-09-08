@@ -56,20 +56,55 @@ defines each outcome.
 ### `inbox`
 
 ```
-agent-mail inbox [--project <dir>] [--limit N] [--unread]
+agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek]
 ```
 
 Prints a project's spool, newest messages last, one line each with id, read
 state, timestamp, sender, and any reply marker. `--limit` defaults to 20;
-`--unread` shows only unread messages.
+`--unread` shows only unread messages. Unless `--peek` is set, a verified agent
+session records delivery receipts for the returned messages and marks them
+read.
+
+### `triage-candidates`
+
+```
+agent-mail triage-candidates [--project <dir>] [--limit N]
+```
+
+Returns a versioned JSON snapshot of unread mail available for project-level
+triage: broadcasts, direct messages whose recipient has no current or recent
+delivery activity, and direct messages their live recipient refused. Direct
+mail owned by a registered live session stays out of the candidate set. The
+command also protects a recipient that stamped any delivery receipt during the
+previous hour despite a missing registry entry. The response reports those
+cases in `recentlyActiveUnregisteredSessions` and reports the
+complete exclusion set in `protectedRecipientSessionIds`. Audit records and
+TTL-expired mail are counted as non-deliverable and are not candidates.
+
+The response returns the oldest 20 candidates by default while
+`counts.candidates` reports the complete matching set; `returned` and
+`truncated` describe the current batch. Set `--limit N` to choose a batch size
+or `--limit 0` to request every candidate. Prefer bounded batches for automated
+triage because message bodies are included in full.
+
+A failed process scan is conservative: existing registrations remain live for
+this selection, so an inspection failure cannot expose their direct mail to
+another agent.
+
+Mark handled candidates by exact id with `mark-read`. A broadcast read marker
+removes that message from every session's unread view, including live pull-only
+sessions that have not received it, so the triaging agent assumes
+responsibility for every broadcast it settles. Do not use `--all` while live
+sessions still own unread direct messages.
 
 ### `mark-read`
 
 ```
-agent-mail mark-read [--project <dir>] (--id <message-id> | --all)
+agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)
 ```
 
-Marks one message, or the whole inbox, read.
+Marks one or more messages, or the whole inbox, read. Repeat `--id` to settle a
+triaged set without consuming messages that were excluded from that set.
 
 ### `receipts`
 

@@ -30,6 +30,7 @@
   },
   "files": [
     "dist",
+    "plugins/agent-mail/skills",
     "docs",
     "examples",
     "README.md",

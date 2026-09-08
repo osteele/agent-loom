@@ -4,7 +4,8 @@
  * Messaging:
  *   agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id>] [--no-slack]
  *   agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek]
- *   agent-mail mark-read [--project <dir>] (--id <message-id> | --all)
+ *   agent-mail triage-candidates [--project <dir>] [--limit N]
+ *   agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)
  *   agent-mail listeners [--project <dir>] [--json] [--no-sync]
  *   agent-mail mute|unmute (--session <name-or-id> | --project <dir>)
  *   agent-mail claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
@@ -100,6 +101,7 @@ import {
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
 } from "./integrations.ts";
+import { selectTriageCandidates } from "./mailTriage.ts";
 import { installMcpStartupDiagnostics } from "./mcpDiagnostics.ts";
 import {
   CONFIG_PATH,
@@ -885,24 +887,95 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
   }
 }
 
-function cmdMarkRead(flags: Record<string, string | boolean>): void {
+function cmdTriageCandidates(flags: Record<string, string | boolean>): void {
   const project =
     typeof flags.project === "string"
       ? resolveProjectArg(flags.project)
       : canonicalProject(process.cwd());
+  const limit = typeof flags.limit === "string" ? Number(flags.limit) : 20;
+  if (!Number.isInteger(limit) || limit < 0) {
+    console.error("agent-mail: --limit must be a non-negative integer");
+    process.exit(1);
+  }
+  const generatedAt = new Date();
+  const receipts = readReceipts(project);
+  const liveSessionIds = [
+    ...new Set(
+      listLiveInProject(project)
+        .map((entry) => entry.sessionId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ].sort();
+  const recentlyActiveUnregisteredSessions = unregisteredActiveSessions(
+    receipts,
+    new Set(liveSessionIds),
+    generatedAt.getTime(),
+    60 * 60_000,
+  ).filter((session) => session.project === project);
+  const protectedRecipientSessionIds = [
+    ...new Set([
+      ...liveSessionIds,
+      ...recentlyActiveUnregisteredSessions.map((session) => session.sessionId),
+    ]),
+  ].sort();
+  const selection = selectTriageCandidates(
+    readMessages(project, { limit: 0, unreadOnly: true }),
+    receipts,
+    protectedRecipientSessionIds,
+    generatedAt.getTime(),
+  );
+  const messages =
+    limit > 0 ? selection.messages.slice(0, limit) : selection.messages;
+  console.log(
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        project,
+        generatedAt: generatedAt.toISOString(),
+        liveSessionIds,
+        recentlyActiveUnregisteredSessions,
+        protectedRecipientSessionIds,
+        counts: selection.counts,
+        limit,
+        returned: messages.length,
+        truncated: messages.length < selection.messages.length,
+        messages,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+function cmdMarkRead(
+  flags: Record<string, string | boolean>,
+  args: string[],
+): void {
+  const project =
+    typeof flags.project === "string"
+      ? resolveProjectArg(flags.project)
+      : canonicalProject(process.cwd());
+  const ids = repeatedFlagValues(args, "id");
+  const idFlagCount = args.filter((arg) => arg === "--id").length;
+  if (flags.all === true && idFlagCount > 0) {
+    console.error("agent-mail: --all cannot be combined with --id");
+    process.exit(1);
+  }
+  if (ids.length !== idFlagCount) {
+    console.error("agent-mail: --id requires a message id");
+    process.exit(1);
+  }
   if (flags.all === true) {
     console.log(`marked ${markAllMessagesRead(project)} message(s) read`);
     return;
   }
-  if (typeof flags.id !== "string") {
+  if (ids.length === 0) {
     console.error(
-      "usage: agent-mail mark-read [--project <dir>] (--id <message-id> | --all)",
+      "usage: agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)",
     );
     process.exit(1);
   }
-  console.log(
-    `marked ${markMessagesRead(project, [flags.id])} message(s) read`,
-  );
+  console.log(`marked ${markMessagesRead(project, ids)} message(s) read`);
 }
 
 function cmdReceipts(flags: Record<string, string | boolean>): void {
@@ -2652,8 +2725,11 @@ Messaging:
                         per message and marks them read; --peek leaves them
                         unread, and a read with no session id stays
                         unattributed.
-  mark-read [--project <dir>] (--id <message-id> | --all)
-                        Mark messages read
+  triage-candidates [--project <dir>] [--limit N]
+                        Return bounded, versioned JSON containing unread
+                        broadcasts and direct mail with no accepting recipient.
+  mark-read [--project <dir>] (--id <message-id>... | --all)
+                        Mark one or more messages read
   receipts [--project <dir>] [--id <message-id>] [--limit N]
                         Show append-only delivery state changes
   listeners [--project <dir>] [--json] [--no-sync]
@@ -2864,8 +2940,11 @@ switch (cmd) {
   case "inbox":
     cmdInbox(flags);
     break;
+  case "triage-candidates":
+    cmdTriageCandidates(flags);
+    break;
   case "mark-read":
-    cmdMarkRead(flags);
+    cmdMarkRead(flags, rest);
     break;
   case "receipts":
     cmdReceipts(flags);
