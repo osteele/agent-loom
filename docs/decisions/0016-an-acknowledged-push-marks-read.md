@@ -3,72 +3,72 @@ status: accepted
 date: 2026-09-08
 ---
 
-# 0016. An acknowledged push marks read; a fire-and-forget push does not
+# 0016. Host acceptance records push, not read
 
 ## Context and Problem Statement
 
 [0013](0013-check-inbox-marks-returned-mail-read.md) made a pull the
-acknowledgement, because the instruction asking agents to `mark_read`
-push-handled mail had approximately zero compliance. It left push clients on
-that instruction, where compliance is still approximately zero — two sessions
-answered peer mail from pushes for hours without sending it, and neither
-noticed until a human read a status line. A pull client cannot skip
-acknowledging, since reading is the acknowledgement; a push client's is a
-separate act with no visible consequence when omitted, so the count degrades
-for the clients least able to notice.
+acknowledgement because agents rarely called `mark_read` after handling pushed
+mail. The Oh My Pi bridge later added a callback that runs after
+`pi.sendMessage` accepts a custom message. That callback was treated as proof
+that the message reached agent context and marked it read.
 
-0013 rejected marking on push because the server cannot confirm a push
-surfaced. That held for every push transport then existing. The oh-my-pi bridge
-(`sessionPush.ts`) arrived five days later and acknowledges only after its host
-durably accepts the notification.
+The extension calls the callback immediately after OMP accepts a queued
+`followUp`. It receives no signal that OMP inserted that follow-up into a model
+turn. Host acceptance is useful delivery evidence, but it does not satisfy
+0013's standard that the server observed the message entering agent context.
 
 ## Decision Outcome
 
-Read-marking follows the transport's ability to observe delivery, not the
-distinction between push and pull.
+Receipt state follows what each observation proves:
 
-A transport that acknowledges marks read on its acknowledgement: the host has
-reported durable acceptance, so the message reached the agent's context, the
-standard 0013 set for a pull. Claude's channel push marks nothing — no ack, no
-way to distinguish delivered from dropped, and marking would assert more than
-the server knows.
+- Host or transport acceptance records a per-session `pushed` receipt.
+- `check_inbox` marks the messages it returns read because those messages enter
+  the calling agent's context.
+- `mark_read` records an explicit disposition after an agent handles pushed
+  mail.
+- A future push acknowledgement may mark read only if its contract specifically
+  attests context injection rather than queue or transport acceptance.
 
-Separately, and requiring acknowledgement from no one, the unread count reports
-its composition: how many unread messages carry a `pushed` receipt for this
-session, and how many never reached it.
+The current Oh My Pi and Claude channel push paths leave project-global read
+state unchanged. Unread reporting distinguishes `pushed but unread` messages
+from messages with no push receipt; the distinction must not suppress either
+group.
 
 ### Consequences
 
-- An ack means the *host* accepted, not that the agent read; a harness that
-  acks then discards marks unseen mail read. Weaker than a pull.
-- Read state depends on transport capability, so two sessions in one project
-  legitimately differ, and every future transport must answer whether it
-  observes delivery. One that acks unreliably marks mail nobody saw.
-- The composition split is per-session, and those receipts die with the session
-  id: a fresh session sees the whole backlog as "never delivered", the flaw
-  0013 named. The split labels; it must never suppress.
+- A successful Oh My Pi push can remain unread until `check_inbox` retrieves it
+  or the agent calls `mark_read`.
+- A `pushed` receipt remains durable evidence that the receiving host accepted
+  the message without overstating what happened afterward.
+- Unread counts can include mail that an agent handled from a push but did not
+  explicitly mark. This preserves uncertain work instead of silently losing
+  mail that may still be queued or unseen.
+- Push transports use one receipt contract. Their host APIs do not define read
+  state unless they expose an explicit context-delivery acknowledgement.
 
 ## Considered Options
 
-### Keep 0013 intact and fix only the count's composition
+### Treat durable host acceptance as read
 
-Rejected: honest, but it changes no state, so the durable read flag still rests
-on an instruction measured at approximately zero compliance.
+Rejected: it avoids reliance on `mark_read`, but OMP accepts a queued follow-up
+before the server can know whether it entered agent context. Marking read would
+turn a successful handoff into a stronger claim the observation cannot support.
 
-### Mark read on any push, acknowledged or not
+### Keep host acceptance and read as separate evidence
 
-Rejected for 0013's own reason, undisturbed. Four sessions were pushed to in
-one night over hosts that had never loaded the channel; marking would have
-recorded every one as read.
+Accepted: `pushed` records the successful handoff, while `check_inbox` or
+`mark_read` records the stronger disposition. This can retain already-handled
+mail as unread when an agent omits `mark_read`, but it cannot erase unseen mail.
 
-### Mark read when a session replies to a pushed message
+### Infer read from a reply
 
-Rejected: a reply is a fresh `send_mail` linked by the optional `reply_to`, so
-the server still depends on a volunteered field, and it misses handled mail
-never replied to.
+Rejected: replies carry an optional `reply_to`, and handled mail does not always
+receive a reply. The inference would remain incomplete and dependent on caller
+discipline.
 
 ## More Information
 
-- **Supersedes in part**: [0013](0013-check-inbox-marks-returned-mail-read.md)
-  — "channel push still never marks read" narrows to transports that cannot
-  observe delivery. The rest of 0013 stands.
+- **Clarifies**: [0013](0013-check-inbox-marks-returned-mail-read.md). A push
+  transport may attest context delivery, but current host-acceptance callbacks
+  do not.

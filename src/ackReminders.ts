@@ -1,11 +1,9 @@
-/** Bounded reminders for mail a session was pushed and never acknowledged.
+/** Bounded reminders for unread mail addressed to one session.
  *
- * A channel push cannot mark read: it is fire-and-forget, so the server cannot
- * tell a delivered message from a dropped one (0013, narrowed by 0016 to spare
- * transports that acknowledge). The acknowledgement is therefore a separate
- * act, `mark_read`, which the startup instruction asks for and which two
- * sessions in one night each read and did not perform — neither noticing until
- * a human read a status line.
+ * A `pushed` receipt proves that the receiving transport accepted the message.
+ * It does not prove that a queued follow-up entered agent context or was read.
+ * `check_inbox` provides verified context delivery and marks what it returns;
+ * `mark_read` records explicit disposition of mail handled from a push.
  *
  * A reminder fires when the condition is true rather than once at startup,
  * which is the difference between the coordination reminders agents act on and
@@ -44,8 +42,8 @@ export interface AckReminderState {
 export interface AckReminder {
   sessionId: string;
   project: string;
-  delivered: number;
-  undelivered: number;
+  pushed: number;
+  neverPushed: number;
   oldestMs: number;
   message: string;
   idempotencyKey: string;
@@ -113,10 +111,9 @@ export function ackReminderStatesEqual(
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** A reminder is itself mail: it is pushed to the session it names and, on a
- * transport that cannot acknowledge, goes unacknowledged like everything else.
- * Counting it would make the condition self-sustaining — the reminder would
- * become the backlog it reports and fire forever. */
+/** A reminder is itself mail and remains unread after push. Counting it would
+ * make the condition self-sustaining: the reminder would become the backlog it
+ * reports and fire forever. */
 export function isAgentMailAutomation(message: StoredMessage): boolean {
   return (
     message.meta?.coordinationReminder === "true" ||
@@ -124,18 +121,17 @@ export function isAgentMailAutomation(message: StoredMessage): boolean {
   );
 }
 
-/** Mail outstanding for a session, split by whether it ever reached them.
+/** Mail outstanding for a session, split by transport evidence.
  *
- * Both halves are unread and both want action, but not the same action: a
- * delivered message was surfaced and is probably handled, needing only
- * `mark_read`; an undelivered one has never been seen and needs pulling. A
- * reminder that merged them would tell a session to acknowledge mail it has
- * not read, and to go read mail it already answered. */
+ * Both halves are unread and retrievable through `check_inbox`. A pushed
+ * message may have entered context, remained queued by the host, or already
+ * been handled without an explicit `mark_read`. A message with no push receipt
+ * has not reached the session's push transport. */
 export interface OutstandingMail {
-  /** Pushed to this session, still unread — very likely handled. */
-  delivered: number;
-  /** Never pushed to this session and still unread — never seen. */
-  undelivered: number;
+  /** Accepted by this session's push transport, still unread. */
+  pushed: number;
+  /** No push receipt for this session, still unread. */
+  neverPushed: number;
   /** Age of the oldest message in either half. */
   oldestMs: number;
 }
@@ -158,8 +154,8 @@ export function outstandingMail(
     const seen = pushedAt.get(receipt.messageId);
     if (seen === undefined || at < seen) pushedAt.set(receipt.messageId, at);
   }
-  let delivered = 0;
-  let undelivered = 0;
+  let pushed = 0;
+  let neverPushed = 0;
   let oldest = 0;
   // Count only what this session may actually see. Without it the reminder
   // reports the whole project spool — other sessions' mail, and this session's
@@ -168,29 +164,26 @@ export function outstandingMail(
   // of it.
   for (const message of visibleToSession(messages, receipts, sessionId)) {
     if (message.read || isAgentMailAutomation(message)) continue;
-    // Age from the push for a delivered message, from the message itself for
-    // one that never arrived: an undelivered message has no delivery to date
-    // from, and dating it from now would make it permanently too young.
+    // Age from the push when the transport accepted a message, and from the
+    // message timestamp when no push occurred.
     const from = pushedAt.get(message.id) ?? Date.parse(message.ts);
     if (!Number.isFinite(from)) continue;
     const age = nowMs - from;
     if (age < graceMs) continue;
     if (pushedAt.has(message.id)) {
-      delivered += 1;
+      pushed += 1;
     } else {
       // A project inbox outlives its sessions. Everything spooled before this
-      // session began was never delivered to it and never could have been, so
-      // counting it reports a shared archive as one session's outstanding
-      // work: on first run this read 48 undelivered, oldest 22 days, for a
-      // session hours old. That is the per-session-receipt flaw 0013 named,
-      // surfaced as an alarm. A push is its own proof of arrival, so the
-      // delivered half needs no such bound.
+      // session began was never available to it, so counting that history
+      // reports a shared archive as one session's outstanding work. A push is
+      // evidence that the transport accepted the message, so the pushed half
+      // needs no such bound.
       if (from < sinceMs) continue;
-      undelivered += 1;
+      neverPushed += 1;
     }
     if (age > oldest) oldest = age;
   }
-  return { delivered, undelivered, oldestMs: oldest };
+  return { pushed, neverPushed, oldestMs: oldest };
 }
 
 function formatAge(ms: number): string {
@@ -210,7 +203,7 @@ export function prepareAckReminder(
   nowMs: number,
   sinceMs = 0,
 ): AckReminder | undefined {
-  const { delivered, undelivered, oldestMs } = outstandingMail(
+  const { pushed, neverPushed, oldestMs } = outstandingMail(
     messages,
     receipts,
     sessionId,
@@ -218,7 +211,7 @@ export function prepareAckReminder(
     ACK_GRACE_MS,
     sinceMs,
   );
-  const count = delivered + undelivered;
+  const count = pushed + neverPushed;
   if (count === 0) return undefined;
   const mailboxKey = ackReminderMailboxKey(project, sessionId);
   const last = state.sessions[mailboxKey];
@@ -226,16 +219,16 @@ export function prepareAckReminder(
     return undefined;
   }
   const parts: string[] = [];
-  if (delivered > 0) parts.push(`${delivered} delivered but unacknowledged`);
-  if (undelivered > 0) parts.push(`${undelivered} never delivered`);
+  if (pushed > 0) parts.push(`${pushed} pushed but unread`);
+  if (neverPushed > 0) parts.push(`${neverPushed} never pushed`);
   const noun = count === 1 ? "message" : "messages";
   return {
     sessionId,
     project,
-    delivered,
-    undelivered,
+    pushed,
+    neverPushed,
     oldestMs,
-    message: `Agent-mail delivery reminder: ${count} ${noun} outstanding for you (${parts.join(", ")}); oldest ${formatAge(oldestMs)}. A channel push cannot mark mail read on its own: call mark_read for any you have already handled, and check_inbox to pull anything you have not seen.`,
+    message: `Agent-mail delivery reminder: ${count} ${noun} outstanding for you (${parts.join(", ")}); oldest ${formatAge(oldestMs)}. Call check_inbox to retrieve unread mail, or mark_read only messages you have already handled from a push.`,
     // One reminder per mailbox per interval, including retries after rate limits.
     idempotencyKey: `ack-reminder:${mailboxKey}:${Math.floor(nowMs / ACK_REMINDER_INTERVAL_MS)}`,
   };

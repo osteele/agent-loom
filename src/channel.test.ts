@@ -537,7 +537,7 @@ test("a channel push carries the acknowledgement it cannot perform", async () =>
   }
 }, 5_000);
 
-test("the unread count separates delivered-but-unacknowledged from never delivered", async () => {
+test("the unread count separates pushed-but-unread from never-pushed", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-split-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
@@ -560,9 +560,9 @@ test("the unread count separates delivered-but-unacknowledged from never deliver
     `${seeded.map((m) => JSON.stringify(m)).join("\n")}\n`,
   );
 
-  // One of the two was pushed to this session and never acknowledged — the
-  // state an agent lands in when it answers straight from the push. The other
-  // has never reached it. Both are "unread"; only the second is outstanding.
+  // One message has a push receipt but may still be queued, may have entered
+  // context, or may already be handled. The other has no push receipt. Both
+  // remain unread and outstanding.
   const receiptDirectory = join(home, ".claude", "agent-mail", "receipts");
   mkdirSync(receiptDirectory, { recursive: true });
   writeFileSync(
@@ -602,7 +602,7 @@ test("the unread count separates delivered-but-unacknowledged from never deliver
       arguments: { peek: true },
     });
     expect(textContent(pulled)).toContain(
-      "2 unread for this session (1 delivered but unacknowledged, 1 never delivered)",
+      "2 unread for this session (1 pushed but unread, 1 never pushed)",
     );
   } finally {
     await client.close();

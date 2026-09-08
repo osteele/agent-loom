@@ -51,48 +51,48 @@ function pushed(
 
 const EMPTY = { version: 2 as const, sessions: {} };
 
-test("a pushed message that stayed unread is delivered-but-unacknowledged", () => {
+test("a pushed message that stayed unread retains push evidence", () => {
   const out = outstandingMail(
     [message()],
     [pushed("m1", "2026-09-08T04:00:01.000Z")],
     SESSION,
     NOW,
   );
-  expect(out).toMatchObject({ delivered: 1, undelivered: 0 });
+  expect(out).toMatchObject({ pushed: 1, neverPushed: 0 });
 });
 
-test("an unread message never pushed to this session counts as never delivered", () => {
-  // The user's case: mail that has not reached the session at all is still
-  // outstanding, and needs pulling rather than acknowledging.
+test("an unread message with no push receipt counts as never pushed", () => {
+  // Mail that has not reached the session's push transport is still
+  // outstanding and needs pulling.
   const out = outstandingMail([message()], [], SESSION, NOW);
-  expect(out).toMatchObject({ delivered: 0, undelivered: 1 });
+  expect(out).toMatchObject({ pushed: 0, neverPushed: 1 });
 });
 
-test("a push to another session does not make it delivered to this one", () => {
+test("a push to another session is not this session's push evidence", () => {
   const out = outstandingMail(
     [message()],
     [pushed("m1", "2026-09-08T04:00:01.000Z", "someone-else")],
     SESSION,
     NOW,
   );
-  expect(out).toMatchObject({ delivered: 0, undelivered: 1 });
+  expect(out).toMatchObject({ pushed: 0, neverPushed: 1 });
 });
 
 test("mail inside the grace period is not yet outstanding", () => {
-  // Both halves must respect it: an undelivered message is dated from itself,
+  // Both halves must respect it: a never-pushed message is dated from itself,
   // and dating it from now would leave it permanently too young to report.
   const fresh = "2026-09-08T05:59:00.000Z";
   expect(
     outstandingMail([message({ ts: fresh })], [], SESSION, NOW),
-  ).toMatchObject({ delivered: 0, undelivered: 0 });
+  ).toMatchObject({ pushed: 0, neverPushed: 0 });
   expect(
     outstandingMail([message()], [pushed("m1", fresh)], SESSION, NOW),
-  ).toMatchObject({ delivered: 0, undelivered: 0 });
+  ).toMatchObject({ pushed: 0, neverPushed: 0 });
 });
 
 test("read mail and agent-mail's own reminders are never counted", () => {
-  // A reminder is itself pushed and unacknowledged. Counting it would make the
-  // condition self-sustaining: the reminder becomes the backlog it reports.
+  // A reminder remains unread after push. Counting it would make the condition
+  // self-sustaining: the reminder becomes the backlog it reports.
   expect(
     outstandingMail(
       [
@@ -104,27 +104,27 @@ test("read mail and agent-mail's own reminders are never counted", () => {
       SESSION,
       NOW,
     ),
-  ).toMatchObject({ delivered: 0, undelivered: 0 });
+  ).toMatchObject({ pushed: 0, neverPushed: 0 });
 });
 
 test("mail spooled before the session began is not its backlog", () => {
   // A project inbox outlives its sessions. On its first real run this reported
-  // 48 undelivered, oldest 22 days, to a session hours old — a shared archive
-  // rendered as one session's outstanding work.
+  // 48 never-pushed messages, oldest 22 days, to a session hours old: a shared
+  // archive rendered as one session's outstanding work.
   const began = Date.parse("2026-09-08T05:00:00.000Z");
   const old = message({ id: "ancient", ts: "2026-08-17T00:00:00.000Z" });
   const mine = message({ id: "mine", ts: "2026-09-08T05:10:00.000Z" });
   expect(
     outstandingMail([old, mine], [], SESSION, NOW, ACK_GRACE_MS, began),
-  ).toMatchObject({ delivered: 0, undelivered: 1 });
+  ).toMatchObject({ pushed: 0, neverPushed: 1 });
 });
 
-test("a push proves arrival, so the delivered half ignores the session bound", () => {
-  // Being pushed to is itself evidence the session existed to receive it; the
-  // bound exists only for mail that has no delivery to date from. The push
-  // here predates `began`, which is ordinary: a session re-registers on resume
-  // and on the poll's self-heal, so `started` moves forward under pushes that
-  // already happened. Bounding the delivered half would erase them.
+test("push evidence ignores the session-start bound", () => {
+  // A pushed receipt proves the session's transport accepted or emitted the
+  // message, so the bound applies only to mail without a push timestamp. The
+  // receipt here predates `began`, which is ordinary: a session re-registers
+  // on resume and on the poll's self-heal, so `started` moves forward under
+  // existing receipts.
   const began = Date.parse("2026-09-08T05:00:00.000Z");
   const old = message({ id: "ancient", ts: "2026-08-17T00:00:00.000Z" });
   expect(
@@ -136,7 +136,7 @@ test("a push proves arrival, so the delivered half ignores the session bound", (
       ACK_GRACE_MS,
       began,
     ),
-  ).toMatchObject({ delivered: 1, undelivered: 0 });
+  ).toMatchObject({ pushed: 1, neverPushed: 0 });
 });
 
 test("mail addressed to another session is not this session's backlog", () => {
@@ -148,20 +148,20 @@ test("mail addressed to another session is not this session's backlog", () => {
     meta: { toSession: "another-session" },
   });
   expect(outstandingMail([forSomeoneElse], [], SESSION, NOW)).toMatchObject({
-    delivered: 0,
-    undelivered: 0,
+    pushed: 0,
+    neverPushed: 0,
   });
 });
 
 test("mail this session sent is not mail it is waiting on", () => {
   const mine = message({ id: "sent", meta: { sessionId: SESSION } });
   expect(outstandingMail([mine], [], SESSION, NOW)).toMatchObject({
-    delivered: 0,
-    undelivered: 0,
+    pushed: 0,
+    neverPushed: 0,
   });
 });
 
-test("the reminder names both halves and their different remedies", () => {
+test("the reminder separates push evidence from read disposition", () => {
   const reminder = prepareAckReminder(
     SESSION,
     "/p",
@@ -171,10 +171,12 @@ test("the reminder names both halves and their different remedies", () => {
     NOW,
   );
   expect(reminder?.message).toContain("2 messages outstanding");
-  expect(reminder?.message).toContain("1 delivered but unacknowledged");
-  expect(reminder?.message).toContain("1 never delivered");
-  expect(reminder?.message).toContain("mark_read");
-  expect(reminder?.message).toContain("check_inbox");
+  expect(reminder?.message).toContain("1 pushed but unread");
+  expect(reminder?.message).toContain("1 never pushed");
+  expect(reminder?.message).toContain("check_inbox to retrieve unread mail");
+  expect(reminder?.message).toContain(
+    "mark_read only messages you have already handled",
+  );
 });
 
 test("a session is not reminded again inside the interval", () => {

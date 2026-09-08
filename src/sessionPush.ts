@@ -33,7 +33,6 @@ import {
   type ReceiptTail,
   appendReceipt,
   emptyReceiptTail,
-  markMessagesRead,
   readMessages,
   readReceiptTail,
 } from "./spool.ts";
@@ -303,16 +302,9 @@ export class SessionPushBridge {
       "pushed",
       this.#client.receiptDetail,
     );
-    // This transport acknowledges only after the host durably accepts the
-    // notification, so the message reached the agent's context — the same
-    // standard a pull meets, and the reason 0013 withheld read-marking from
-    // channel push does not apply here. A fire-and-forget push still marks
-    // nothing: it cannot tell a delivered message from a dropped one.
-    markMessagesRead(
-      connection.project,
-      [pending.messageId],
-      connection.sessionId,
-    );
+    // Host acceptance proves transport delivery only. OMP may queue the
+    // follow-up without injecting it into agent context, so read state changes
+    // only through check_inbox or an explicit mark_read.
     return true;
   }
 

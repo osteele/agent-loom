@@ -107,15 +107,15 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
     }),
   );
 
-  // This transport acks only after the host durably accepts, so delivery is
-  // observed rather than assumed and the message is marked read. A channel
-  // push, which cannot tell delivered from dropped, still marks nothing —
-  // without this an agent that answers from the push leaves it unread forever
-  // and its unread count reports handled mail as outstanding.
+  // Host acceptance records the push but does not prove that OMP injected the
+  // queued follow-up into agent context.
+  expect(
+    readReceipts(project, "omp-mail-1").map((receipt) => receipt.status),
+  ).not.toContain("read");
   expect(
     readMessages(project, { limit: 0 }).find((m) => m.id === "omp-mail-1")
       ?.read,
-  ).toBe(true);
+  ).toBe(false);
 
   await reader.cancel();
   bridge.close();

@@ -1,5 +1,5 @@
 ---
-status: accepted; push clause superseded by [0016](0016-an-acknowledged-push-marks-read.md)
+status: accepted; push clause clarified by [0016](0016-an-acknowledged-push-marks-read.md)
 date: 2026-08-28
 ---
 

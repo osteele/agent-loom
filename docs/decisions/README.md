@@ -34,4 +34,4 @@ decided. A record that states something untrue is corrected in place instead.
 | [0013](0013-check-inbox-marks-returned-mail-read.md) | Reading marks read: check_inbox acknowledges the mail it returns | 2026-08-28 |
 | [0014](0014-cli-identity-requires-a-host-process-match.md) | A CLI session id is adopted only with a host-process match | 2026-08-31 |
 | [0015](0015-stop-hooks-continue-once-per-new-mail-edge.md) | Stop hooks continue once per new mail edge | 2026-08-31 |
-| [0016](0016-an-acknowledged-push-marks-read.md) | An acknowledged push marks read; a fire-and-forget push does not | 2026-09-08 |
+| [0016](0016-an-acknowledged-push-marks-read.md) | Host acceptance records push, not read | 2026-09-08 |

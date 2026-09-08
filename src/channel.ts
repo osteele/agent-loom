@@ -359,19 +359,18 @@ function inboxScope(opts: {
   const visible = visibleMessages(false);
   const unread = visible.filter((msg) => !msg.read);
   const unreadHere = unread.length;
-  // "Unread" conflates two states a reader acts on differently. A message this
-  // session was pushed was delivered into its context and is very likely
-  // handled — it simply was not acknowledged, because a fire-and-forget push
-  // cannot mark read. A message with no push receipt has never reached this
-  // session at all. Counting them as one number reports handled mail as
-  // outstanding work, which is how a session concludes it is caught up while
-  // its status line disagrees.
+  // "Unread" includes two states a reader acts on differently. A pushed
+  // receipt proves only that this session's transport accepted or emitted the
+  // message; the follow-up may still be queued, may have entered context, or
+  // may already have been handled without mark_read. A message with no pushed
+  // receipt has not reached this session's push transport. Report both without
+  // overstating either.
   const undelivered = unread.filter(
     (msg) => !hasReceipt(opts.priorReceipts, msg.id, sessionId, ["pushed"]),
   ).length;
   const unreadSplit =
     unreadHere > 0
-      ? ` (${unreadHere - undelivered} delivered but unacknowledged, ${undelivered} never delivered)`
+      ? ` (${unreadHere - undelivered} pushed but unread, ${undelivered} never pushed)`
       : "";
   const projectUnread = readMessages(cwd, {
     limit: 0,
@@ -1322,15 +1321,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       found && found.project !== cwd
         ? `outbound to ${displayName(found.project)}; receipts are recorded there:\n`
         : "";
-    // `pushed` means the notification was emitted: MCP notifications are
-    // fire-and-forget with no ack, so nothing here can prove it reached a
-    // context. A push with no later `read` is the only observable hint that it
-    // may not have — reported as the weak evidence it is, not as a verdict.
+    // `pushed` records transport evidence, not context delivery: a channel may
+    // be fire-and-forget, and a host acknowledgement may only accept a queued
+    // follow-up. A push with no later `read` is reported as the weak evidence
+    // it is, not as a verdict.
     const pushedNotRead = selected.some((r) => r.status === "pushed")
       ? !selected.some((r) => r.status === "read")
       : false;
     const unconfirmed = pushedNotRead
-      ? "\nnote: emitted but not yet marked read. `pushed` records that agent-mail sent the notification, which it cannot confirm was surfaced to the session."
+      ? "\nnote: pushed but not yet marked read. `pushed` records transport acceptance or emission, which does not confirm the message entered agent context."
       : "";
     return {
       content: [

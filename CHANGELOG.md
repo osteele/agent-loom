@@ -54,17 +54,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project-wide total is not read as one session's mail.
 - Add `agent-mail unregistered`, which names sessions that recorded delivery
   with no live registration — the shape of a session the registry has lost.
-- Mark a message read when a transport that acknowledges delivery reports the
-  host durably accepted it; fire-and-forget channel push still marks nothing.
-- Split the unread count into delivered-but-unacknowledged and never delivered,
-  so handled mail is not reported as outstanding work.
-- Remind a session about mail it has not cleared, separating what was pushed
-  and never acknowledged from what never reached it, and counting undelivered
-  mail only from when that session began, and only mail that session may see.
-  Cooldowns and scheduling are independent for each project mailbox, even when
-  session IDs match.
-- Carry the acknowledgement instruction on the push itself, for transports that
-  cannot mark read on their own.
+- Keep Oh My Pi host-accepted pushes unread while retaining their `pushed`
+  receipt; accepting a queued follow-up does not prove context delivery.
+- Split the unread count into pushed-but-unread and never-pushed mail without
+  treating either group as handled.
+- Remind a session about mail it has not cleared, separating pushed mail from
+  mail with no push receipt, and counting never-pushed mail only from when that
+  session began and only when that session may see it. Cooldowns and scheduling
+  are independent for each project mailbox, even when session IDs match.
+- Carry explicit `check_inbox` and `mark_read` guidance on push and reminder
+  messages because current push paths do not mark mail read.
 - Keep newly generated session nouns distinct from those held by registered
   sessions after the 30-day cooldown pool is exhausted.
 
