@@ -352,10 +352,27 @@ function inboxScope(opts: {
   /** Set when inbound policy is `refuse`; the count is what was newly
    * refused, which is zero when the page held only settled messages. */
   refused?: number;
+  /** Receipts as they stood before this call recorded any of its own. */
+  priorReceipts: DeliveryReceipt[];
 }): string {
   const { returned, matched, acted, refused } = opts;
   const visible = visibleMessages(false);
-  const unreadHere = visible.filter((msg) => !msg.read).length;
+  const unread = visible.filter((msg) => !msg.read);
+  const unreadHere = unread.length;
+  // "Unread" conflates two states a reader acts on differently. A message this
+  // session was pushed was delivered into its context and is very likely
+  // handled — it simply was not acknowledged, because a fire-and-forget push
+  // cannot mark read. A message with no push receipt has never reached this
+  // session at all. Counting them as one number reports handled mail as
+  // outstanding work, which is how a session concludes it is caught up while
+  // its status line disagrees.
+  const undelivered = unread.filter(
+    (msg) => !hasReceipt(opts.priorReceipts, msg.id, sessionId, ["pushed"]),
+  ).length;
+  const unreadSplit =
+    unreadHere > 0
+      ? ` (${unreadHere - undelivered} delivered but unacknowledged, ${undelivered} never delivered)`
+      : "";
   const projectUnread = readMessages(cwd, {
     limit: 0,
     unreadOnly: true,
@@ -364,7 +381,7 @@ function inboxScope(opts: {
   // against everything visible: with `unread` set, the messages left out are
   // read ones the caller excluded on purpose, and calling them "not shown"
   // would send a reader chasing a bigger limit for mail that is not there.
-  const tail = `${visible.length} visible to this session; ${unreadHere} unread for this session; ${projectUnread} unread in this project across all sessions`;
+  const tail = `${visible.length} visible to this session; ${unreadHere} unread for this session${unreadSplit}; ${projectUnread} unread in this project across all sessions`;
   // Refusal and pagination are independent. What this call refused is settled
   // and no limit will reproduce it; what the limit withheld was never acted on
   // and a larger limit still reaches. Reporting only the first hid the second.
@@ -1124,6 +1141,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
     const policy = inboundPolicy(cwd, process.pid);
     const matched = visibleMessages(unread ?? false);
+    // Snapshot before this call records anything. `check_inbox` stamps a
+    // `pushed` receipt for the rows it returns, so reading receipts afterwards
+    // would count this very pull as prior delivery and report every message as
+    // already delivered.
+    const priorReceipts = readReceipts(cwd);
     const pageLimit = limit ?? 20;
     let messages = pageLimit > 0 ? matched.slice(-pageLimit) : matched;
     const receipts = readReceipts(cwd);
@@ -1209,8 +1231,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
                 })
                 .join(
                   "\n",
-                )}${marked > 0 ? `\nmarked ${marked} message(s) read` : ""}\n${inboxScope({ returned: messages.length, matched: matched.length, acted, refused: refusedByPolicy })}`
-            : `inbox empty ${inboxScope({ returned: 0, matched: matched.length, acted, refused: refusedByPolicy })}`,
+                )}${marked > 0 ? `\nmarked ${marked} message(s) read` : ""}\n${inboxScope({ returned: messages.length, matched: matched.length, acted, refused: refusedByPolicy, priorReceipts })}`
+            : `inbox empty ${inboxScope({ returned: 0, matched: matched.length, acted, refused: refusedByPolicy, priorReceipts })}`,
         },
       ],
     };

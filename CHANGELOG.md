@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project-wide total is not read as one session's mail.
 - Add `agent-mail unregistered`, which names sessions that recorded delivery
   with no live registration — the shape of a session the registry has lost.
+- Mark a message read when a transport that acknowledges delivery reports the
+  host durably accepted it; fire-and-forget channel push still marks nothing.
+- Split the unread count into delivered-but-unacknowledged and never delivered,
+  so handled mail is not reported as outstanding work.
 
 ## [0.1.0] - 2026-08-19
 

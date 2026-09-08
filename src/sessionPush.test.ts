@@ -8,7 +8,7 @@ import {
   type SessionPushEvent,
   resolveSessionPushId,
 } from "./sessionPush.ts";
-import { appendMessage, readReceipts } from "./spool.ts";
+import { appendMessage, readMessages, readReceipts } from "./spool.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -106,6 +106,16 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
       detail: "oh-my-pi",
     }),
   );
+
+  // This transport acks only after the host durably accepts, so delivery is
+  // observed rather than assumed and the message is marked read. A channel
+  // push, which cannot tell delivered from dropped, still marks nothing —
+  // without this an agent that answers from the push leaves it unread forever
+  // and its unread count reports handled mail as outstanding.
+  expect(
+    readMessages(project, { limit: 0 }).find((m) => m.id === "omp-mail-1")
+      ?.read,
+  ).toBe(true);
 
   await reader.cancel();
   bridge.close();

@@ -482,6 +482,78 @@ test("coordination tools expose and recover only dead-session records", async ()
   }
 });
 
+test("the unread count separates delivered-but-unacknowledged from never delivered", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-split-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
+  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  mkdirSync(inboxDirectory, { recursive: true });
+  const seeded = ["p1", "p2"].map((id, index) => ({
+    id,
+    ts: `2026-09-01T12:0${index}:00.000Z`,
+    from: "peer",
+    project: canonical,
+    message: `body ${id}`,
+  }));
+  writeFileSync(
+    join(inboxDirectory, `${slug}.jsonl`),
+    `${seeded.map((m) => JSON.stringify(m)).join("\n")}\n`,
+  );
+
+  // One of the two was pushed to this session and never acknowledged — the
+  // state an agent lands in when it answers straight from the push. The other
+  // has never reached it. Both are "unread"; only the second is outstanding.
+  const receiptDirectory = join(home, ".claude", "agent-mail", "receipts");
+  mkdirSync(receiptDirectory, { recursive: true });
+  writeFileSync(
+    join(receiptDirectory, `${slug}.jsonl`),
+    `${JSON.stringify({
+      messageId: "p1",
+      project: canonical,
+      ts: "2026-09-01T12:05:00.000Z",
+      status: "pushed",
+      sessionId: "split-session",
+    })}\n`,
+  );
+
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "split-session",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+    const pulled = await client.callTool({
+      name: "check_inbox",
+      arguments: { peek: true },
+    });
+    expect(textContent(pulled)).toContain(
+      "2 unread for this session (1 delivered but unacknowledged, 1 never delivered)",
+    );
+  } finally {
+    await client.close();
+  }
+}, 5_000);
+
 test("refusal counts only what it refused, and still reports what the limit withheld", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-refuse-count-"));
   temporaryDirectories.push(root);
