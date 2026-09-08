@@ -315,21 +315,50 @@ function preview(text: string, max = 140): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-function sessionMessages(opts: {
-  limit?: number;
-  unreadOnly?: boolean;
-}): ReturnType<typeof readMessages> {
+/** Every message this session may see, newest last and unpaged. */
+function visibleMessages(unreadOnly: boolean): ReturnType<typeof readMessages> {
   const receipts = readReceipts(cwd);
-  const all = readMessages(cwd, {
-    limit: 0,
-    unreadOnly: opts.unreadOnly ?? false,
-  }).filter(
+  return readMessages(cwd, { limit: 0, unreadOnly }).filter(
     (msg) =>
       messageVisibleToSession(msg, sessionId) &&
       !hasReceipt(receipts, msg.id, sessionId, ["refused", "expired"]),
   );
+}
+
+function sessionMessages(opts: {
+  limit?: number;
+  unreadOnly?: boolean;
+}): ReturnType<typeof readMessages> {
+  const all = visibleMessages(opts.unreadOnly ?? false);
   const limit = opts.limit ?? 20;
   return limit > 0 ? all.slice(-limit) : all;
+}
+
+/** The counts a reader needs to tell a small inbox from a small page.
+ *
+ * Three surfaces report an unread number — this tool, `status-line`, and
+ * `inbox --project` — and they answer three different questions: what this
+ * session may see, what is unread for this session, and what is unread in the
+ * project across every session. Rendered as bare integers they read as one
+ * fact with three values, and an agent told the inbox was processed had in
+ * fact seen a fraction of it. Name the scope wherever a count is shown. */
+function inboxScope(returned: number, matched: number): string {
+  const visible = visibleMessages(false);
+  const unreadHere = visible.filter((msg) => !msg.read).length;
+  const projectUnread = readMessages(cwd, {
+    limit: 0,
+    unreadOnly: true,
+  }).length;
+  // Omission is measured against the set this call's own filters selected, not
+  // against everything visible: with `unread` set, the messages left out are
+  // read ones the caller excluded on purpose, and calling them "not shown"
+  // would send a reader chasing a bigger limit for mail that is not there.
+  const omitted = matched - returned;
+  const more =
+    omitted > 0
+      ? `; ${omitted} older match not shown — raise \`limit\` to see them`
+      : "";
+  return `[returned ${returned} of ${matched} matching; ${visible.length} visible to this session; ${unreadHere} unread for this session; ${projectUnread} unread in this project across all sessions${more}]`;
 }
 
 function describeSessions(
@@ -1073,10 +1102,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       peek?: boolean;
     };
     const policy = inboundPolicy(cwd, process.pid);
-    let messages = sessionMessages({
-      limit: limit ?? 20,
-      unreadOnly: unread ?? false,
-    });
+    const matched = visibleMessages(unread ?? false);
+    const pageLimit = limit ?? 20;
+    let messages = pageLimit > 0 ? matched.slice(-pageLimit) : matched;
     const receipts = readReceipts(cwd);
     if (policy === "hold") {
       const pending = pendingHeldIds(receipts, sessionId);
@@ -1131,7 +1159,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         {
           type: "text",
           text: messages.length
-            ? messages
+            ? `${messages
                 .map((m) => {
                   const sender =
                     m.meta?.fromName ?? m.meta?.sessionId?.slice(0, 8);
@@ -1151,9 +1179,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
                       : "";
                   return `${m.id} ${m.read ? "read" : "unread"} [${m.ts}] from ${displayName(m.from)}${tag}${origin}${labelNote}${direct}${reply}: ${m.message}`;
                 })
-                .join("\n") +
-              (marked > 0 ? `\nmarked ${marked} message(s) read` : "")
-            : "inbox empty",
+                .join(
+                  "\n",
+                )}${marked > 0 ? `\nmarked ${marked} message(s) read` : ""}\n${inboxScope(messages.length, matched.length)}`
+            : `inbox empty ${inboxScope(0, matched.length)}`,
         },
       ],
     };

@@ -503,7 +503,13 @@ test("check_inbox marks returned messages read unless peek", async () => {
       name: "check_inbox",
       arguments: { unread: true },
     });
-    expect(textContent(after)).toBe("inbox empty");
+    const afterText = textContent(after);
+    expect(afterText).toStartWith("inbox empty");
+    // The scope line must not describe the read messages the `unread` filter
+    // excluded as pages the caller could reach by raising `limit`.
+    expect(afterText).toContain("returned 0 of 0 matching");
+    expect(afterText).toContain("0 unread for this session");
+    expect(afterText).not.toContain("not shown");
 
     const again = await client.callTool({ name: "check_inbox" });
     const againText = textContent(again);
