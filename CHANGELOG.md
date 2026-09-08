@@ -52,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host durably accepted it; fire-and-forget channel push still marks nothing.
 - Split the unread count into delivered-but-unacknowledged and never delivered,
   so handled mail is not reported as outstanding work.
+- Remind a session about mail it has not cleared, separating what was pushed
+  and never acknowledged from what never reached it, and counting undelivered
+  mail only from when that session began, and only mail that session may see.
+  Cooldowns and scheduling are independent for each project mailbox, even when
+  session IDs match.
+- Carry the acknowledgement instruction on the push itself, for transports that
+  cannot mark read on their own.
 
 ## [0.1.0] - 2026-08-19
 

@@ -19,6 +19,15 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  ackReminderMailboxKey,
+  ackReminderStatesEqual,
+  prepareAckReminder,
+  pruneAckReminderState,
+  readAckReminderState,
+  recordAckReminder,
+  writeAckReminderState,
+} from "./ackReminders.ts";
+import {
   CLAIM_REMINDER_SWEEP_MS,
   claimReminderStatesEqual,
   prepareClaimReminderSweep,
@@ -341,6 +350,73 @@ function tickPresence(): void {
  *
  * This timer is independent of presence publication: a corrupt reminder state
  * or an unwritable spool must not stop liveness snapshots or mail delivery. */
+/** Remind live sessions about mail they have not cleared.
+ *
+ * Two kinds, reported separately because they need different actions: mail
+ * pushed to the session and never acknowledged, which a channel push cannot
+ * clear on its own, and mail that never reached the session at all. Bounded
+ * per project mailbox, because a reminder that fires every sweep is one a reader
+ * learns to ignore — the failure the startup instruction already demonstrates.
+ */
+function tickAckReminders(): void {
+  try {
+    const nowMs = Date.now();
+    const registrations = listLive();
+    const stored = readAckReminderState();
+    let nextState = stored;
+    const seen = new Set<string>();
+    for (const registration of registrations) {
+      const sessionId = registration.sessionId;
+      if (!sessionId) continue;
+      const project = registration.cwd;
+      const mailboxKey = ackReminderMailboxKey(project, sessionId);
+      if (seen.has(mailboxKey)) continue;
+      seen.add(mailboxKey);
+      const reminder = prepareAckReminder(
+        sessionId,
+        project,
+        readMessages(project, { limit: 0 }),
+        readReceipts(project),
+        nextState,
+        nowMs,
+        Date.parse(registration.started),
+      );
+      if (!reminder) continue;
+      const result = appendMessageGuarded(
+        {
+          ts: new Date(nowMs).toISOString(),
+          from: "agent-mail-delivery",
+          project: reminder.project,
+          message: reminder.message,
+          origin: {
+            kind: "automation",
+            transport: "internal",
+            authority: "untrusted",
+          },
+          idempotencyKey: reminder.idempotencyKey,
+          slackEcho: false,
+          meta: { toSession: reminder.sessionId, ackReminder: "true" },
+        },
+        admissionOptions(),
+        nowMs,
+      );
+      if (result.status === "rate_limited") {
+        log(
+          `delivery reminder rate limited for session ${reminder.sessionId}; retrying next sweep`,
+        );
+        continue;
+      }
+      nextState = recordAckReminder(nextState, reminder, nowMs);
+    }
+    nextState = pruneAckReminderState(nextState, seen);
+    if (!ackReminderStatesEqual(stored, nextState)) {
+      writeAckReminderState(nextState);
+    }
+  } catch (error) {
+    log(`delivery reminder sweep failed: ${error}`);
+  }
+}
+
 function tickClaimReminders(): void {
   try {
     const nowMs = Date.now();
@@ -506,6 +582,8 @@ const claimReminderTimer = setInterval(
   tickClaimReminders,
   CLAIM_REMINDER_SWEEP_MS,
 );
+tickAckReminders();
+const ackReminderTimer = setInterval(tickAckReminders, CLAIM_REMINDER_SWEEP_MS);
 tickWeftJobs();
 const weftJobsTimer = setInterval(tickWeftJobs, WEFT_JOBS_REFRESH_MS);
 

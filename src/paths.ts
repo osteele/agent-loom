@@ -14,6 +14,7 @@
  *   unread-summary.json    daemon snapshot of per-session unread counts
  *   announced/<slug>-<id>.json per-session announcement bookkeeping (NOT receipts)
  *   claim-reminders.json daemon bookkeeping for bounded claim reminders
+ *   ack-reminders.json   daemon bookkeeping for unacknowledged-delivery reminders
  *   remind-diagnostics.log rate-limited stale-summary diagnostics from remind
  *   mcp-startup-failures.jsonl sanitized pre-handshake MCP failure records
  *   daemon.pid, daemon.log daemon state
@@ -56,6 +57,8 @@ export const CLAIM_REMINDER_STATE_PATH = join(
   STATE_DIR,
   "claim-reminders.json",
 );
+/** Daemon bookkeeping for bounded unacknowledged-delivery reminders. */
+export const ACK_REMINDER_STATE_PATH = join(STATE_DIR, "ack-reminders.json");
 /** Rate-limited diagnostics from `agent-mail remind` (stale/missing summary).
  * Appended to, never read by code; stdout of the hook stays machine-clean. */
 export const REMIND_DIAGNOSTICS_PATH = join(

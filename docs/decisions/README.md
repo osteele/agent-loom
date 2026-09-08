@@ -8,6 +8,10 @@ A record belongs here when a future reader could reasonably undo the decision
 by mistake — because the rule looks arbitrary, looks like an unfinished
 feature, or looks like a safe simplification.
 
+Decisions too reversible for a record, but which still foreclosed something,
+go in [log.md](log.md) as one-line Y-statements. A log entry can be promoted to
+a full record later, keeping its original wording.
+
 A change of position is a new record that names the one it supersedes. The
 superseded record's `status` is updated to name its successor — lifecycle
 metadata, not a revision: its body still states what was decided when it was

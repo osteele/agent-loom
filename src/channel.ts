@@ -124,6 +124,7 @@ import {
   readMessages,
   readReceiptTail,
   readReceipts,
+  visibleToSession,
 } from "./spool.ts";
 import {
   findWorkLease,
@@ -317,11 +318,10 @@ function preview(text: string, max = 140): string {
 
 /** Every message this session may see, newest last and unpaged. */
 function visibleMessages(unreadOnly: boolean): ReturnType<typeof readMessages> {
-  const receipts = readReceipts(cwd);
-  return readMessages(cwd, { limit: 0, unreadOnly }).filter(
-    (msg) =>
-      messageVisibleToSession(msg, sessionId) &&
-      !hasReceipt(receipts, msg.id, sessionId, ["refused", "expired"]),
+  return visibleToSession(
+    readMessages(cwd, { limit: 0, unreadOnly }),
+    readReceipts(cwd),
+    sessionId,
   );
 }
 
@@ -1741,7 +1741,13 @@ async function pushMessage(
   await mcp.notification({
     method: "notifications/claude/channel",
     params: {
-      content: msg.message,
+      // This transport cannot acknowledge, so nothing here marks the message
+      // read and the id is the only thing `mark_read` can act on. Put the
+      // instruction where the agent is reading the message rather than in
+      // startup text it met hours earlier — that placement is what the record
+      // measures at approximately zero compliance. Sessions on a transport
+      // that acknowledges never reach this code and get no such line.
+      content: `${msg.message}\n\n[agent-mail] handled? mark_read ${msg.id} — this push does not acknowledge on its own.`,
       meta: {
         from: msg.from,
         ts: msg.ts,

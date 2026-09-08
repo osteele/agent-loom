@@ -73,3 +73,9 @@ and timestamps. Announced state is not a delivery receipt: a reminder
 delivers nothing, so `announced/` never feeds `receipts/`, and `pushed`
 continues to mean channel delivery or an inbox pull only. Automation that
 needs delivery evidence keeps reading `receipts/`.
+
+Daemon backlog reminders have a separate two-hour cooldown for each canonical
+project and session ID, shared by that mailbox's MCP and push registrations.
+Their bookkeeping is `~/.claude/agent-mail/ack-reminders.json` (version 2).
+Version-1 cooldowns are discarded because they lack project identity. Upgrading
+can repeat one reminder per mailbox; it does not change message read state.

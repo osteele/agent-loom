@@ -216,6 +216,26 @@ export function messageVisibleToSession(
   return msg.meta?.sessionId !== sessionId || msg.meta?.toSession === sessionId;
 }
 
+/** The messages one session may see, from a project's spool.
+ *
+ * The single definition of "this session's mail". A count that skips it is
+ * answering a question about the project — every session's mail, including
+ * sessions that no longer exist — while reporting it as the reader's own: a
+ * delivery reminder built that way told a session 79 messages were
+ * outstanding for it when its reachable set was 7, and none of the 73 could
+ * be pulled, because `check_inbox` filters and the count did not. */
+export function visibleToSession<T extends Message & { id: string }>(
+  messages: T[],
+  receipts: DeliveryReceipt[],
+  sessionId: string,
+): T[] {
+  return messages.filter(
+    (msg) =>
+      messageVisibleToSession(msg, sessionId) &&
+      !hasReceipt(receipts, msg.id, sessionId, ["refused", "expired"]),
+  );
+}
+
 export function appendMessage(msg: Message): string {
   ensureDirs();
   const path = spoolPath(msg.project);

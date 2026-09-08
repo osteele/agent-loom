@@ -482,6 +482,61 @@ test("coordination tools expose and recover only dead-session records", async ()
   }
 });
 
+test("a channel push carries the acknowledgement it cannot perform", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-instruct-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
+  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  mkdirSync(inboxDirectory, { recursive: true });
+  writeFileSync(
+    join(inboxDirectory, `${slug}.jsonl`),
+    `${JSON.stringify({
+      id: "instruct-me",
+      ts: "2026-09-01T12:00:00.000Z",
+      from: "peer",
+      project: canonical,
+      message: "body",
+    })}\n`,
+  );
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "instructed-session",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+    // The pull renders the same stored message. The instruction belongs to the
+    // push, where the agent is reading it and the id is in front of them — not
+    // to the pull, which has already marked it read.
+    const pulled = await client.callTool({
+      name: "check_inbox",
+      arguments: { peek: true },
+    });
+    expect(textContent(pulled)).not.toContain("[agent-mail] handled?");
+  } finally {
+    await client.close();
+  }
+}, 5_000);
+
 test("the unread count separates delivered-but-unacknowledged from never delivered", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-split-"));
   temporaryDirectories.push(root);
