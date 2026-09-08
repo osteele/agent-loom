@@ -813,12 +813,30 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
   if (self) {
     touchInboxPoll(project, self.pid);
   }
-  const messages = readMessages(project, {
-    limit,
+  const matched = readMessages(project, {
+    limit: 0,
     unreadOnly: flags.unread === true,
   });
+  const messages = limit > 0 ? matched.slice(-limit) : matched;
+  // This reads the whole project inbox across every session, which is a
+  // different question from the one `status-line` and the check_inbox tool
+  // answer — they report the subset one session may see. All three rendered a
+  // bare integer, and a reader compared them as though they measured the same
+  // thing. Say which question this number answers.
+  const projectUnread = readMessages(project, {
+    limit: 0,
+    unreadOnly: true,
+  }).length;
+  const scope = (returned: number): string => {
+    const omitted = matched.length - returned;
+    const more =
+      omitted > 0
+        ? `; ${omitted} older match not shown — raise \`--limit\` to see them`
+        : "";
+    return `[returned ${returned} of ${matched.length} matching in this project across all sessions; ${projectUnread} unread in this project${more}; not scoped to a session — status-line and check_inbox report one session's subset]`;
+  };
   if (messages.length === 0) {
-    console.log("inbox empty");
+    console.log(`inbox empty ${scope(0)}`);
     return;
   }
   for (const m of messages) {
@@ -827,6 +845,7 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
       `${m.id} ${m.read ? "read" : "unread"} [${m.ts}] from ${displayName(m.from)}${reply}: ${m.message}`,
     );
   }
+  console.log(scope(messages.length));
   if (!sessionId) {
     console.error(
       "note: no verified agent session for this process; this read is unattributed and leaves the messages spooled",
@@ -2744,6 +2763,15 @@ function printHelp(stream: "out" | "err" = "out"): void {
 
 const [cmd, ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
+
+// `--help` after a subcommand asks the command to explain itself, and every
+// command below acts instead: `inbox --help` printed an inbox, and `notify
+// --help` would have sent a message. A flag meaning "explain yourself" must
+// never be the one that performs the action, so intercept it before dispatch.
+if (rest.includes("--help") || rest.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
 
 switch (cmd) {
   case "notify":

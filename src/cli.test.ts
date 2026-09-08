@@ -1182,7 +1182,7 @@ test("inbox read with a session id records the pull and marks messages read", as
       },
     );
     expect(await again.exited).toBe(0);
-    expect(await new Response(again.stdout).text()).toBe("inbox empty\n");
+    expect(await new Response(again.stdout).text()).toStartWith("inbox empty");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1411,4 +1411,60 @@ test("a second inbox read does not re-stamp receipts it already settled", async 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("--help after a subcommand explains rather than acts", async () => {
+  const project = mkdtempSync(join(tmpdir(), "agent-mail-cli-help-"));
+  const cli = join(import.meta.dir, "cli.ts");
+
+  // `inbox --help` printed the inbox, which is how a reader discovered mail
+  // they had not read. The same shape on `notify --help` would have sent a
+  // message, so the guard is checked on a command that acts, not only on one
+  // that reads.
+  for (const cmd of ["inbox", "notify"]) {
+    const child = Bun.spawn(
+      [process.execPath, cli, cmd, "--project", project, "--help"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = await new Response(child.stdout).text();
+    expect(await child.exited).toBe(0);
+    expect(out).toContain("Usage: agent-mail <command>");
+  }
+
+  // The spool stays empty: `notify --help` must not have sent anything.
+  const spool = join(project, ".agent-mail");
+  expect(existsSync(spool)).toBe(false);
+});
+
+test("inbox names the scope its count answers", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-scope-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  const { home, project } = seedInbox(root);
+
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      cli,
+      "inbox",
+      "--project",
+      project,
+      "--peek",
+      "--limit",
+      "1",
+    ],
+    {
+      env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const out = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+
+  // The number this surface prints is project-wide across every session, while
+  // status-line and check_inbox report one session's subset. Three bare
+  // integers were compared as one fact; the output has to say which it is.
+  expect(out).toContain("returned 1 of 2 matching in this project");
+  expect(out).toContain("1 older match not shown");
+  expect(out).toContain("not scoped to a session");
 });

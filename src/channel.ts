@@ -342,7 +342,11 @@ function sessionMessages(opts: {
  * project across every session. Rendered as bare integers they read as one
  * fact with three values, and an agent told the inbox was processed had in
  * fact seen a fraction of it. Name the scope wherever a count is shown. */
-function inboxScope(returned: number, matched: number): string {
+function inboxScope(
+  returned: number,
+  matched: number,
+  refusedByPolicy = 0,
+): string {
   const visible = visibleMessages(false);
   const unreadHere = visible.filter((msg) => !msg.read).length;
   const projectUnread = readMessages(cwd, {
@@ -353,12 +357,20 @@ function inboxScope(returned: number, matched: number): string {
   // against everything visible: with `unread` set, the messages left out are
   // read ones the caller excluded on purpose, and calling them "not shown"
   // would send a reader chasing a bigger limit for mail that is not there.
+  const tail = `${visible.length} visible to this session; ${unreadHere} unread for this session; ${projectUnread} unread in this project across all sessions`;
+  // Refusal is not pagination. These messages were declined by this session's
+  // inbound policy and are now settled, so raising `limit` will never produce
+  // them — offering that hint would send a reader after mail that no limit can
+  // reach, the same misdirection this line exists to prevent.
+  if (refusedByPolicy > 0) {
+    return `[refused ${refusedByPolicy} of ${matched} matching by this session's inbound policy; ${tail}]`;
+  }
   const omitted = matched - returned;
   const more =
     omitted > 0
       ? `; ${omitted} older match not shown — raise \`limit\` to see them`
       : "";
-  return `[returned ${returned} of ${matched} matching; ${visible.length} visible to this session; ${unreadHere} unread for this session; ${projectUnread} unread in this project across all sessions${more}]`;
+  return `[returned ${returned} of ${matched} matching; ${tail}${more}]`;
 }
 
 function describeSessions(
@@ -1129,12 +1141,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         ],
       };
     }
+    let refusedByPolicy = 0;
     if (policy === "refuse") {
       for (const msg of messages) {
         if (!settled(receipts, msg.id, sessionId)) {
           recordReceipt(receipts, msg.id, "refused", "policy");
         }
       }
+      refusedByPolicy = messages.length;
       messages = [];
     } else {
       for (const msg of messages) {
@@ -1181,8 +1195,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
                 })
                 .join(
                   "\n",
-                )}${marked > 0 ? `\nmarked ${marked} message(s) read` : ""}\n${inboxScope(messages.length, matched.length)}`
-            : `inbox empty ${inboxScope(0, matched.length)}`,
+                )}${marked > 0 ? `\nmarked ${marked} message(s) read` : ""}\n${inboxScope(messages.length, matched.length, refusedByPolicy)}`
+            : `inbox empty ${inboxScope(0, matched.length, refusedByPolicy)}`,
         },
       ],
     };
