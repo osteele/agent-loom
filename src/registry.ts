@@ -381,6 +381,35 @@ export function registrationExists(cwd: string, pid: number): boolean {
   return existsSync(entryPath(cwd, pid));
 }
 
+/** Whether the stored entry still describes this process the way it would be
+ * written today. False when it is missing, unreadable, or stale.
+ *
+ * Capabilities are derived from the host client, and a registration is only
+ * written at startup — so an entry written by an older build keeps advertising
+ * whatever that build believed forever. One did: an `oh-my-pi` session carried
+ * `channelPush: true` long after the rule became "channel push exists only
+ * under claude-code", so peers, the listener display, and every push receipt
+ * treated a host with no channel as reachable. Staleness is not a missing
+ * file, so an existence check cannot see it. */
+export function registrationMatches(
+  cwd: string,
+  pid: number,
+  client: string | undefined,
+  capabilities: SessionCapabilities,
+): boolean {
+  const path = entryPath(cwd, pid);
+  if (!existsSync(path)) return false;
+  try {
+    const entry = JSON.parse(readFileSync(path, "utf8")) as Registration;
+    return (
+      entry.client === client &&
+      JSON.stringify(entry.capabilities) === JSON.stringify(capabilities)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function withEntryLock<T>(path: string, fn: () => T): T {
   const lock = `${path}.lock`;
   const deadline = Date.now() + 2_000;

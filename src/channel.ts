@@ -85,7 +85,7 @@ import {
   processTty,
   pushIsKnownUnreachable,
   register,
-  registrationExists,
+  registrationMatches,
   scanProcesses,
   setInboundPolicy,
   setMuted,
@@ -1742,7 +1742,15 @@ async function poll(): Promise<void> {
   // If a liveness sweep ever removes this live process by mistake, the server
   // keeps polling but peers see no listener. Restore the exact entry here so
   // the split cannot persist for the rest of a long-running host session.
-  if (!registrationExists(cwd, process.pid)) registerSelf();
+  // Missing is not the only way this entry goes wrong: an entry written by an
+  // older build keeps advertising capabilities that build believed, and a
+  // wrong `channelPush` makes an unreachable session look reachable to every
+  // peer. Re-assert whenever the stored entry is not what we would write now.
+  if (
+    !registrationMatches(cwd, process.pid, hostClient, sessionCapabilities())
+  ) {
+    registerSelf();
+  }
   if (isMuted(cwd, process.pid)) return;
   const policy = inboundPolicy(cwd, process.pid);
   const receipts = refreshReceipts();

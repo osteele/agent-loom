@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bare `pushed` no longer reads as proof a notification was received.
 - Report what `check_inbox` returned and what it is a page of, so a page can
   be told from a whole inbox and each unread count names its own scope.
+- Rewrite a session's registration when it no longer matches the host, so a
+  session cannot keep advertising a channel its host does not have.
 
 ## [0.1.0] - 2026-08-19
 

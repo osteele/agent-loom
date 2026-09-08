@@ -179,6 +179,65 @@ test("a live channel restores a missing registry entry without another tool call
   }
 }, 5_000);
 
+test("a stale registration is rewritten, not just a missing one", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-stale-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      CLAUDE_CODE_SESSION_ID: "stale-capabilities",
+      CODEX_THREAD_ID: "",
+      AGENT_SESSION_ID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+    await client.listTools();
+    const registry = join(home, ".claude", "agent-mail", "registry");
+    const [name] = readdirSync(registry);
+    const path = join(registry, name);
+
+    // An entry an older build could have left behind: it exists, so an
+    // existence check is satisfied, and it claims a channel this host has not.
+    const stored = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...stored,
+        client: "some-older-host",
+        capabilities: { ...stored.capabilities, channelPush: true },
+      }),
+    );
+
+    const deadline = Date.now() + 2_500;
+    let current = stored;
+    while (Date.now() < deadline) {
+      current = JSON.parse(readFileSync(path, "utf8"));
+      if (current.client !== "some-older-host") break;
+      await Bun.sleep(25);
+    }
+    expect(current.client).not.toBe("some-older-host");
+    expect(current.capabilities).toEqual(stored.capabilities);
+  } finally {
+    await client.close();
+  }
+}, 5_000);
+
 test("initial MCP instructions report the session's unread backlog only", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-backlog-"));
   temporaryDirectories.push(root);
