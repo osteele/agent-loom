@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "agent-mail": {
-      "command": "/Users/osteele/.bun/bin/bun",
-      "args": ["/Users/osteele/code/agent-tools/agent-mail/src/channel.ts"],
-      "env": {}
-    }
-  }
-}

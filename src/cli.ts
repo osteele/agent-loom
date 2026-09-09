@@ -239,6 +239,15 @@ const OH_MY_PI_PLUGIN_DIR = join(
   "oh-my-pi",
   "agent-mail-push",
 );
+/** The Claude Code plugin directory shipped inside this installation.
+ *
+ * Its `.mcp.json` names an absolute interpreter and an absolute entry point,
+ * so it describes one installation and cannot be shipped: a checked-in copy
+ * sends an npm install's plugin at the author's working tree. `install`
+ * generates it here instead, the same way every other registration is
+ * generated from `runtimePath()` and the sibling entry points. */
+const CLAUDE_PLUGIN_DIR = join(dirname(SRC_DIR), "plugins", "agent-mail");
+const CLAUDE_PLUGIN_MCP = join(CLAUDE_PLUGIN_DIR, ".mcp.json");
 const PLIST_PATH = join(
   homedir(),
   "Library",
@@ -290,6 +299,7 @@ interface InstallPlan {
     nativeAudit: string;
   };
   launchAgent: string;
+  claudePluginMcp: string;
 }
 
 /** Paths and runtime that a real install will persist. */
@@ -303,7 +313,32 @@ function installPlan(): InstallPlan {
       nativeAudit: NATIVE_AUDIT_ENTRY,
     },
     launchAgent: PLIST_PATH,
+    claudePluginMcp: CLAUDE_PLUGIN_MCP,
   };
+}
+
+/** Point this installation's Claude Code plugin at this installation.
+ *
+ * Skipped rather than failed when the plugin directory is absent: a package
+ * built without `plugins/` is still a working CLI and daemon. */
+function writeClaudePluginMcp(): void {
+  if (!existsSync(CLAUDE_PLUGIN_DIR)) {
+    console.log(
+      `no Claude Code plugin directory at ${CLAUDE_PLUGIN_DIR}; skipping its .mcp.json`,
+    );
+    return;
+  }
+  const contents = {
+    mcpServers: {
+      "agent-mail": {
+        command: runtimePath(),
+        args: [CHANNEL_ENTRY],
+        env: {},
+      },
+    },
+  };
+  writeFileSync(CLAUDE_PLUGIN_MCP, `${JSON.stringify(contents, null, 2)}\n`);
+  console.log(`wrote ${CLAUDE_PLUGIN_MCP}`);
 }
 
 // --- argument parsing --------------------------------------------------------
@@ -2494,6 +2529,7 @@ function cmdInstall(flags: Record<string, string | boolean>): void {
   }
   writeFileSync(PLIST_PATH, plistContents());
   console.log(`wrote ${PLIST_PATH}`);
+  writeClaudePluginMcp();
   try {
     launchctl("bootout", `${guiDomain()}/${LAUNCHD_LABEL}`);
   } catch {
