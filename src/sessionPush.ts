@@ -33,14 +33,16 @@ import {
   type ReceiptTail,
   appendReceipt,
   emptyReceiptTail,
+  markMessagesRead,
   readMessages,
   readReceiptTail,
 } from "./spool.ts";
 
-export const SESSION_PUSH_PROTOCOL_VERSION = 2;
+export const SESSION_PUSH_PROTOCOL_VERSION = 3;
 
 export interface SessionPushConnectInput {
   project: string;
+  protocolVersion: number;
   sessionId: string;
   pid: number;
   defaultInboundPolicy: InboundPolicy;
@@ -108,12 +110,14 @@ interface SessionPushClient {
   client: string;
   receiptDetail: string;
   processLabel: string;
+  acknowledgementAttestsContext: boolean;
 }
 
 const OH_MY_PI_CLIENT: SessionPushClient = {
   client: "oh-my-pi",
   receiptDetail: "oh-my-pi",
   processLabel: "OMP session",
+  acknowledgementAttestsContext: true,
 };
 
 const encoder = new TextEncoder();
@@ -182,6 +186,19 @@ export class SessionPushBridge {
   }
 
   connect(input: SessionPushConnectInput, signal?: AbortSignal): Response {
+    if (input.protocolVersion !== SESSION_PUSH_PROTOCOL_VERSION) {
+      return Response.json(
+        {
+          error: `unsupported session push protocol; expected ${SESSION_PUSH_PROTOCOL_VERSION}`,
+        },
+        {
+          status: 409,
+          headers: {
+            "X-Agent-Mail-Protocol": String(SESSION_PUSH_PROTOCOL_VERSION),
+          },
+        },
+      );
+    }
     if (!validIdentifier(input.sessionId)) {
       return Response.json({ error: "invalid session id" }, { status: 400 });
     }
@@ -286,7 +303,7 @@ export class SessionPushBridge {
     });
   }
 
-  /** Record delivery only after the harness accepted the external message. */
+  /** Record delivery only after the client attests exact-session context insertion. */
   acknowledge(token: string): boolean {
     const pending = this.#pending.get(token);
     if (!pending) return false;
@@ -302,9 +319,16 @@ export class SessionPushBridge {
       "pushed",
       this.#client.receiptDetail,
     );
-    // Host acceptance proves transport delivery only. OMP may queue the
-    // follow-up without injecting it into agent context, so read state changes
-    // only through check_inbox or an explicit mark_read.
+    if (this.#client.acknowledgementAttestsContext) {
+      // This client acknowledges only after inserting the message into session
+      // context. Transport-only clients must opt out and leave read state to
+      // check_inbox or an explicit mark_read.
+      markMessagesRead(
+        connection.project,
+        [pending.messageId],
+        connection.sessionId,
+      );
+    }
     return true;
   }
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   OhMyPiPushBridge,
   SESSION_PUSH_PROTOCOL_VERSION,
+  type SessionPushConnectInput,
   type SessionPushEvent,
   resolveSessionPushId,
 } from "./sessionPush.ts";
@@ -52,6 +53,7 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
   );
   const response = bridge.connect({
     project,
+    protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
     sessionId: "omp-session",
     pid: process.pid,
     defaultInboundPolicy: "accept",
@@ -106,18 +108,50 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
       detail: "oh-my-pi",
     }),
   );
-
-  // Host acceptance records the push but does not prove that OMP injected the
-  // queued follow-up into agent context.
-  expect(
-    readReceipts(project, "omp-mail-1").map((receipt) => receipt.status),
-  ).not.toContain("read");
+  // Steering acceptance attests that OMP inserted the message into session
+  // context, so the exact-session acknowledgement settles unread state.
+  expect(readReceipts(project, "omp-mail-1")).toContainEqual(
+    expect.objectContaining({
+      status: "read",
+      sessionId: "omp-session",
+    }),
+  );
   expect(
     readMessages(project, { limit: 0 }).find((m) => m.id === "omp-mail-1")
       ?.read,
-  ).toBe(false);
+  ).toBe(true);
 
   await reader.cancel();
+  bridge.close();
+});
+
+test("Oh My Pi push rejects an incompatible protocol before registering", async () => {
+  const project = projectDirectory();
+  const bridge = new OhMyPiPushBridge(() => "test process start");
+  const input: SessionPushConnectInput = {
+    project,
+    protocolVersion: SESSION_PUSH_PROTOCOL_VERSION - 1,
+    sessionId: "old-omp-session",
+    pid: process.pid,
+    defaultInboundPolicy: "accept",
+    heldMessageLimit: 100,
+  };
+
+  const rejected = bridge.connect(input);
+  expect(rejected.status).toBe(409);
+  expect(rejected.headers.get("x-agent-mail-protocol")).toBe(
+    String(SESSION_PUSH_PROTOCOL_VERSION),
+  );
+  await expect(rejected.json()).resolves.toEqual({
+    error: `unsupported session push protocol; expected ${SESSION_PUSH_PROTOCOL_VERSION}`,
+  });
+
+  const accepted = bridge.connect({
+    ...input,
+    protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+  });
+  expect(accepted.status).toBe(200);
+  await accepted.body?.cancel();
   bridge.close();
 });
 

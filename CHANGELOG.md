@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Interrupt OMP `hub wait` calls when mail arrives by delivering pushed mail as
+  steering input instead of a queued follow-up.
+- Mark an OMP steering push read when OMP's exact-session `message_start` event
+  confirms that the custom message entered context. Protocol v3 is negotiated
+  at connect time and rejects older queued-follow-up clients before registration.
+- Avoid inserting the same OMP mail into context twice when a stream resumes
+  before acknowledgement, and warn when context insertion is not observed.
+- Keep OMP push connected when the working directory has a symlink alias, such
+  as macOS `/tmp`, by joining on the canonical project path.
 - Suppress stale coordination reminders when claims change before admission and
   coalesce sibling claims at each owner-level age milestone.
 - Render message Markdown as Slack `mrkdwn` in per-message echoes and escape

@@ -1194,8 +1194,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
     // The returned messages enter the caller's context with this result — the
     // one delivery this server can verify — so the pull itself marks them
-    // read unless the caller peeks. Push never marks: it cannot confirm the
-    // notification surfaced. See docs/decisions/0013.
+    // read unless the caller peeks. This Claude/MCP push path cannot confirm
+    // context insertion and never marks read. See decisions 0013 and 0017.
     const marked = peek
       ? 0
       : markMessagesRead(

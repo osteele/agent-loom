@@ -181,10 +181,11 @@ const server = await serve({
     if (req.method === "GET" && url.pathname === "/api/v1/push/oh-my-pi") {
       const project = url.searchParams.get("project");
       const sessionId = url.searchParams.get("sessionId");
+      const protocolVersion = Number(url.searchParams.get("protocol"));
       const pid = Number(url.searchParams.get("pid"));
-      if (!project || !sessionId) {
+      if (!project || !sessionId || !url.searchParams.has("protocol")) {
         return json(
-          { error: "required query fields: project, sessionId, pid" },
+          { error: "required query fields: project, sessionId, pid, protocol" },
           400,
         );
       }
@@ -193,6 +194,7 @@ const server = await serve({
           project,
           sessionId,
           pid,
+          protocolVersion,
           defaultInboundPolicy: config.inboundPolicy,
           heldMessageLimit: config.heldMessageLimit,
         },

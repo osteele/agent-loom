@@ -8,8 +8,8 @@
     "agent-mail": "dist/cli.js"
   },
   "scripts": {
-    "check": "biome check src/ && tsc --noEmit",
-    "fix": "biome check --write src/",
+    "check": "biome check src/ examples/oh-my-pi/agent-mail-push/ && tsc --noEmit",
+    "fix": "biome check --write src/ examples/oh-my-pi/agent-mail-push/",
     "test": "sh scripts/test.sh",
     "build": "./node_modules/.bin/tsc -p tsconfig.build.json",
     "prepare": "./node_modules/.bin/tsc -p tsconfig.build.json"
@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@oh-my-pi/pi-coding-agent": "^18.1.2",
     "@types/bun": "latest",
     "fast-check": "^3.22.0",
     "typescript": "^5.6.0"

@@ -16,8 +16,8 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | `GET /registry` | live channel-server registrations |
 | `GET /inbox?project=<path>&limit=N&unread=1` | read a project's spool |
 | `GET /receipts?project=<path>&message=<id>` | read delivery state changes |
-| `GET /api/v1/push/oh-my-pi?project=<path>&sessionId=<id>&pid=<pid>` | protocol-v2 NDJSON mail stream for the bundled OMP extension |
-| `POST /api/v1/push/oh-my-pi/ack` | `{deliveryToken}` → record an OMP delivery after exact-session acceptance |
+| `GET /api/v1/push/oh-my-pi?project=<path>&sessionId=<id>&pid=<pid>&protocol=3` | protocol-v3 NDJSON mail stream for the bundled OMP extension |
+| `POST /api/v1/push/oh-my-pi/ack` | `{deliveryToken}` → record an OMP push and mark it read after exact-session context insertion |
 
 Automation that wants presence or aggregate state should consume
 `agent-mail listeners --no-sync --json`, `agent-mail state --no-sync --json`,
@@ -29,12 +29,17 @@ The daemon binds 127.0.0.1, so any process running as the local user can
 submit text. The README's [security section](../README.md#security) covers
 what that exposes and the inbound policies that contain it.
 
-The OMP stream verifies that `pid` names a current process before adding a
-listener. Its first event echoes the requested native OMP id and reports the
-routing id resolved by an exact host-pid join to the MCP registration. Each
-mail event carries an opaque acknowledgement token. A token is valid only for
-its live stream generation and creates a `pushed` receipt only after the
-extension reports successful delivery. Consumers must validate the
-`X-Agent-Mail-Protocol: 2` response header, each event's `version`, the echoed
-request id, and the exact project and resolved routing-id join. Unknown
-versions are incompatible, not partial data to guess through.
+The OMP stream verifies the exact protocol version and that `pid` names a
+current process before adding a listener. A protocol mismatch returns 409 with
+the required version in `X-Agent-Mail-Protocol`. The first stream event echoes
+the requested native OMP id and reports the routing id resolved by an exact
+host-pid join to the MCP registration. Each mail event carries an opaque
+acknowledgement token valid only for its negotiated live stream generation.
+After OMP emits `message_start` for the exact agent-mail custom message, the
+extension acknowledges; the daemon creates a `pushed` receipt, marks the message
+read, and creates a per-session `read` receipt. Consumers must validate the
+`X-Agent-Mail-Protocol: 3` response header, each event's `version`, the echoed
+request id, and the exact project and resolved routing-id join. Unknown versions
+are incompatible, not partial data to guess through. The read
+semantics are specified by
+[decision 0017](decisions/0017-omp-steering-injection-marks-read.md).

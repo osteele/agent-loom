@@ -9,5 +9,5 @@
     "types": ["bun-types"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src"]
+  "include": ["src", "examples/oh-my-pi/agent-mail-push"]
 }

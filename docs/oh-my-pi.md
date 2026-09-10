@@ -4,7 +4,8 @@
 
 ## Install the extension
 
-Install Oh My Pi, start the agent-mail daemon, and link the bundled extension:
+Install Oh My Pi 18.1.10 or newer, start the agent-mail daemon, and link the
+bundled extension:
 
 ```bash
 cd /path/to/agent-mail
@@ -40,13 +41,13 @@ Unknown Weft state renders as `unprocessed ?`. A known zero remains `0 unprocess
 
 OMP's extension process and its agent-mail MCP process share the launcher identity when `AGENT_SESSION_ID` was minted for the current OMP process. Otherwise, the extension sends OMP's native session ID and the daemon resolves it by the verified host-process join.
 
-The protocol-v2 connection response carries both the requested session ID and the resolved routing ID. Every later mail event must match the resolved project and routing ID. An ambiguous join is rejected instead of guessed.
+The protocol-v3 connection response carries both the requested session ID and the resolved routing ID. Every later mail event must match the resolved project and routing ID. An ambiguous join is rejected instead of guessed. The daemon rejects a protocol mismatch before registering the listener; protocol v3 identifies steering-capable clients whose acknowledgement follows exact-session context insertion.
 
 ## Delivery behavior
 
-The extension keeps a loopback NDJSON stream open to the daemon. Incoming mail becomes an OMP custom message with agent attribution. It starts a follow-up turn when the recipient is idle and queues that turn when the recipient is busy. The extension acknowledges delivery only after OMP accepts the custom message; agent-mail then records a `pushed` receipt with detail `oh-my-pi`.
+The extension keeps a loopback NDJSON stream open to the daemon. Incoming mail becomes OMP steering input with agent attribution. An idle recipient starts a turn; a busy recipient sees the message at the next agent step, and an interruptible tool such as `hub wait` stops promptly so that step can run. Non-interruptible tools finish normally. The extension acknowledges only after OMP emits `message_start` for the exact agent-mail custom message; agent-mail then records both a `pushed` receipt with detail `oh-my-pi` and a `read` receipt.
 
-A broken connection changes the native status entry to offline and retries with bounded backoff. Mail remains in the durable project spool while OMP is disconnected.
+A broken connection changes the native status entry to offline and retries with bounded backoff. A resumed delivery refreshes its acknowledgement token without inserting the same mail into context again. Mail remains in the durable project spool while OMP is disconnected. The extension logs a warning when OMP does not emit the matching `message_start` within 30 seconds.
 
 Mute and inbound `accept`, `hold`, and `refuse` policies apply normally. Muting pauses channel push without advancing the session's spool offset.
 

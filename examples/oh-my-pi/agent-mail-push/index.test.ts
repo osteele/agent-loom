@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
+  agentMailContextMessageId,
   agentMailSessionId,
   parseMailStatus,
   renderStatus,
@@ -34,7 +35,7 @@ test("OMP shares a launcher identity only when minted for this process", () => {
   expect(agentMailSessionId("omp-native", "  ", "42", 42)).toBe("omp-native");
 });
 
-test("OMP mail wakes an idle recipient with a follow-up turn", () => {
+test("OMP mail interrupts an interruptible wait", () => {
   const deliveries: Parameters<ExtensionAPI["sendMessage"]>[] = [];
   const pi = {
     sendMessage(...args: Parameters<ExtensionAPI["sendMessage"]>): void {
@@ -43,7 +44,7 @@ test("OMP mail wakes an idle recipient with a follow-up turn", () => {
   };
 
   wakeRecipient(pi, {
-    version: 2,
+    version: 3,
     type: "mail",
     deliveryToken: "delivery-token",
     id: "message-id",
@@ -68,9 +69,34 @@ test("OMP mail wakes an idle recipient with a follow-up turn", () => {
           ts: "2026-09-02T12:00:00.000Z",
         },
       },
-      { deliverAs: "followUp", triggerTurn: true },
+      { deliverAs: "steer", triggerTurn: true },
     ],
   ]);
+});
+
+test("OMP recognizes its typed agent-mail context event", () => {
+  const message = {
+    role: "custom" as const,
+    customType: "agent-mail",
+    content: "Review is ready.",
+    display: true,
+    attribution: "agent" as const,
+    timestamp: Date.parse("2026-09-02T12:00:00.000Z"),
+    details: { messageId: "message-id" },
+  };
+  expect(agentMailContextMessageId(message)).toBe("message-id");
+  expect(
+    agentMailContextMessageId({
+      ...message,
+      customType: "another-extension",
+    }),
+  ).toBeUndefined();
+  expect(
+    agentMailContextMessageId({
+      ...message,
+      details: {},
+    }),
+  ).toBeUndefined();
 });
 
 test("OMP uses its native status slot for agent-mail and Weft state", () => {

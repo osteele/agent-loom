@@ -53,8 +53,9 @@ does not imply that the inbox was checked. `lastInboxPoll` is stamped only by
 polling from unrelated activity. It still predicts only that the session may
 poll again. For a message already sent, `agent-mail receipts --id <message-id>`
 distinguishes `pushed` (channel delivery or an inbox pull) from `read` (a
-`check_inbox` pull, which marks what it returns, or an explicit mark-read);
-neither status proves that the recipient completed the requested work.
+`check_inbox` pull, an explicit mark-read, or protocol-v3 OMP steering
+acknowledgement after exact-session context insertion); neither status proves
+that the recipient completed the requested work.
 
 ## The unread summary and reminder state
 

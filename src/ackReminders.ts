@@ -1,9 +1,10 @@
 /** Bounded reminders for unread mail addressed to one session.
  *
- * A `pushed` receipt proves that the receiving transport accepted the message.
- * It does not prove that a queued follow-up entered agent context or was read.
- * `check_inbox` provides verified context delivery and marks what it returns;
- * `mark_read` records explicit disposition of mail handled from a push.
+ * A bare `pushed` receipt proves that the receiving transport accepted the
+ * message, not that it entered agent context. OMP protocol v3 adds a separate
+ * `read` receipt only after its `message_start` event confirms insertion.
+ * `check_inbox` marks what it returns; `mark_read` records explicit disposition
+ * of mail handled from a transport-only push.
  *
  * A reminder fires when the condition is true rather than once at startup,
  * which is the difference between the coordination reminders agents act on and

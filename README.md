@@ -291,10 +291,11 @@ client) is delivered the same way. Under the default `accept` inbound policy,
 the receiving client determines how soon a message enters its context: a
 Claude Code session with channel push enabled receives it unasked, and
 otherwise reads it on the next `check_inbox`; a Codex session always reads on
-`check_inbox`, because Codex has no channel push. A `check_inbox` call marks
-the messages it returns read (pass `peek` to look without marking them);
-`mark_read` covers mail handled from any push. Per-session `hold` and `refuse`
-policies delay or suppress entry into context.
+`check_inbox`, because Codex has no channel push. A `check_inbox` call marks the
+messages it returns read (pass `peek` to look without marking them). OMP
+steering push also marks a message read after inserting it into the exact
+session's context. `mark_read` covers mail handled from other push transports.
+Per-session `hold` and `refuse` policies delay or suppress entry into context.
 Codex's MCP tools still register the session, send mail, inspect peers, read
 and mark inbox messages, and manage claims. Messages remain available in the
 project spool after delivery.

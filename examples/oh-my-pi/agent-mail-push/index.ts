@@ -1,9 +1,15 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { realpathSync } from "node:fs";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  MessageStartEvent,
+} from "@oh-my-pi/pi-coding-agent";
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const STATUS_KEY = "agent-mail";
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:8377";
 const STATUS_REFRESH_MS = 10_000;
+const CONTEXT_INSERTION_WARNING_MS = 30_000;
 
 type DeliveryMode = "" | "pull" | "push" | "unknown";
 const DELIVERY_MODES: Record<DeliveryMode, true> = {
@@ -53,6 +59,13 @@ export interface MailEvent {
 
 type PushEvent = ConnectedEvent | MailEvent;
 
+interface PendingAcknowledgement {
+  acknowledgingToken?: string;
+  baseUrl: URL;
+  contextDelivered: boolean;
+  deliveryToken: string;
+}
+
 function daemonUrl(): URL {
   const url = new URL(process.env.AGENT_MAIL_DAEMON_URL ?? DEFAULT_DAEMON_URL);
   if (
@@ -72,6 +85,21 @@ function renderedMail(event: MailEvent): string {
   ].join("\n");
 }
 
+export function agentMailContextMessageId(
+  message: MessageStartEvent["message"],
+): string | undefined {
+  if (
+    message.role !== "custom" ||
+    message.customType !== "agent-mail" ||
+    typeof message.details !== "object" ||
+    message.details === null
+  ) {
+    return undefined;
+  }
+  const { messageId } = message.details as { messageId?: unknown };
+  return typeof messageId === "string" ? messageId : undefined;
+}
+
 export function wakeRecipient(
   pi: Pick<ExtensionAPI, "sendMessage">,
   event: MailEvent,
@@ -84,7 +112,7 @@ export function wakeRecipient(
       attribution: "agent",
       details: { messageId: event.id, from: event.from, ts: event.ts },
     },
-    { deliverAs: "followUp", triggerTurn: true },
+    { deliverAs: "steer", triggerTurn: true },
   );
 }
 
@@ -190,6 +218,7 @@ async function refreshStatusLoop(
 ): Promise<void> {
   while (!signal.aborted) {
     await refreshStatus(pi, ctx, state);
+
     await waitForRetry(ctx, signal, STATUS_REFRESH_MS);
   }
 }
@@ -216,6 +245,38 @@ async function acknowledge(baseUrl: URL, deliveryToken: string): Promise<void> {
     throw new Error(`agent-mail acknowledgement failed (${response.status})`);
   }
 }
+function acknowledgeContextDelivery(
+  pi: Pick<ExtensionAPI, "logger">,
+  pendingAcknowledgements: Map<string, PendingAcknowledgement>,
+  messageId: string,
+): void {
+  const pending = pendingAcknowledgements.get(messageId);
+  if (
+    !pending?.contextDelivered ||
+    pending.acknowledgingToken === pending.deliveryToken
+  ) {
+    return;
+  }
+  const deliveryToken = pending.deliveryToken;
+  pending.acknowledgingToken = deliveryToken;
+  void acknowledge(pending.baseUrl, deliveryToken)
+    .then(() => {
+      if (
+        pendingAcknowledgements.get(messageId)?.deliveryToken === deliveryToken
+      ) {
+        pendingAcknowledgements.delete(messageId);
+      }
+    })
+    .catch((error) => {
+      const current = pendingAcknowledgements.get(messageId);
+      if (current?.deliveryToken === deliveryToken) {
+        current.acknowledgingToken = undefined;
+      }
+      pi.logger.warn(
+        `Agent Mail context acknowledgement failed: ${String(error)}`,
+      );
+    });
+}
 
 async function waitForRetry(
   ctx: ExtensionContext,
@@ -224,7 +285,7 @@ async function waitForRetry(
 ): Promise<void> {
   if (signal.aborted) return;
   await new Promise<void>((resolve) => {
-    const timer = ctx.setTimeout(resolve, milliseconds);
+    const timer = ctx.setTimeout(() => resolve(), milliseconds);
     signal.addEventListener(
       "abort",
       () => {
@@ -241,13 +302,16 @@ async function consumeStream(
   ctx: ExtensionContext,
   state: StatusState,
   signal: AbortSignal,
+  pendingAcknowledgements: Map<string, PendingAcknowledgement>,
 ): Promise<void> {
   const baseUrl = daemonUrl();
+  const project = realpathSync(ctx.cwd);
   const requestedSessionId = agentMailSessionId(
     ctx.sessionManager.getSessionId(),
   );
   const url = new URL("/api/v1/push/oh-my-pi", baseUrl);
-  url.searchParams.set("project", ctx.cwd);
+  url.searchParams.set("protocol", String(PROTOCOL_VERSION));
+  url.searchParams.set("project", project);
   url.searchParams.set("sessionId", requestedSessionId);
   url.searchParams.set("pid", String(process.pid));
 
@@ -281,9 +345,9 @@ async function consumeStream(
       if (!isPushEvent(value)) {
         throw new Error("agent-mail returned a malformed OMP push event.");
       }
-      if (value.project !== ctx.cwd) {
+      if (value.project !== project) {
         throw new Error(
-          "agent-mail returned an event whose exact OMP session join failed.",
+          `agent-mail returned project ${JSON.stringify(value.project)} for OMP project ${JSON.stringify(project)}.`,
         );
       }
       if (value.type === "connected") {
@@ -302,8 +366,30 @@ async function consumeStream(
       if (!sessionId || value.sessionId !== sessionId) {
         throw new Error("agent-mail returned mail for another routed session.");
       }
-      wakeRecipient(pi, value);
-      await acknowledge(baseUrl, value.deliveryToken);
+      const previous = pendingAcknowledgements.get(value.id);
+      const pending: PendingAcknowledgement = {
+        baseUrl,
+        contextDelivered: previous?.contextDelivered ?? false,
+        deliveryToken: value.deliveryToken,
+      };
+      pendingAcknowledgements.set(value.id, pending);
+      if (previous) {
+        acknowledgeContextDelivery(pi, pendingAcknowledgements, value.id);
+        continue;
+      }
+      ctx.setTimeout(() => {
+        if (pendingAcknowledgements.get(value.id)?.contextDelivered === false) {
+          pi.logger.warn(
+            `Agent Mail message ${value.id} did not enter OMP context within ${CONTEXT_INSERTION_WARNING_MS}ms.`,
+          );
+        }
+      }, CONTEXT_INSERTION_WARNING_MS);
+      try {
+        wakeRecipient(pi, value);
+      } catch (error) {
+        pendingAcknowledgements.delete(value.id);
+        throw error;
+      }
     }
   }
   if (!signal.aborted) throw new Error("agent-mail OMP push stream ended.");
@@ -312,9 +398,11 @@ async function consumeStream(
 export default function agentMailExtension(pi: ExtensionAPI): void {
   pi.setLabel("Agent Mail Push");
   let controller: AbortController | undefined;
+  const pendingAcknowledgements = new Map<string, PendingAcknowledgement>();
 
   const connect = (ctx: ExtensionContext): void => {
     controller?.abort();
+    pendingAcknowledgements.clear();
     controller = new AbortController();
     const signal = controller.signal;
     const state: StatusState = { push: "connecting" };
@@ -330,7 +418,7 @@ export default function agentMailExtension(pi: ExtensionAPI): void {
         try {
           state.push = "connecting";
           ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
-          await consumeStream(pi, ctx, state, signal);
+          await consumeStream(pi, ctx, state, signal, pendingAcknowledgements);
           retryDelay = 1_000;
         } catch (error) {
           if (signal.aborted) return;
@@ -349,12 +437,21 @@ export default function agentMailExtension(pi: ExtensionAPI): void {
     });
   };
 
+  pi.on("message_start", (event) => {
+    const messageId = agentMailContextMessageId(event.message);
+    if (!messageId) return;
+    const pending = pendingAcknowledgements.get(messageId);
+    if (!pending) return;
+    pending.contextDelivered = true;
+    acknowledgeContextDelivery(pi, pendingAcknowledgements, messageId);
+  });
   pi.on("session_start", (_event, ctx) => connect(ctx));
   pi.on("session_switch", (_event, ctx) => connect(ctx));
   pi.on("session_branch", (_event, ctx) => connect(ctx));
   pi.on("session_tree", (_event, ctx) => connect(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
     controller?.abort();
+    pendingAcknowledgements.clear();
     controller = undefined;
     ctx.ui.setStatus(STATUS_KEY, undefined);
   });

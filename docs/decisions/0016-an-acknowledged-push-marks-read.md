@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; its OMP host-acceptance clause is superseded by [0017](0017-omp-steering-injection-marks-read.md)
 date: 2026-09-08
 ---
 

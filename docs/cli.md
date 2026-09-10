@@ -115,8 +115,9 @@ agent-mail receipts [--project <dir>] [--id <message-id>] [--limit N]
 Shows the append-only delivery receipts for a project, or for one message with
 `--id`. A `pushed` receipt means push transport acceptance or emission, or an
 inbox pull; it does not prove context delivery. A `read` receipt means
-`check_inbox` returned the message or an explicit mark-read recorded it.
-Neither proves the recipient completed the requested work.
+`check_inbox` returned the message, an explicit mark-read recorded it, or a
+protocol-v3 OMP steering acknowledgement attested exact-session context
+insertion. None proves the recipient completed the requested work.
 [automation.md](automation.md#what-presence-and-receipts-prove) covers what
 each status does and does not establish.
 

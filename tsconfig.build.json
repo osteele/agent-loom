@@ -17,5 +17,6 @@
     "rewriteRelativeImportExtensions": true,
     "sourceMap": true
   },
+  "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/slowTests.ts", "src/testPreload.ts"]
 }

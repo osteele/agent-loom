@@ -4,8 +4,6 @@
   "private": true,
   "description": "Push durable agent-mail messages into exact Oh My Pi sessions.",
   "omp": {
-    "extensions": [
-      "./index.ts"
-    ]
+    "extensions": ["./index.ts"]
   }
 }
