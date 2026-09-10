@@ -49,6 +49,11 @@ The extension keeps a loopback NDJSON stream open to the daemon. Incoming mail b
 
 A broken connection changes the native status entry to offline and retries with bounded backoff. A resumed delivery refreshes its acknowledgement token without inserting the same mail into context again. Mail remains in the durable project spool while OMP is disconnected. The extension logs a warning when OMP does not emit the matching `message_start` within 30 seconds.
 
+A reconnect replaces the previous push connection for the same project and host
+process, even when its routing ID changes. Mute and inbound policy settings
+survive the handoff. Closing an old connection cannot remove its replacement's
+registration; connections for other projects remain independent.
+
 Mute and inbound `accept`, `hold`, and `refuse` policies apply normally. Muting pauses channel push without advancing the session's spool offset.
 
 ## Troubleshooting

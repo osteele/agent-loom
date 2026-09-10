@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listLiveInProject } from "./registry.ts";
+import { isMuted, listLiveInProject, setMuted } from "./registry.ts";
 import { replyRecipient } from "./replies.ts";
 import {
   OhMyPiPushBridge,
@@ -209,6 +209,141 @@ test("OMP tool shells without session variables carry a working reply address", 
   } finally {
     await response.body?.cancel();
     bridge.close();
+  }
+});
+
+test("an identity-changing reconnect retires only the same project's host connection", async () => {
+  const project = projectDirectory();
+  const otherProject = projectDirectory();
+  const bridge = new OhMyPiPushBridge();
+  const abort = new AbortController();
+  const input: SessionPushConnectInput = {
+    project,
+    protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+    sessionId: "before-reconnect",
+    pid: process.pid,
+    defaultInboundPolicy: "accept",
+    heldMessageLimit: 100,
+  };
+  try {
+    const previous = bridge.connect(input, abort.signal);
+    if (!previous.body) throw new Error("OMP push response has no body");
+    const reader = previous.body.getReader();
+    await nextEvent(reader, { text: "" });
+    const other = bridge.connect({ ...input, project: otherProject });
+    if (!other.body) throw new Error("OMP push response has no body");
+    const otherReader = other.body.getReader();
+    const otherBuffer = { text: "" };
+    await nextEvent(otherReader, otherBuffer);
+    setMuted(project, process.pid, true);
+
+    const replacement = bridge.connect({
+      ...input,
+      sessionId: "after-reconnect",
+    });
+    if (!replacement.body) throw new Error("OMP push response has no body");
+    const replacementReader = replacement.body.getReader();
+    const replacementBuffer = { text: "" };
+    await nextEvent(replacementReader, replacementBuffer);
+    expect(isMuted(project, process.pid)).toBe(true);
+    setMuted(project, process.pid, false);
+    appendMessage({
+      id: "retired-mail",
+      ts: new Date().toISOString(),
+      from: "peer",
+      project,
+      message: "for the retired identity",
+      meta: { toSession: input.sessionId },
+    });
+    await bridge.poll();
+    expect(await reader.read()).toEqual({ done: true, value: undefined });
+    // The old request may observe its abort only after the replacement connects.
+    abort.abort();
+    expect(listLiveInProject(project).map((r) => r.sessionId)).toEqual([
+      "after-reconnect",
+    ]);
+    expect(listLiveInProject(otherProject).map((r) => r.sessionId)).toEqual([
+      "before-reconnect",
+    ]);
+
+    for (const [destination, sessionId] of [
+      [project, "after-reconnect"],
+      [otherProject, "before-reconnect"],
+    ]) {
+      appendMessage({
+        id: `mail-for-${sessionId}`,
+        ts: new Date().toISOString(),
+        from: "peer",
+        project: destination,
+        message: "still reachable",
+        meta: { toSession: sessionId },
+      });
+    }
+    await bridge.poll();
+    expect(await nextEvent(replacementReader, replacementBuffer)).toMatchObject(
+      {
+        type: "mail",
+        id: "mail-for-after-reconnect",
+      },
+    );
+    expect(await nextEvent(otherReader, otherBuffer)).toMatchObject({
+      type: "mail",
+      id: "mail-for-before-reconnect",
+    });
+    await replacementReader.cancel();
+    expect(listLiveInProject(project)).toEqual([]);
+    expect(listLiveInProject(otherProject).map((r) => r.sessionId)).toEqual([
+      "before-reconnect",
+    ]);
+  } finally {
+    bridge.close();
+  }
+});
+
+test("a stale bridge cannot unregister a replacement owned by another bridge", async () => {
+  const project = projectDirectory();
+  const oldBridge = new OhMyPiPushBridge();
+  const newBridge = new OhMyPiPushBridge();
+  const input: SessionPushConnectInput = {
+    project,
+    protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+    sessionId: "reconnected-session",
+    pid: process.pid,
+    defaultInboundPolicy: "accept",
+    heldMessageLimit: 100,
+  };
+  try {
+    oldBridge.connect(input);
+    const replacement = newBridge.connect(input);
+    if (!replacement.body) throw new Error("OMP push response has no body");
+    const reader = replacement.body.getReader();
+    const buffered = { text: "" };
+    await nextEvent(reader, buffered);
+    expect(listLiveInProject(project).map((r) => r.sessionId)).toEqual([
+      input.sessionId,
+    ]);
+    oldBridge.close();
+    expect(listLiveInProject(project).map((r) => r.sessionId)).toEqual([
+      input.sessionId,
+    ]);
+    appendMessage({
+      id: "replacement-mail",
+      ts: new Date().toISOString(),
+      from: "peer",
+      project,
+      message: "replacement remains reachable",
+      meta: { toSession: input.sessionId },
+    });
+    await newBridge.poll();
+    expect(await nextEvent(reader, buffered)).toMatchObject({
+      type: "mail",
+      id: "replacement-mail",
+    });
+    await reader.cancel();
+    expect(listLiveInProject(project)).toEqual([]);
+  } finally {
+    oldBridge.close();
+    newBridge.close();
   }
 });
 

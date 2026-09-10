@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Stamp return addresses on CLI mail launched directly by OMP hosts that do not
   export session-ID variables, while refusing ambiguous or indirect hosts.
+- Keep OMP push sessions registered when a stale connection closes after a
+  reconnect, including reconnects that change the routing identity.
 - Preserve verified CLI sender identities across project boundaries and record
   OMP push hosts for CLI attribution so their messages carry reply addresses.
 - Interrupt OMP `hub wait` calls when mail arrives by delivering pushed mail as

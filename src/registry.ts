@@ -705,11 +705,14 @@ export function touchInboxPoll(cwd: string, pid: number): void {
   });
 }
 
-export function unregister(cwd: string, pid: number): void {
+/** Remove only the process instance the caller registered. */
+export function unregister(cwd: string, pid: number, instanceId: string): void {
   const path = entryPath(cwd, pid);
   if (!existsSync(path)) return;
   withEntryLock(path, () => {
-    if (existsSync(path)) rmSync(path);
+    if (!existsSync(path)) return;
+    const entry = JSON.parse(readFileSync(path, "utf8")) as Registration;
+    if (entry.instanceId === instanceId) rmSync(path);
   });
 }
 

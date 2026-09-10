@@ -228,12 +228,34 @@ export class SessionPushBridge {
     const sessionId = resolveSessionPushId(project, input.pid, input.sessionId);
 
     const key = connectionKey(project, sessionId);
-    this.#disconnect(this.#connections.get(key));
+    const id = randomUUID();
+    register(
+      project,
+      input.pid,
+      sessionId,
+      undefined,
+      this.#client.client,
+      PUSH_CAPABILITIES,
+      input.defaultInboundPolicy,
+      processStart,
+      id,
+      // This transport lives inside the host, not in an MCP subprocess.
+      input.pid,
+    );
+    // Register first so process-level controls survive the handoff. Retiring
+    // an older connection cannot remove the replacement's instance.
+    for (const connection of this.#connections.values()) {
+      if (
+        connection.key === key ||
+        (connection.project === project && connection.pid === input.pid)
+      ) {
+        this.#disconnect(connection);
+      }
+    }
     const path = spoolPath(project);
     const currentSize = existsSync(path) ? statSync(path).size : 0;
     const offset = this.#resumeOffsets.get(key) ?? currentSize;
     this.#resumeOffsets.delete(key);
-    const id = randomUUID();
     const state: { connection?: SessionPushConnection } = {};
     let streamController:
       | ReadableStreamDefaultController<Uint8Array>
@@ -266,19 +288,6 @@ export class SessionPushBridge {
     };
     state.connection = connection;
 
-    register(
-      project,
-      input.pid,
-      sessionId,
-      undefined,
-      this.#client.client,
-      PUSH_CAPABILITIES,
-      input.defaultInboundPolicy,
-      processStart,
-      id,
-      // This transport lives inside the host, not in an MCP subprocess.
-      input.pid,
-    );
     this.#connections.set(key, connection);
     this.#enqueue(connection, {
       version: SESSION_PUSH_PROTOCOL_VERSION,
@@ -538,7 +547,7 @@ export class SessionPushBridge {
     if (this.#connections.get(connection.key)?.id === connection.id) {
       this.#connections.delete(connection.key);
       this.#resumeOffsets.set(connection.key, connection.offset);
-      unregister(connection.project, connection.pid);
+      unregister(connection.project, connection.pid, connection.id);
     }
     const resumeMessages: (Message & { id: string })[] = [];
     for (const token of connection.pendingByMessage.values()) {

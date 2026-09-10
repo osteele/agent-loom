@@ -1893,7 +1893,7 @@ function shutdown(): void {
   clearInterval(timer);
   claims.releaseOwner(cwd, sessionId, process.pid);
   work.releaseOwner(cwd, sessionId, process.pid);
-  unregister(cwd, process.pid);
+  unregister(cwd, process.pid, ownerInstanceId);
   process.exit(0);
 }
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
