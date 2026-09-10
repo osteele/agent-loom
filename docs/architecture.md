@@ -186,9 +186,19 @@ its receipt.
 
 To answer a message, pass its ID as `reply_to` to the `send_mail` tool (IDs are
 shown by `check_inbox`), or `--reply-to <id>` on `agent-mail notify`. The reply
-inherits the original's thread, inbox readbacks mark it with `↩`, and the Slack
-echo quotes the parent inline. Every message carries a `threadId` (a root
-message is its own thread) so conversations group uniformly.
+addresses the original sender's stamped session in its live project mailbox,
+including when that mailbox belongs to another project. It also inherits the
+original's thread; inbox readbacks mark it with `↩`. MCP replies carry a parent
+preview for the Slack echo. Every message carries a `threadId` (a root message
+is its own thread) so conversations group uniformly.
+
+The CLI looks for the parent in the selected project's inbox, then in the
+verified calling session's inbox. The MCP tool uses the replying session's
+visible inbox. A sender's free-form label is not a return address: missing
+parents, unstamped senders, and absent or ambiguous live mailboxes fail before
+sending. Passing `session` (CLI: `--session`) explicitly selects a recipient
+in the specified project instead. An unresolved explicit recipient on a reply
+is also an error, never a project broadcast.
 
 ## Addressing one session from an automation
 
@@ -202,10 +212,11 @@ be its id, its full name (`augur-quiet-lantern`), or its display name
 (`Quiet Lantern`, matched case-insensitively); `agent-mail listeners` lists them.
 An addressed message is hidden from every other session in the project.
 
-Unlike the `send_mail` tool, an unresolvable name is **not** an error here. An
-automation's addressee may have exited while its job ran, and refusing would
-throw the notification away, so an unknown or ambiguous name falls back to a
-project broadcast and notes why on stderr.
+For notifications without `--reply-to`, an unresolvable name is **not** an
+error here. An automation's addressee may have exited while its job ran, and
+refusing would throw the notification away, so an unknown or ambiguous name
+falls back to a project broadcast and notes why on stderr. Replies require an
+identifiable recipient and fail before sending when resolution fails.
 
 For this to work the caller has to know the session id. Agents that export one
 into their subprocesses (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`) supply it

@@ -142,6 +142,7 @@ import {
   reminderHookResponse,
   reminderText,
 } from "./remind.ts";
+import { replyRecipient } from "./replies.ts";
 import { readFileSliceSync, readStdinText, sleepSync } from "./runtime.ts";
 import {
   activityTag,
@@ -594,7 +595,7 @@ function resolveProjectArg(arg: string): string {
   process.exit(1);
 }
 
-/** Live registrations in one project, each with the addressable names its
+/** Live registrations, optionally scoped to one project, with the names each
  * session id resolves to. The one place that combines the live listing with
  * `sessionNames`, so every sender/recipient lookup sees the same names. */
 type NamedSession = {
@@ -602,21 +603,24 @@ type NamedSession = {
   fullName: string;
   displayName: string;
   pid: number;
+  cwd: string;
   parentPid?: number;
 };
 
-function liveNamedSessions(project: string): NamedSession[] {
+function liveNamedSessions(project?: string): NamedSession[] {
   const meta = claudeSessions();
-  return listLiveInProject(project)
+  return (project ? listLiveInProject(project) : listLive())
     .filter((r) => r.sessionId)
     .map((r) => {
       const sid = r.sessionId as string;
-      const names = sessionNames(sid, meta.get(sid), project);
+      const cwd = canonicalProject(r.cwd);
+      const names = sessionNames(sid, meta.get(sid), cwd);
       return {
         sessionId: sid,
         fullName: names.fullName,
         displayName: names.displayName,
         pid: r.pid,
+        cwd,
         ...(r.parentPid !== undefined ? { parentPid: r.parentPid } : {}),
       };
     });
@@ -635,12 +639,19 @@ function liveNamedSessions(project: string): NamedSession[] {
  * ancestor of it, so the registration's `parentPid` is the pid that must appear
  * in our own ancestor chain. A registration without one cannot be proved and is
  * therefore not adopted. */
-function callingSession(project: string): NamedSession | undefined {
+function callingSession(project?: string): NamedSession | undefined {
   const sessionId = sessionIdFromEnv();
-  if (!sessionId) return undefined;
-  const candidate = liveNamedSessions(project).find(
-    (s) => s.sessionId === sessionId,
-  );
+  const sessions = liveNamedSessions(project);
+  if (!sessionId) {
+    // In-process hosts can launch tools without exporting a session id. An
+    // exact registered parent identifies that caller; walking farther would
+    // attribute an unregistered nested agent to its outer host.
+    const hosts = sessions.filter(
+      (s) => s.pid === process.ppid && s.parentPid === process.ppid,
+    );
+    return hosts.length === 1 ? hosts[0] : undefined;
+  }
+  const candidate = sessions.find((s) => s.sessionId === sessionId);
   if (candidate?.parentPid === undefined) return undefined;
   return hostAncestorPids().includes(candidate.parentPid)
     ? candidate
@@ -690,7 +701,7 @@ async function cmdNotify(
     process.exit(1);
   }
   const config = loadConfig();
-  const resolvedProject = resolveProjectArg(project);
+  let resolvedProject = resolveProjectArg(project);
   const replyTo =
     typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined;
   const idempotencyKey =
@@ -711,7 +722,9 @@ async function cmdNotify(
   // put a name on the message that either resolves to nobody or resolves to the
   // wrong agent. With one, `fromName` carries the full name (the address form)
   // and an unpassed --from defaults to the display name.
-  const sender = callingSession(resolvedProject);
+  // Sending carries our return address across projects. Inbox reads remain
+  // project-scoped because attribution there also marks the messages read.
+  const sender = callingSession();
   const from =
     typeof flags.from === "string"
       ? flags.from
@@ -721,11 +734,43 @@ async function cmdNotify(
   // (spool.ts `messageVisibleToSession`), so resolving here is the whole of
   // the fan-out fix — no delivery-path change is needed.
   let toSession: string | undefined;
+  const parent = replyTo
+    ? (readMessages(resolvedProject, 0).find((m) => m.id === replyTo) ??
+      (sender && sender.cwd !== resolvedProject
+        ? readMessages(sender.cwd, 0).find((m) => m.id === replyTo)
+        : undefined))
+    : undefined;
+  if (replyTo && !parent) {
+    console.error(`reply parent "${replyTo}" was not found. Nothing was sent.`);
+    process.exit(1);
+  }
+  if (replyTo && !(typeof flags.session === "string" && flags.session !== "")) {
+    const recipient = replyRecipient(parent, listLive());
+    if (!recipient.ok) {
+      console.error(
+        `${recipient.error}; select the recipient's --project and --session explicitly. Nothing was sent.`,
+      );
+      process.exit(1);
+    }
+    if (recipient.project !== resolvedProject) {
+      console.error(
+        `replying to ${recipient.sessionId} in ${recipient.project}`,
+      );
+    }
+    resolvedProject = recipient.project;
+    toSession = recipient.sessionId;
+  }
   if (typeof flags.session === "string" && flags.session !== "") {
     const resolved = resolveNotifySession(resolvedProject, flags.session);
     if (resolved.kind === "session") {
       toSession = resolved.sessionId;
     } else {
+      if (replyTo) {
+        console.error(
+          `${resolved.reason}; a reply requires an unambiguous recipient. Nothing was sent.`,
+        );
+        process.exit(1);
+      }
       console.error(`broadcasting to the project: ${resolved.reason}`);
     }
   }
@@ -752,6 +797,7 @@ async function cmdNotify(
     ...(hasMeta ? { meta } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(replyTo ? { replyTo } : {}),
+    ...(parent ? { threadId: parent.threadId ?? parent.id } : {}),
     ...(suppressSlack ? { slackEcho: false } : {}),
   });
   const body = JSON.stringify({
@@ -2755,6 +2801,9 @@ Messaging:
                         Send a message to a project's inbox. --session
                         addresses one live session instead of broadcasting;
                         an unknown or ambiguous name falls back to a broadcast.
+                        --reply-to addresses the original sender in their live
+                        mailbox and inherits the thread; --session overrides it.
+                        An unresolved reply recipient is an error, not a broadcast.
   inbox [--project <dir>] [--limit N] [--unread] [--peek]
                         Read a project's spool (defaults to cwd). A read with a
                         session id in the environment records a pushed receipt

@@ -144,7 +144,9 @@ export function resolveSessionPushId(
     registrations
       .filter(
         (registration) =>
-          registration.parentPid === hostPid && registration.sessionId,
+          registration.pid !== hostPid &&
+          registration.parentPid === hostPid &&
+          registration.sessionId,
       )
       .map((registration) => registration.sessionId as string),
   );
@@ -274,6 +276,8 @@ export class SessionPushBridge {
       input.defaultInboundPolicy,
       processStart,
       id,
+      // This transport lives inside the host, not in an MCP subprocess.
+      input.pid,
     );
     this.#connections.set(key, connection);
     this.#enqueue(connection, {

@@ -24,3 +24,20 @@ Q, accepting D.*
   neglected the `check_inbox` response, which is seen only by the pull path
   that has already marked the mail read, accepting one extra line on every
   pushed message for clients whose transport cannot acknowledge.
+
+- **2026-09-11** — In the context of cross-project replies, facing a sender who
+  does not listen in the question's destination project, we decided to route
+  replies to the stamped sender's live mailbox. We neglected the broadcast
+  fallback in [0003](0003-addressing-automation-notifications.md) for
+  `notify --reply-to`, to reach the question's author, accepting refusal when
+  its return address cannot be resolved. Automation notifications without
+  `--reply-to` retain their broadcast fallback.
+
+- **2026-09-11** — In the context of OMP tool shells without session-ID
+  environment variables, facing sends with no usable return address, we
+  decided to adopt the unique live mailbox owned by the CLI's immediate
+  in-process host. We neglected searching more distant ancestors, to avoid
+  attributing a nested agent to its outer host, accepting unattributed sends
+  from wrapped shells or hosts with multiple mailboxes. This extends the
+  proof of identity in
+  [0014](0014-cli-identity-requires-a-host-process-match.md).

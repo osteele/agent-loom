@@ -2,6 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { listLiveInProject } from "./registry.ts";
+import { replyRecipient } from "./replies.ts";
 import {
   OhMyPiPushBridge,
   SESSION_PUSH_PROTOCOL_VERSION,
@@ -125,6 +127,91 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
   bridge.close();
 });
 
+test("OMP tool shells without session variables carry a working reply address", async () => {
+  const project = projectDirectory();
+  const destination = projectDirectory();
+  const bridge = new OhMyPiPushBridge();
+  const response = bridge.connect({
+    project,
+    protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+    sessionId: "omp-reply-host",
+    pid: process.pid,
+    defaultInboundPolicy: "accept",
+    heldMessageLimit: 100,
+  });
+  expect(response.status).toBe(200);
+  async function notify(project: string, extra: string[]) {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "cli.ts"),
+        "notify",
+        "--project",
+        project,
+        ...extra,
+      ],
+      {
+        env: {
+          ...process.env,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: "",
+          AGENT_SESSION_ID: "",
+          AGENT_SESSION_PID: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const stderr = await new Response(child.stderr).text();
+    expect(await child.exited, stderr).toBe(0);
+  }
+  try {
+    await notify(destination, ["--message", "OMP question"]);
+    const question = readMessages(destination, 0)[0];
+    await notify(destination, [
+      "--message",
+      "OMP answer",
+      "--reply-to",
+      question.id,
+    ]);
+    expect(readMessages(project, 0).map((m) => m.message)).toContain(
+      "OMP answer",
+    );
+    expect(readMessages(destination, 0).map((m) => m.message)).not.toContain(
+      "OMP answer",
+    );
+
+    // Two mailboxes under one host are not a unique return address.
+    const other = bridge.connect({
+      project: destination,
+      protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+      sessionId: "other-host-mailbox",
+      pid: process.pid,
+      defaultInboundPolicy: "accept",
+      heldMessageLimit: 100,
+    });
+    try {
+      await notify(destination, ["--message", "ambiguous sender"]);
+      const ambiguous = readMessages(destination, 0).find(
+        (m) => m.message === "ambiguous sender",
+      );
+      expect(ambiguous).toBeDefined();
+      expect(
+        replyRecipient(ambiguous, [
+          ...listLiveInProject(project),
+          ...listLiveInProject(destination),
+        ]).ok,
+      ).toBe(false);
+    } finally {
+      await other.body?.cancel();
+    }
+  } finally {
+    await response.body?.cancel();
+    bridge.close();
+  }
+});
+
 test("Oh My Pi push rejects an incompatible protocol before registering", async () => {
   const project = projectDirectory();
   const bridge = new OhMyPiPushBridge(() => "test process start");
@@ -167,6 +254,7 @@ test("Oh My Pi push adopts the one MCP identity registered under its host", () =
   expect(
     resolveSessionPushId(project, 42, "omp-native", [
       registration("mcp-shared", 42, 101),
+      registration("previous-push-session", 42, 42),
     ]),
   ).toBe("mcp-shared");
   expect(
@@ -184,6 +272,7 @@ test("Oh My Pi push adopts the one MCP identity registered under its host", () =
   expect(
     resolveSessionPushId(project, 42, "omp-native", [
       registration("other-host", 41, 101),
+      registration("previous-push-session", 42, 42),
     ]),
   ).toBe("omp-native");
 });

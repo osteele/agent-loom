@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectSlug } from "./paths.ts";
 import { processInfo } from "./registry.ts";
-import { sessionNames } from "./sessions.ts";
 
 test("notify --no-slack suppresses only that message's Slack echo", async () => {
   const requests: Record<string, unknown>[] = [];
@@ -894,6 +893,112 @@ test("notify --session addresses one live session instead of broadcasting", asyn
   }
 });
 
+test("notify --reply-to returns cross-project mail to the sender", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-reply-"));
+  const home = join(root, "home");
+  const callerProject = join(root, "caller");
+  const answerProject = join(root, "answer");
+  const state = join(home, ".claude", "agent-mail");
+  const registry = join(state, "registry");
+  mkdirSync(callerProject, { recursive: true });
+  mkdirSync(answerProject, { recursive: true });
+  mkdirSync(registry, { recursive: true });
+  const procStart = processInfo([process.pid]).get(process.pid)?.start;
+  for (const [project, sessionId] of [
+    [callerProject, "questioner"],
+    [answerProject, "answerer"],
+  ]) {
+    writeFileSync(
+      join(registry, `${projectSlug(project)}-${process.pid}.json`),
+      JSON.stringify({
+        cwd: realpathSync(project),
+        pid: process.pid,
+        parentPid: process.pid,
+        procStart,
+        sessionId,
+        started: new Date().toISOString(),
+      }),
+    );
+  }
+  async function run(sessionId: string, args: string[]) {
+    const child = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "cli.ts"), ...args],
+      {
+        env: {
+          ...process.env,
+          HOME: home,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: sessionId,
+          AGENT_SESSION_ID: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exit, stderr).toBe(0);
+    return stdout;
+  }
+  try {
+    await run("questioner", [
+      "notify",
+      "--project",
+      answerProject,
+      "--message",
+      "cross-project question",
+      "--from",
+      "free-form sender label",
+    ]);
+    const questions = await run("answerer", [
+      "inbox",
+      "--project",
+      answerProject,
+      "--peek",
+    ]);
+    const questionId = questions.split(" ")[0];
+    expect(questions).toContain("cross-project question");
+    await run("answerer", [
+      "notify",
+      "--project",
+      answerProject,
+      "--reply-to",
+      questionId,
+      "--message",
+      "cross-project answer",
+    ]);
+    const answers = await run("questioner", [
+      "inbox",
+      "--project",
+      callerProject,
+      "--peek",
+    ]);
+    expect(answers).toContain("cross-project answer");
+    expect(
+      await run("answerer", ["inbox", "--project", answerProject, "--peek"]),
+    ).not.toContain("cross-project answer");
+    const answerId = answers.split(" ")[0];
+    await run("questioner", [
+      "notify",
+      "--project",
+      callerProject,
+      "--reply-to",
+      answerId,
+      "--message",
+      "follow-up question",
+    ]);
+    expect(
+      await run("answerer", ["inbox", "--project", answerProject, "--peek"]),
+    ).toContain("follow-up question");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
 test("notify reports delivery when the daemon stored the message but lost its reply", async () => {
   // The observed defect. The daemon appended the message and then failed to
   // return a response; the CLI fell back to a direct append, found the daemon's
@@ -1447,7 +1552,7 @@ test("inbox --peek leaves messages unread and appends no receipt", async () => {
   }
 });
 
-test("inbox read with no session id is unattributed and leaves the spool alone", async () => {
+test("an indirect registered host cannot attribute a CLI read without a session id", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-anon-"));
   const cli = join(import.meta.dir, "cli.ts");
   const {
@@ -1459,8 +1564,21 @@ test("inbox read with no session id is unattributed and leaves the spool alone",
   try {
     const { home, project, slug } = seedInbox(root);
     const state = join(home, ".claude", "agent-mail");
+    const nested = join(root, "nested.ts");
+    writeFileSync(
+      nested,
+      'const child = Bun.spawn(Bun.argv.slice(2), { stdout: "inherit", stderr: "inherit" }); process.exit(await child.exited);\n',
+    );
     const child = Bun.spawn(
-      [process.execPath, cli, "inbox", "--project", project],
+      [
+        process.execPath,
+        nested,
+        process.execPath,
+        cli,
+        "inbox",
+        "--project",
+        project,
+      ],
       {
         env: { ...anonymous, HOME: home },
         stdout: "pipe",
@@ -1478,63 +1596,6 @@ test("inbox read with no session id is unattributed and leaves the spool alone",
     expect(existsSync(join(state, "receipts", `${slug}.jsonl`))).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("notify stamps a live sender session so its label resolves as an address", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-sender-"));
-  const home = join(root, "home");
-  const project = join(root, "project");
-  const registry = join(home, ".claude", "agent-mail", "registry");
-  mkdirSync(project, { recursive: true });
-  mkdirSync(registry, { recursive: true });
-  const self = processInfo([process.pid]).get(process.pid);
-  const canonical = realpathSync(project);
-  writeFileSync(
-    join(registry, `${projectSlug(canonical)}-${process.pid}.json`),
-    JSON.stringify({
-      cwd: canonical,
-      pid: process.pid,
-      parentPid: process.pid,
-      ...(self ? { procStart: self.start } : {}),
-      sessionId: "submitter-session",
-      started: new Date().toISOString(),
-    }),
-  );
-  const names = sessionNames("submitter-session", undefined, canonical);
-  const senderEnv = {
-    HOME: home,
-    CLAUDE_CODE_SESSION_ID: "",
-    CODEX_THREAD_ID: "submitter-session",
-    AGENT_SESSION_ID: "",
-  };
-
-  try {
-    const stamped = await notifyRequest(
-      ["--project", project, "--message", "job done"],
-      senderEnv,
-    );
-    expect(stamped.exitCode).toBe(0);
-    expect(stamped.body?.meta).toEqual({
-      sessionId: "submitter-session",
-      fromName: names.fullName,
-    });
-    // No --from passed: the display name replaces the bare "cli" label.
-    expect(stamped.body?.from).toBe(names.displayName);
-
-    // An explicit --from still wins for the free-form label.
-    const labeled = await notifyRequest(
-      ["--project", project, "--message", "job done", "--from", "ops-robot"],
-      senderEnv,
-    );
-    expect(labeled.exitCode).toBe(0);
-    expect(labeled.body?.from).toBe("ops-robot");
-    expect(labeled.body?.meta).toEqual({
-      sessionId: "submitter-session",
-      fromName: names.fullName,
-    });
-  } finally {
-    rmSync(root, { recursive: true });
   }
 });
 
@@ -1705,4 +1766,40 @@ test("inbox names the scope its count answers", async () => {
   expect(out).toContain("returned 1 of 2 matching in this project");
   expect(out).toContain("1 older match not shown");
   expect(out).toContain("not scoped to a session");
+});
+
+test("notify refuses unresolved replies instead of falling back to broadcast", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-reply-refusal-"));
+  try {
+    const { home, project } = seedInbox(root);
+    for (const args of [
+      ["--reply-to", "missing-parent"],
+      ["--reply-to", "missing-parent", "--session", "cli-reader"],
+      ["--reply-to", "note-a"],
+      ["--reply-to", "note-a", "--session", "missing-recipient"],
+    ]) {
+      const result = await notifyRequest(
+        ["--project", project, "--message", "must not broadcast", ...args],
+        { HOME: home },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.body).toBeUndefined();
+    }
+    const accepted = await notifyRequest(
+      [
+        "--project",
+        project,
+        "--message",
+        "answer automation",
+        "--reply-to",
+        "note-a",
+        "--session",
+        "cli-reader",
+      ],
+      { HOME: home },
+    );
+    expect(accepted.exitCode).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -94,6 +94,7 @@ import {
   unregister,
 } from "./registry.ts";
 import { nextAnnouncedState, startupUnreadText } from "./remind.ts";
+import { replyRecipient } from "./replies.ts";
 import { readFileSlice } from "./runtime.ts";
 import {
   activityTag,
@@ -476,14 +477,16 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         "requests to send mail between coding-agent sessions; harness-native " +
         "peer messaging must be named explicitly. By default every session " +
         "in the target directory sees it; pass `session` to address one " +
-        "specific session. To continue a conversation, pass `reply_to` with " +
-        "the id shown by check_inbox. The reply joins the same thread.",
+        "specific session. To reply to the original sender, pass `reply_to` with " +
+        "the id shown by check_inbox. It selects their live mailbox and inherits the thread; " +
+        "an explicit `session` overrides the recipient.",
       inputSchema: {
         type: "object",
         properties: {
           project: {
             type: "string",
-            description: "Target project directory (absolute path)",
+            description:
+              "Target project directory (absolute path); reply_to without session selects the original sender's mailbox instead",
           },
           message: { type: "string", description: "The message" },
           session: {
@@ -491,13 +494,13 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Optional: agent-mail full name, display name, or id of a specific session " +
               "in the target directory (see list_sessions). This is a separate namespace " +
-              "from Claude's native agent ids. Omit to reach all sessions there.",
+              "from Claude's native agent ids. Overrides reply_to's recipient; otherwise omit to reach all sessions there.",
           },
           reply_to: {
             type: "string",
             description:
               "Optional: id of the message this answers (from check_inbox). " +
-              "Threads the reply with the original.",
+              "Addresses the original sender in their live mailbox and inherits the thread. An unresolved sender is an error; use project and session to select a recipient explicitly.",
           },
           idempotency_key: {
             type: "string",
@@ -1027,7 +1030,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       idempotency_key?: string;
       ttl_seconds?: number;
     };
-    const target = canonicalProject(project);
+    let target = canonicalProject(project);
     const meta: Record<string, string> = { sessionId };
     meta.fromName = myLabel;
     let replyTo: string | undefined;
@@ -1039,11 +1042,36 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const parent = sessionMessages({ limit: 0 }).find(
         (m) => m.id === reply_to,
       );
-      threadId = parent?.threadId ?? parent?.id ?? reply_to;
-      if (parent) {
-        meta.replyToFrom = displayName(parent.from);
-        meta.replyToPreview = preview(parent.message);
+      if (!parent) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `reply parent "${reply_to}" was not found. Nothing was sent.`,
+            },
+          ],
+        };
       }
+      if (!session) {
+        const recipient = replyRecipient(parent, listLive());
+        if (!recipient.ok) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `${recipient.error}; select the recipient's project and session explicitly. Nothing was sent.`,
+              },
+            ],
+          };
+        }
+        target = recipient.project;
+        meta.toSession = recipient.sessionId;
+      }
+      threadId = parent.threadId ?? parent.id;
+      meta.replyToFrom = displayName(parent.from);
+      meta.replyToPreview = preview(parent.message);
     }
     if (session) {
       const peers = liveSessions(target);
@@ -1053,6 +1081,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           ? `Live sessions in that directory:\n${describeSessions(peers)}`
           : "No sessions are listening in that directory.";
         return {
+          isError: true,
           content: [
             {
               type: "text",
@@ -1063,6 +1092,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       if (matches.length > 1) {
         return {
+          isError: true,
           content: [
             {
               type: "text",

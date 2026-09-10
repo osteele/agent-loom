@@ -35,13 +35,24 @@ tool instead. The command posts to the daemon first and appends to the spool
 directly when the daemon does not answer, so a send works with the daemon
 down. The direct fallback cannot echo to Slack.
 
-- `--from <label>` sets the sender label; defaults to `cli`.
+- `--from <label>` sets the display label. A verified calling session supplies
+  its reply address independently of this label, including cross-project sends.
+  Without a verified session, the default label is `cli`.
 - `--session <name-or-id>` addresses one live session instead of broadcasting
-  to the project. An unknown or ambiguous name degrades to a broadcast and
-  says so on stderr, because the addressee of a finished job may have exited
-  while it ran. [architecture.md](architecture.md#addressing-one-session-from-an-automation)
+  to the project. For notifications without `--reply-to`, an unknown or
+  ambiguous name degrades to a broadcast and says so on stderr, because a job's
+  addressee may have exited while it ran.
+  [architecture.md](architecture.md#addressing-one-session-from-an-automation)
   covers the contract.
-- `--reply-to <id>` threads the message under an earlier one.
+- `--reply-to <id>` addresses the earlier message's sender in their live
+  project mailbox and inherits the conversation's thread. Set `--project` to
+  the inbox containing that message; the verified calling session's inbox is
+  also searched. An explicit `--session` overrides automatic return routing
+  and uses the selected `--project` as the destination.
+  Missing parents, unstamped senders, and senders without one identifiable
+  live mailbox cause an error before sending. For historical or automation
+  messages without a reply address, select `--project` and `--session`
+  explicitly. An unresolved reply recipient never falls back to a broadcast.
 - `--idempotency-key <key>` makes a retried send return the original message
   id instead of spooling a copy.
 - `--ttl <seconds>` expires the message after that long; expired messages stay
@@ -53,6 +64,11 @@ duplicate window, matched to an earlier attempt whose reply was lost, or rate
 limited with a retry delay. [architecture.md](architecture.md#delivery-controls-and-receipts)
 defines each outcome.
 
+A CLI launched directly by a registered in-process host, such as OMP, can use
+that host's reply address even without session-ID environment variables. This
+requires one live mailbox owned by the immediate parent process. Without those
+variables, an indirect or ambiguous host leaves the send unattributed.
+
 ### `inbox`
 
 ```
@@ -62,8 +78,10 @@ agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek]
 Prints a project's spool, newest messages last, one line each with id, read
 state, timestamp, sender, and any reply marker. `--limit` defaults to 20;
 `--unread` shows only unread messages. Unless `--peek` is set, a verified agent
-session records delivery receipts for the returned messages and marks them
-read.
+session registered in the selected project records delivery receipts for the
+returned messages and marks them read. Reading another project's inbox is
+unattributed and leaves its read state unchanged. Sending can carry a return
+address across projects; inspecting another mailbox does not claim its mail.
 
 ### `triage-candidates`
 

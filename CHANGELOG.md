@@ -22,11 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make `notify --reply-to` and `send_mail reply_to` address the original sender
+  across projects while preserving the thread. Explicit session addressing
+  overrides return routing; unresolved reply recipients fail before sending.
 - Keep the Oh My Pi integration in OMP's native status line and limit its
   status fields to agent-mail identity, peers, unread mail, and Weft backlog.
 
 ### Fixed
 
+- Stamp return addresses on CLI mail launched directly by OMP hosts that do not
+  export session-ID variables, while refusing ambiguous or indirect hosts.
+- Preserve verified CLI sender identities across project boundaries and record
+  OMP push hosts for CLI attribution so their messages carry reply addresses.
 - Interrupt OMP `hub wait` calls when mail arrives by delivering pushed mail as
   steering input instead of a queued follow-up.
 - Mark an OMP steering push read when OMP's exact-session `message_start` event

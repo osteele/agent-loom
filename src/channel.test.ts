@@ -8,6 +8,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -920,3 +921,208 @@ test("cli-origin senders without a stamped session render as labels, not address
     await client.close();
   }
 });
+
+test("send_mail replies cross projects without broadcasting to bystanders", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-reply-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const callerProject = join(root, "caller");
+  const answerProject = join(root, "answer");
+  mkdirSync(home);
+  mkdirSync(callerProject);
+  mkdirSync(answerProject);
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const clients: Client[] = [];
+  async function connect(project: string, sessionId: string) {
+    const client = new Client({ name: "agent-mail-test", version: "1" });
+    clients.push(client);
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [join(import.meta.dir, "channel.ts")],
+        cwd: project,
+        env: {
+          ...environment,
+          HOME: home,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: sessionId,
+          AGENT_SESSION_ID: "",
+          AGENT_SESSION_PID: "",
+        },
+        stderr: "pipe",
+      }),
+    );
+    return client;
+  }
+  const inbox = async (client: Client) =>
+    textContent(
+      await client.callTool({
+        name: "check_inbox",
+        arguments: { peek: true },
+      }),
+    );
+  try {
+    const caller = await connect(callerProject, "questioner");
+    const answerer = await connect(answerProject, "answerer");
+    const bystander = await connect(callerProject, "bystander");
+    await caller.callTool({
+      name: "send_mail",
+      arguments: {
+        project: answerProject,
+        session: "answerer",
+        message: "cross-project question",
+      },
+    });
+    const question = await inbox(answerer);
+    expect(question).toContain("cross-project question");
+    const questionId = question.split(" ")[0];
+    await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: answerProject,
+        reply_to: questionId,
+        message: "cross-project answer",
+      },
+    });
+    const answer = await inbox(caller);
+    expect(answer).toContain("cross-project answer");
+    expect(await inbox(bystander)).not.toContain("cross-project answer");
+    expect(await inbox(answerer)).not.toContain("cross-project answer");
+
+    const answerId = answer.split(" ")[0];
+    await caller.callTool({
+      name: "send_mail",
+      arguments: {
+        project: callerProject,
+        reply_to: answerId,
+        message: "follow-up question",
+      },
+    });
+    expect(await inbox(answerer)).toContain("follow-up question");
+
+    await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: callerProject,
+        session: "bystander",
+        reply_to: questionId,
+        message: "explicitly redirected answer",
+      },
+    });
+    expect(await inbox(bystander)).toContain("explicitly redirected answer");
+    expect(await inbox(caller)).not.toContain("explicitly redirected answer");
+
+    const rejected = await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: answerProject,
+        reply_to: "missing-parent",
+        message: "must not broadcast",
+      },
+    });
+    expect(rejected.isError).toBe(true);
+    expect(await inbox(answerer)).not.toContain("must not broadcast");
+    expect(await inbox(caller)).not.toContain("must not broadcast");
+
+    const missingRecipient = await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: callerProject,
+        reply_to: questionId,
+        session: "missing-recipient",
+        message: "unresolved explicit reply",
+      },
+    });
+    expect(missingRecipient.isError).toBe(true);
+    expect(await inbox(caller)).not.toContain("unresolved explicit reply");
+    expect(await inbox(bystander)).not.toContain("unresolved explicit reply");
+
+    const missingParent = await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: callerProject,
+        reply_to: "missing-parent",
+        session: "bystander",
+        message: "missing-parent override",
+      },
+    });
+    expect(missingParent.isError).toBe(true);
+    expect(await inbox(caller)).not.toContain("missing-parent override");
+    expect(await inbox(bystander)).not.toContain("missing-parent override");
+
+    // A persisted alias must not give CLI lookup a different address from MCP.
+    const alias = join(root, "legacy-caller");
+    symlinkSync(callerProject, alias);
+    const registry = join(home, ".claude", "agent-mail", "registry");
+    for (const file of readdirSync(registry)) {
+      const path = join(registry, file);
+      const registration = JSON.parse(readFileSync(path, "utf8"));
+      if (registration.sessionId === "questioner") {
+        registration.cwd = alias;
+        writeFileSync(path, JSON.stringify(registration));
+      }
+    }
+    const addresses = textContent(
+      await answerer.callTool({
+        name: "list_sessions",
+        arguments: { project: callerProject },
+      }),
+    );
+    const address = /\(([^;]+); questioner\)/.exec(addresses)?.[1];
+    if (!address) throw new Error(`questioner address missing: ${addresses}`);
+    const notify = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "cli.ts"),
+        "notify",
+        "--project",
+        callerProject,
+        "--session",
+        address,
+        "--reply-to",
+        questionId,
+        "--message",
+        "CLI named reply",
+      ],
+      {
+        env: {
+          ...environment,
+          HOME: home,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: "answerer",
+          AGENT_SESSION_ID: "",
+          AGENT_SESSION_PID: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const diagnostic = await new Response(notify.stderr).text();
+    expect(await notify.exited, diagnostic).toBe(0);
+    expect(await inbox(caller)).toContain("CLI named reply");
+    expect(await inbox(bystander)).not.toContain("CLI named reply");
+
+    // A full name can also be another session's native id.
+    const collision = await connect(callerProject, address);
+    const ambiguousRecipient = await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: callerProject,
+        reply_to: questionId,
+        session: address,
+        message: "ambiguous explicit reply",
+      },
+    });
+    expect(ambiguousRecipient.isError).toBe(true);
+    expect(await inbox(caller)).not.toContain("ambiguous explicit reply");
+    expect(await inbox(collision)).not.toContain("ambiguous explicit reply");
+  } finally {
+    await Promise.all(clients.map((client) => client.close()));
+  }
+}, 20_000);
