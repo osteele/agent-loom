@@ -11,6 +11,7 @@
  *   GET  /inbox?project=<path>&limit=N&unread=1  read a project's spool
  *   GET  /api/v1/push/oh-my-pi  versioned OMP NDJSON push stream
  *   POST /api/v1/push/oh-my-pi/ack  acknowledge exact-session OMP delivery
+ *   GET  /api/v1/session-status  cached status for an exact project/session
  *
  * SIGTERM: graceful stop. SIGHUP: reload config (Slack webhook, echo mode).
  */
@@ -45,6 +46,7 @@ import { writeProcessSnapshot } from "./processSnapshot.ts";
 import { listLive } from "./registry.ts";
 import { serve, spawnCapture, which } from "./runtime.ts";
 import { OhMyPiPushBridge } from "./sessionPush.ts";
+import { SessionStatusCache } from "./sessionStatus.ts";
 import { claudeSessions, resetSessionAliasCache } from "./sessions.ts";
 import { formatSlackEcho } from "./slackEcho.ts";
 import {
@@ -58,10 +60,7 @@ import {
   shouldEchoMessageToSlack,
 } from "./spool.ts";
 import { flushTransferNotifications, transfers } from "./transfers.ts";
-import {
-  computeUnreadSummary,
-  writeUnreadSummarySnapshot,
-} from "./unreadSummary.ts";
+import { writeUnreadSummarySnapshot } from "./unreadSummary.ts";
 import {
   WEFT_JOBS_REFRESH_MS,
   parseUnprocessedGroups,
@@ -70,6 +69,7 @@ import {
 
 let config: Config = loadConfig();
 const ohMyPiPush = new OhMyPiPushBridge();
+const sessionStatus = new SessionStatusCache();
 
 function tickSessionPush(): void {
   void ohMyPiPush
@@ -176,6 +176,18 @@ const server = await serve({
       if (!project) return json({ error: "missing ?project=" }, 400);
       const messageId = url.searchParams.get("message") ?? undefined;
       return json(readReceipts(canonicalProject(project), messageId));
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/v1/session-status") {
+      const project = url.searchParams.get("project");
+      const sessionId = url.searchParams.get("sessionId");
+      if (!project || !sessionId) {
+        return json(
+          { error: "required query fields: project, sessionId" },
+          400,
+        );
+      }
+      return sessionStatus.response(project, sessionId);
     }
 
     if (req.method === "GET" && url.pathname === "/api/v1/push/oh-my-pi") {
@@ -329,10 +341,11 @@ function tickPresence(): void {
   try {
     const snapshot = writePresenceSnapshot();
     writeProcessSnapshot();
-    // Pure filesystem work over the live set just computed, so it rides this
-    // tick rather than getting a timer of its own. Reminder hooks for
-    // pull-only harnesses read the snapshot; muted sessions get no entry.
-    writeUnreadSummarySnapshot(computeUnreadSummary(snapshot.sessions));
+    // Status and reminders share one project-grouped unread collection.
+    // Muted sessions still get status counts, but no reminder entry.
+    const status = sessionStatus.refresh(snapshot.sessions);
+    for (const error of status.errors) log(error);
+    writeUnreadSummarySnapshot(status.unreadSummary);
     flushTransferNotifications();
     for (const request of transfers.settleExpired()) {
       log(`coordination transfer ${request.id}: ${request.status}`);
@@ -612,6 +625,8 @@ const weftJobsTimer = setInterval(tickWeftJobs, WEFT_JOBS_REFRESH_MS);
 process.on("SIGHUP", () => {
   config = loadConfig();
   resetSessionAliasCache();
+  // Session status contains names derived from aliases; republish on reload.
+  tickPresence();
   log(
     `config reloaded (slack: ${config.slackWebhook ? config.slackEcho : "unconfigured"})`,
   );

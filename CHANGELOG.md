@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Collect OMP mail status in the daemon and serve it through the versioned
+  session-status API instead of launching a status CLI in each session.
+  Cached failures display their age; push delivery remains independent.
 - Make `notify --reply-to` and `send_mail reply_to` address the original sender
   across projects while preserving the thread. Explicit session addressing
   overrides return routing; unresolved reply recipients fail before sending.
@@ -34,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep OMP subagents from replacing their parent's mail connection and causing
+  repeated offline indicators or temporary name changes. Status-name lookups
+  wait for the resolved routing identity and discard obsolete results.
 - Stamp return addresses on CLI mail launched directly by OMP hosts that do not
   export session-ID variables, while refusing ambiguous or indirect hosts.
 - Keep OMP push sessions registered when a stale connection closes after a

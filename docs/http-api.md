@@ -17,6 +17,7 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | `GET /inbox?project=<path>&limit=N&unread=1` | read a project's spool |
 | `GET /receipts?project=<path>&message=<id>` | read delivery state changes |
 | `GET /api/v1/push/oh-my-pi?project=<path>&sessionId=<id>&pid=<pid>&protocol=3` | protocol-v3 NDJSON mail stream for the bundled OMP extension |
+| `GET /api/v1/session-status?project=<path>&sessionId=<id>` | cached schema-v1 presentation status for an exact project and routing session |
 | `POST /api/v1/push/oh-my-pi/ack` | `{deliveryToken}` → record an OMP push and mark it read after exact-session context insertion |
 
 Automation that wants presence or aggregate state should consume
@@ -43,3 +44,50 @@ request id, and the exact project and resolved routing-id join. Unknown versions
 are incompatible, not partial data to guess through. The read
 semantics are specified by
 [decision 0017](decisions/0017-omp-steering-injection-marks-read.md).
+
+## Session status
+
+Long-running clients use `GET /api/v1/session-status` instead of repeatedly
+launching `agent-mail status-line`. OMP supplies the canonical project and
+resolved routing session ID from its push handshake. The daemon collects status
+on its 10-second presence tick, sharing unread collection with reminders and
+reading work once per project. Requests only read the cache; they do not launch
+processes or scan spools.
+
+A successful response has `Cache-Control: no-store` and this shape:
+
+```json
+{
+  "version": 1,
+  "project": "/absolute/canonical/project",
+  "sessionId": "resolved-routing-id",
+  "generatedAt": 1789162967260,
+  "name": "Excellent Otter",
+  "peers": 0,
+  "unread": 0,
+  "delivery": "push",
+  "unprocessed": null,
+  "work": {"version": 1, "items": []}
+}
+```
+
+`generatedAt` is the collection time in epoch milliseconds. Counts are
+nonnegative integers. `delivery` is `push`, `pull`, `unknown`, or an empty
+string when registration capabilities are unavailable. `unprocessed: null`
+means the Weft snapshot is unavailable; zero means a usable snapshot reports
+no unprocessed jobs for this session.
+
+`work: null` means work collection failed. Otherwise, each item has `id`,
+`resourceType`, `resourceKey`, `state` (`working` or `waiting`), and an ISO
+`updatedAt` timestamp, with optional string `label`, `sourcePath`, and
+`activity` fields. A work lease must match a live component's instance identity,
+not just its session ID. Muted sessions still receive unread status counts;
+muting suppresses their reminders, not their status lookup.
+
+Missing query fields return 400. Unknown project/session pairs return 404.
+Collection failures, an uninitialized cache, and snapshots older than
+30 seconds return 503. A newly connected session may wait until the next tick
+for its first status. Clients validate the version, exact identity, field
+types, and age; a failed refresh retains only the same session's cached status,
+marked stale with its age. The cache is presentation-only, never a delivery,
+liveness, or coordination authority.

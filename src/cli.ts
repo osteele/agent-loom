@@ -144,6 +144,7 @@ import {
 } from "./remind.ts";
 import { replyRecipient } from "./replies.ts";
 import { readFileSliceSync, readStdinText, sleepSync } from "./runtime.ts";
+import { pushDeliveryFor, statusWorkForSession } from "./sessionStatus.ts";
 import {
   activityTag,
   claudeSessions,
@@ -1210,45 +1211,6 @@ function unreadForSession(project: string, sessionId: string): number {
   return unreadVisibleForSession(project, sessionId).length;
 }
 
-/** Whether mail reaches this session on its own: "push", "pull", or "" when
- * there is nothing registered to ask.
- *
- * Two independent ways to end up pulling. A host that is not Claude Code has no
- * channel at all, so every Codex, kimi, and opencode session is pull-only by
- * construction. A Claude Code session can also have a channel it cannot use —
- * host launched without the flag, or an identity the host will not authorize.
- * Both land in the same place for the reader: mail arrives when you ask for it
- * and not before. The distinction between them is a repair instruction, which
- * belongs in `agent-mail status`, not in a status line.
- *
- * A session is otherwise the last to learn this about itself: it emits
- * successfully and hears no complaint.
- *
- * "" means no registration to ask, which is not the same as not knowing: there
- * is no session here to describe. "unknown" means there is one and its
- * diagnosis is missing. */
-function pushDeliveryFor(
-  sessions: Registration[],
-  sessionId: string | undefined,
-): string {
-  if (!sessionId) return "";
-  const capabilities = sessions.find(
-    (r) => r.sessionId === sessionId,
-  )?.capabilities;
-  if (!capabilities) return "";
-  if (!capabilities.channelPush) return "pull";
-  const status = capabilities.channelPushStatus;
-  if (status === "authorized") return "push";
-  if (status === "host-not-loaded" || status === "identity-unauthorized") {
-    return "pull";
-  }
-  // No diagnosis, or one that could not be verified — a session registered
-  // before this was recorded, or a process scan that failed. Reporting push
-  // would be the silent-in-the-reassuring-direction failure this field exists
-  // to end; reporting pull would cry wolf at every session that predates it.
-  return "unknown";
-}
-
 /** Unprocessed weft jobs submitted by this session, or "" when nobody knows.
  *
  * The empty string covers a stopped daemon, a snapshot past its TTL, and a
@@ -1275,43 +1237,9 @@ function statusLineWorkField(
 ): string {
   if (!sessionId) return "";
   try {
-    const registrations = sessions.filter(
-      (registration) => registration.sessionId === sessionId,
+    return JSON.stringify(
+      statusWorkForSession(work.list(project), sessionId, sessions),
     );
-    const items = work
-      .list(project)
-      .filter(
-        (lease) =>
-          lease.owner.sessionId === sessionId &&
-          registrations.some((registration) => {
-            if (lease.owner.instanceId !== undefined) {
-              return lease.owner.instanceId === registration.instanceId;
-            }
-            if (lease.owner.procStart !== undefined) {
-              return (
-                lease.owner.pid === registration.pid &&
-                lease.owner.procStart === registration.procStart
-              );
-            }
-            return (
-              lease.owner.pid !== undefined &&
-              lease.owner.pid === registration.pid
-            );
-          }),
-      )
-      .map((lease) => ({
-        id: lease.id,
-        resourceType: lease.resource.type,
-        resourceKey: lease.resource.key,
-        ...(lease.resource.label ? { label: lease.resource.label } : {}),
-        ...(lease.resource.sourcePath
-          ? { sourcePath: lease.resource.sourcePath }
-          : {}),
-        state: lease.state,
-        ...(lease.activity ? { activity: lease.activity } : {}),
-        updatedAt: lease.updatedAt,
-      }));
-    return JSON.stringify({ version: 1, items });
   } catch (error) {
     if (debug) console.error(`status-line work failed: ${error}`);
     return "";

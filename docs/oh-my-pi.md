@@ -35,13 +35,22 @@ The entry contains agent-mail state only:
 - unread message count;
 - unprocessed Weft jobs submitted by the session, when agent-mail's snapshot has a usable value.
 
-Unknown Weft state renders as `unprocessed ?`. A known zero remains `0 unprocessed`. The extension reads these values from the documented `agent-mail status-line --fields` contract and does not inspect agent-mail or Weft private state.
+Unknown Weft state renders as `unprocessed ?`. A known zero remains `0 unprocessed`. The extension polls the daemon's versioned [session-status API](http-api.md#session-status), not a CLI subprocess or agent-mail's private files. The daemon collects status every 10 seconds. A failed refresh keeps matching cached values and displays their stale age.
 
 ## Session identity
+
+The extension runs only in interactive contexts (`ctx.hasUI`). In-process
+subagents share their parent's PID, so they must not open a separate push
+connection or poll the status line. Headless contexts leave this extension
+inactive.
 
 OMP's extension process and its agent-mail MCP process share the launcher identity when `AGENT_SESSION_ID` was minted for the current OMP process. Otherwise, the extension sends OMP's native session ID and the daemon resolves it by the verified host-process join.
 
 The protocol-v3 connection response carries both the requested session ID and the resolved routing ID. Every later mail event must match the resolved project and routing ID. An ambiguous join is rejected instead of guessed. The daemon rejects a protocol mismatch before registering the listener; protocol v3 identifies steering-capable clients whose acknowledgement follows exact-session context insertion.
+
+Status-name lookups wait for that routing ID. A reconnect to the same ID keeps
+the cached name; a changed ID clears the previous session's status. Results
+from an obsolete identity or ended lifecycle cannot replace the current name.
 
 ## Delivery behavior
 

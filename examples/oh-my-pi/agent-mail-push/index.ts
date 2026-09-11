@@ -9,6 +9,7 @@ const PROTOCOL_VERSION = 3;
 const STATUS_KEY = "agent-mail";
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:8377";
 const STATUS_REFRESH_MS = 10_000;
+const STATUS_MAX_AGE_MS = 30_000;
 const CONTEXT_INSERTION_WARNING_MS = 30_000;
 
 type DeliveryMode = "" | "pull" | "push" | "unknown";
@@ -20,17 +21,35 @@ const DELIVERY_MODES: Record<DeliveryMode, true> = {
 };
 
 interface MailStatus {
+  version: 1;
+  project: string;
+  sessionId: string;
+  generatedAt: number;
   name: string;
   peers: number;
   unread: number;
   delivery: DeliveryMode;
-  unprocessed: number | undefined;
+  unprocessed: number | null;
+  work: {
+    version: 1;
+    items: {
+      id: string;
+      resourceType: string;
+      resourceKey: string;
+      state: "working" | "waiting";
+      updatedAt: string;
+      label?: string;
+      sourcePath?: string;
+      activity?: string;
+    }[];
+  } | null;
 }
 
 interface StatusState {
   address?: string;
-  sessionId?: string;
+  route?: { sessionId: string; project: string; baseUrl: URL };
   mail?: MailStatus;
+  stale?: boolean;
   push: "connecting" | "online" | "offline" | "failed";
 }
 
@@ -116,34 +135,66 @@ export function wakeRecipient(
   );
 }
 
-/** Parse agent-mail's documented append-only status-line field contract. */
-export function parseMailStatus(row: string): MailStatus | undefined {
-  const line = row.endsWith("\n") ? row.slice(0, -1) : row;
-  const fields = (line.endsWith("\r") ? line.slice(0, -1) : line).split("\t");
-  if (fields.length < 5 || fields[0] === "") return undefined;
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
 
-  const peers = Number(fields[1]);
-  const unread = Number(fields[2]);
-  const delivery = fields[3];
-  const unprocessed = fields[4] === "" ? undefined : Number(fields[4]);
+function isNonblank(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Validate the complete daemon contract before using any displayed facts. */
+export function parseMailStatus(
+  value: unknown,
+  project: string,
+  sessionId: string,
+  now = Date.now(),
+): MailStatus | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return undefined;
+  const status = value as MailStatus;
   if (
-    !Number.isSafeInteger(peers) ||
-    peers < 0 ||
-    !Number.isSafeInteger(unread) ||
-    unread < 0 ||
-    !Object.hasOwn(DELIVERY_MODES, delivery) ||
-    (unprocessed !== undefined &&
-      (!Number.isSafeInteger(unprocessed) || unprocessed < 0))
+    status.version !== 1 ||
+    status.project !== project ||
+    status.sessionId !== sessionId ||
+    !isCount(status.generatedAt) ||
+    status.generatedAt > now ||
+    now - status.generatedAt > STATUS_MAX_AGE_MS ||
+    !isNonblank(status.name) ||
+    !isCount(status.peers) ||
+    !isCount(status.unread) ||
+    typeof status.delivery !== "string" ||
+    !Object.hasOwn(DELIVERY_MODES, status.delivery) ||
+    (status.unprocessed !== null && !isCount(status.unprocessed))
   ) {
     return undefined;
   }
-  return {
-    name: fields[0],
-    peers,
-    unread,
-    delivery: delivery as DeliveryMode,
-    unprocessed,
-  };
+  const work = status.work;
+  if (
+    work !== null &&
+    (typeof work !== "object" ||
+      Array.isArray(work) ||
+      work.version !== 1 ||
+      !Array.isArray(work.items) ||
+      !work.items.every(
+        (item) =>
+          typeof item === "object" &&
+          item !== null &&
+          !Array.isArray(item) &&
+          isNonblank(item.id) &&
+          isNonblank(item.resourceType) &&
+          isNonblank(item.resourceKey) &&
+          (item.state === "working" || item.state === "waiting") &&
+          typeof item.updatedAt === "string" &&
+          Number.isFinite(Date.parse(item.updatedAt)) &&
+          (["label", "sourcePath", "activity"] as const).every(
+            (key) => item[key] === undefined || typeof item[key] === "string",
+          ),
+      ))
+  ) {
+    return undefined;
+  }
+  return status;
 }
 
 /** Use a proven launcher identity; otherwise request the join with OMP's id. */
@@ -180,10 +231,20 @@ export function renderStatus(state: StatusState): string {
     }
     fields.push(`${state.mail.unread} unread`);
     fields.push(
-      state.mail.unprocessed === undefined
+      state.mail.unprocessed === null
         ? "unprocessed ?"
         : `${state.mail.unprocessed} unprocessed`,
     );
+    if (
+      state.stale ||
+      Date.now() - state.mail.generatedAt > STATUS_MAX_AGE_MS
+    ) {
+      const age = Math.max(
+        0,
+        Math.floor((Date.now() - state.mail.generatedAt) / 1_000),
+      );
+      fields.push(`status stale (${age}s old)`);
+    }
   } else if (identity) {
     fields.push("unread ?", "unprocessed ?");
   }
@@ -194,19 +255,32 @@ async function refreshStatus(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   state: StatusState,
+  signal: AbortSignal,
 ): Promise<void> {
-  const sessionId =
-    state.sessionId ?? agentMailSessionId(ctx.sessionManager.getSessionId());
-  const result = await pi.exec(
-    process.env.AGENT_MAIL_BIN || "agent-mail",
-    ["status-line", "--fields", "--project", ctx.cwd, "--session", sessionId],
-    { timeout: 5_000 },
-  );
-  const parsed = parseMailStatus(result.stdout);
-  if (result.stdout.trim() && !parsed) {
-    pi.logger.warn("Agent Mail returned invalid status-line fields.");
+  const route = state.route;
+  if (!ctx.hasUI || !route || signal.aborted) return;
+  try {
+    const url = new URL("/api/v1/session-status", route.baseUrl);
+    url.searchParams.set("project", route.project);
+    url.searchParams.set("sessionId", route.sessionId);
+    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
+    const response = await fetch(url, { signal: requestSignal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const value: unknown = await response.json();
+    if (signal.aborted || state.route !== route) return;
+    requestSignal.throwIfAborted();
+    const parsed = parseMailStatus(value, route.project, route.sessionId);
+    if (!parsed) throw new Error("Invalid or stale session-status response.");
+    // A reconnect and the periodic tick can overlap; never roll a snapshot back.
+    if (!state.mail || parsed.generatedAt >= state.mail.generatedAt) {
+      state.mail = parsed;
+      state.stale = false;
+    }
+  } catch (error) {
+    if (signal.aborted || state.route !== route) return;
+    state.stale = true;
+    pi.logger.warn(`Agent Mail status refresh failed: ${String(error)}`);
   }
-  state.mail = parsed;
   ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
 }
 
@@ -217,7 +291,7 @@ async function refreshStatusLoop(
   signal: AbortSignal,
 ): Promise<void> {
   while (!signal.aborted) {
-    await refreshStatus(pi, ctx, state);
+    await refreshStatus(pi, ctx, state, signal);
 
     await waitForRetry(ctx, signal, STATUS_REFRESH_MS);
   }
@@ -316,6 +390,7 @@ async function consumeStream(
   url.searchParams.set("pid", String(process.pid));
 
   const response = await fetch(url, { signal });
+  if (signal.aborted) return;
   if (!response.ok || !response.body) {
     throw new Error(
       `agent-mail OMP push connection failed (${response.status}): ${await response.text()}`,
@@ -333,7 +408,7 @@ async function consumeStream(
   let sessionId: string | undefined;
   while (!signal.aborted) {
     const result = await reader.read();
-    if (result.done) break;
+    if (signal.aborted || result.done) break;
     buffered += decoder.decode(result.value, { stream: true });
     while (true) {
       const newline = buffered.indexOf("\n");
@@ -357,10 +432,24 @@ async function consumeStream(
           );
         }
         sessionId = value.sessionId;
-        state.sessionId = sessionId;
+        if (
+          state.route?.sessionId !== sessionId ||
+          state.route.project !== project
+        ) {
+          state.route = { sessionId, project, baseUrl };
+          state.mail = undefined;
+          state.stale = false;
+        }
         state.address = value.address;
         state.push = "online";
         ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
+        void refreshStatus(pi, ctx, state, signal).catch((error) => {
+          if (!signal.aborted) {
+            pi.logger.warn(
+              `Agent Mail status refresh failed: ${String(error)}`,
+            );
+          }
+        });
         continue;
       }
       if (!sessionId || value.sessionId !== sessionId) {
@@ -401,6 +490,9 @@ export default function agentMailExtension(pi: ExtensionAPI): void {
   const pendingAcknowledgements = new Map<string, PendingAcknowledgement>();
 
   const connect = (ctx: ExtensionContext): void => {
+    // In-process subagents share this PID; their connections would replace
+    // the interactive parent's registration and repeatedly disconnect it.
+    if (!ctx.hasUI) return;
     controller?.abort();
     pendingAcknowledgements.clear();
     controller = new AbortController();
@@ -450,6 +542,7 @@ export default function agentMailExtension(pi: ExtensionAPI): void {
   pi.on("session_branch", (_event, ctx) => connect(ctx));
   pi.on("session_tree", (_event, ctx) => connect(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
+    if (!ctx.hasUI) return;
     controller?.abort();
     pendingAcknowledgements.clear();
     controller = undefined;
