@@ -39,9 +39,8 @@ down. The direct fallback cannot echo to Slack.
   its reply address independently of this label, including cross-project sends.
   Without a verified session, the default label is `cli`.
 - `--session <name-or-id>` addresses one live session instead of broadcasting
-  to the project. For notifications without `--reply-to`, an unknown or
-  ambiguous name degrades to a broadcast and says so on stderr, because a job's
-  addressee may have exited while it ran.
+  to the project. An empty, unknown, or ambiguous recipient is an error;
+  nothing is sent. Omit `--session` only for an intentional project broadcast.
   [architecture.md](architecture.md#addressing-one-session-from-an-automation)
   covers the contract.
 - `--role owner` addresses the project's [owner](#owner), resolved to a concrete

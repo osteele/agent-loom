@@ -668,19 +668,13 @@ function callingSession(project?: string): NamedSession | undefined {
     : undefined;
 }
 
-/** Resolve `notify --session` to a single live session, or explain why not.
- *
- * Unlike send_mail, an unresolvable name is not an error here. The caller is an
- * automation reporting a finished job, and its addressee is a session that may
- * well have exited while the job ran; refusing would drop the notification
- * entirely, which is strictly worse than the project broadcast this replaces.
- * So an unknown or ambiguous name degrades to a broadcast and says so. */
+/** Resolve an explicitly addressed notification without widening its audience. */
 function resolveNotifySession(
   project: string,
   session: string,
 ):
   | { kind: "session"; sessionId: string; label: string }
-  | { kind: "broadcast"; reason: string } {
+  | { kind: "unresolved"; reason: string } {
   const candidates = liveNamedSessions(project);
   const resolved = resolveSessionQuery(candidates, session);
   if (resolved.kind === "unique") {
@@ -691,7 +685,7 @@ function resolveNotifySession(
     };
   }
   return {
-    kind: "broadcast",
+    kind: "unresolved",
     reason:
       resolved.kind === "none"
         ? `no live session "${session}" in ${project}. A sender name shown on a message from an automation/cli origin is a free-form label, not an address; it resolves only when the sender stamped a session.`
@@ -707,6 +701,15 @@ async function cmdNotify(
   if (typeof project !== "string" || typeof message !== "string") {
     console.error(
       "usage: agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id> | --role owner] [--reply-to <id>] [--idempotency-key <key>] [--ttl <seconds>] [--no-slack]",
+    );
+    process.exit(1);
+  }
+  if (
+    flags.session !== undefined &&
+    (typeof flags.session !== "string" || flags.session.trim() === "")
+  ) {
+    console.error(
+      "--session requires a nonempty name or ID. Nothing was sent.",
     );
     process.exit(1);
   }
@@ -784,13 +787,8 @@ async function cmdNotify(
     if (resolved.kind === "session") {
       toSession = resolved.sessionId;
     } else {
-      if (replyTo) {
-        console.error(
-          `${resolved.reason}; a reply requires an unambiguous recipient. Nothing was sent.`,
-        );
-        process.exit(1);
-      }
-      console.error(`broadcasting to the project: ${resolved.reason}`);
+      console.error(`${resolved.reason}\nNothing was sent.`);
+      process.exit(1);
     }
   }
   if (flags.role === "owner") {
@@ -2812,8 +2810,8 @@ Messaging:
          [--session <name-or-id> | --role owner] [--idempotency-key <key>] [--ttl <seconds>]
          [--no-slack]
                         Send a message to a project's inbox. --session
-                        addresses one live session instead of broadcasting;
-                        an unknown or ambiguous name falls back to a broadcast.
+                        addresses one live session instead of broadcasting.
+                        Empty, unknown, or ambiguous targets are errors.
                         --reply-to addresses the original sender in their live
                         mailbox and inherits the thread; --session overrides it.
                         An unresolved reply recipient is an error, not a broadcast.

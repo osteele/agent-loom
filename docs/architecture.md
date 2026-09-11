@@ -212,11 +212,10 @@ be its id, its full name (`augur-quiet-lantern`), or its display name
 (`Quiet Lantern`, matched case-insensitively); `agent-mail listeners` lists them.
 An addressed message is hidden from every other session in the project.
 
-For notifications without `--reply-to`, an unresolvable name is **not** an
-error here. An automation's addressee may have exited while its job ran, and
-refusing would throw the notification away, so an unknown or ambiguous name
-falls back to a project broadcast and notes why on stderr. Replies require an
-identifiable recipient and fail before sending when resolution fails.
+An empty, unknown, or ambiguous explicit recipient is an error. This includes
+`--session ""`, which a job notifier can produce when submission recorded no
+identity. Failed addressing never widens the audience to other sessions.
+Omitting `--session` requests an intentional project broadcast.
 
 For this to work the caller has to know the session id. Agents that export one
 into their subprocesses (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`) supply it
@@ -225,10 +224,11 @@ mints `AGENT_SESSION_ID` for them; without it those sessions cannot be addressed
 individually at all. weft records the submitting session at `weft run` time and
 passes it back as `--session` when a job finishes.
 
-When testing session addressing, have a listener attached under the addressed
-session id: the broadcast fallback means addressing an absent session is
-indistinguishable from not addressing at all — that's the fallback working, not
-the feature failing.
+Session-addressed notifications require a listener attached under that ID.
+When its owner has exited, a completion remains in the job system for triage;
+it must not wake an unrelated session. A missing submitter identity must be
+resolved at submission, for example with Weft's `--submitter-session ID`,
+not inferred from whichever agents happen to be present at completion.
 
 ## Coordination claims
 

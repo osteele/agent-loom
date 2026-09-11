@@ -49,3 +49,11 @@ Q, accepting D.*
   projects addressable without setup, accepting ambiguity when another session
   joins. Resolution pins the recipient at send time rather than retargeting
   queued mail during a handoff.
+
+- **2026-09-12** — In the context of automation completion mail, facing jobs
+  with no recorded submitter or an unavailable recipient, we decided to refuse
+  an empty, unknown, or ambiguous explicit `--session`, and neglected the
+  broadcast fallback in [0003](0003-addressing-automation-notifications.md), to
+  keep another session from receiving work it did not request. We accept that
+  a completion whose owner cannot be identified needs triage from the job
+  system's record. Omitting `--session` remains an intentional broadcast.

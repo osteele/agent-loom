@@ -893,6 +893,33 @@ test("notify --session addresses one live session instead of broadcasting", asyn
   }
 });
 
+test("notify never broadens an empty or unresolved explicit session to a broadcast", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-unresolved-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(project, { recursive: true });
+  try {
+    for (const session of ["", "missing-session"]) {
+      const result = await notifyRequest(
+        ["--project", project, "--message", "job done", "--session", session],
+        { HOME: home },
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.body).toBeUndefined();
+    }
+    // Omitting the selector is an intentional broadcast, not failed addressing.
+    const broadcast = await notifyRequest(
+      ["--project", project, "--message", "project announcement"],
+      { HOME: home },
+    );
+    expect(broadcast.exitCode).toBe(0);
+    expect(broadcast.body).toMatchObject({ message: "project announcement" });
+    expect(broadcast.body?.meta).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
 test("notify --reply-to returns cross-project mail to the sender", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-reply-"));
   const home = join(root, "home");

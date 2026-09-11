@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refuse empty, unknown, or ambiguous `notify --session` recipients instead of
+  broadcasting job completions to unrelated sessions in the project.
 - Keep OMP subagents from replacing their parent's mail connection and causing
   repeated offline indicators or temporary name changes. Status-name lookups
   wait for the resolved routing identity and discard obsolete results.
