@@ -25,7 +25,7 @@ Two conventions apply everywhere below.
 
 ```
 agent-mail notify --project <dir> --message <text> [--from <label>]
-  [--session <name-or-id>] [--reply-to <id>] [--idempotency-key <key>]
+  [--session <name-or-id> | --role owner] [--reply-to <id>] [--idempotency-key <key>]
   [--ttl <seconds>] [--no-slack]
 ```
 
@@ -44,11 +44,14 @@ down. The direct fallback cannot echo to Slack.
   addressee may have exited while it ran.
   [architecture.md](architecture.md#addressing-one-session-from-an-automation)
   covers the contract.
+- `--role owner` addresses the project's [owner](#owner), resolved to a concrete
+  session when the command sends. Missing or ambiguous ownership is an error;
+  it never falls back to a broadcast. Cannot be combined with `--session`.
 - `--reply-to <id>` addresses the earlier message's sender in their live
   project mailbox and inherits the conversation's thread. Set `--project` to
   the inbox containing that message; the verified calling session's inbox is
-  also searched. An explicit `--session` overrides automatic return routing
-  and uses the selected `--project` as the destination.
+  also searched. An explicit `--session` or `--role owner` overrides automatic
+  return routing and uses the selected `--project` as the destination.
   Missing parents, unstamped senders, and senders without one identifiable
   live mailbox cause an error before sending. For historical or automation
   messages without a reply address, select `--project` and `--session`
@@ -265,6 +268,52 @@ agent-mail release-claim --id <claim-id> [--project <dir>]
 
 Releases a claim by id, as printed by `claim-experiment`, `claim-path`, or
 `claims`.
+
+## Project owner
+
+### `owner`
+
+```
+agent-mail owner [show|claim|release] [--project <dir>] [--json]
+```
+
+`show` (the default) reports the owner address and whether it is assigned,
+inferred, unavailable, or ambiguous. Ownership is scoped to the canonical
+project directory; separate worktrees have separate owners.
+
+`claim` assigns the verified calling session as owner. It conflicts with an
+existing live assignment. `release` removes that session's explicit assignment.
+Neither command accepts a manual `--owner` label or a target `--session`.
+Run them from the registered agent's shell in the owning project.
+
+Without an explicit assignment, exactly one live logical session is the
+inferred owner. Its MCP and push registrations count as one session. Adding a
+second session makes inference ambiguous; removing it restores inference.
+Releasing an assignment can therefore leave the same sole session as inferred
+owner. A dead owner's assignment can be displaced; an assignment whose owner
+cannot be identified safely does not authorize guessing another owner.
+
+`--json` returns a versioned object (`schemaVersion: 1`) with `project`,
+`address`, and `status`. Resolved owners include `source`, `sessionId`, and, for
+explicit assignments, `leaseId`; unresolved owners include `reason`.
+The assignment is a work lease with resource `project-owner:owner`. A registered
+session can request its `leaseId` through `coordination request-transfer`, and
+the current owner can accept or decline through `coordination respond-transfer`.
+Existing transfer deadlines apply. Owner transfers require verified sessions,
+not manual owner labels.
+Generic `work acquire`, `work update`, and `work release` commands (and their
+MCP equivalents) reject this reserved resource. The explicit, audited
+`coordination recover --authority` escape remains available to an operator;
+its declared authority is recorded, not authenticated.
+
+For MCP clients, `project_owner` provides the same `show`, `claim`, and `release`
+actions; mutations apply only to the client's registered project. Send with
+`send_mail` arguments `project`, `role: "owner"`, and `message`. Replies return to
+the actual sender unless an explicit `session` or `role` overrides that address.
+
+Owner is a routing role, not a permission: it grants no file-edit authority or
+plan-execution lease. Messages retain their resolved session across subsequent
+ownership changes and use normal delivery, mute, and receipt behavior.
 
 ## Work leases
 

@@ -145,6 +145,15 @@ import {
   type WorkState,
   work,
 } from "./work.ts";
+import {
+  assertGenericWorkResource,
+  claimWorkspaceOwner,
+  describeWorkspaceOwner,
+  isWorkspaceOwnerResource,
+  releaseWorkspaceOwner,
+  resolveWorkspaceOwner,
+  workspaceOwnerIdentity,
+} from "./workspaceOwner.ts";
 
 installMcpStartupDiagnostics();
 setMcpStartupPhase("resolve-project");
@@ -486,7 +495,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           project: {
             type: "string",
             description:
-              "Target project directory (absolute path); reply_to without session selects the original sender's mailbox instead",
+              "Target project directory (absolute path); reply_to without session or role selects the original sender's mailbox instead",
           },
           message: { type: "string", description: "The message" },
           session: {
@@ -494,13 +503,19 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Optional: agent-mail full name, display name, or id of a specific session " +
               "in the target directory (see list_sessions). This is a separate namespace " +
-              "from Claude's native agent ids. Overrides reply_to's recipient; otherwise omit to reach all sessions there.",
+              "from Claude's native agent ids. Overrides reply_to's recipient; omit both session and role to reach all sessions there.",
+          },
+          role: {
+            type: "string",
+            enum: ["owner"],
+            description:
+              "Address the target project's owner. Mutually exclusive with session; overrides reply_to's recipient. Missing or ambiguous owners are errors.",
           },
           reply_to: {
             type: "string",
             description:
               "Optional: id of the message this answers (from check_inbox). " +
-              "Addresses the original sender in their live mailbox and inherits the thread. An unresolved sender is an error; use project and session to select a recipient explicitly.",
+              "Addresses the original sender in their live mailbox and inherits the thread. An unresolved sender is an error; use project with session or role to select a recipient explicitly.",
           },
           idempotency_key: {
             type: "string",
@@ -514,6 +529,26 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["project", "message"],
+      },
+    },
+    {
+      name: "project_owner",
+      description:
+        "Inspect a project's owner, or claim/release this session's explicit owner assignment. With no assignment the sole live session is inferred; multiple sessions require an explicit claim. The returned leaseId supports the existing work-transfer tools. This role grants no permissions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["show", "claim", "release"],
+            description: "Defaults to show",
+          },
+          project: {
+            type: "string",
+            description:
+              "Defaults to this project. Claim and release operate only in this session's project.",
+          },
+        },
       },
     },
     {
@@ -1014,11 +1049,40 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   // Every tool call is a sign of life; stamp it so peers see fresh idle times
   // (Codex sessions have no Claude session meta, so this is their only signal).
   touch(cwd, process.pid);
+  if (req.params.name === "project_owner") {
+    const { action = "show", project = cwd } = (req.params.arguments ?? {}) as {
+      action?: string;
+      project?: string;
+    };
+    if (!["show", "claim", "release"].includes(action))
+      throw new Error("project_owner action must be show, claim, or release");
+    const target = canonicalProject(project);
+    if (action !== "show") {
+      if (target !== cwd)
+        throw new Error(
+          "owner changes require a session registered in the target project",
+        );
+      if (action === "claim") claimWorkspaceOwner(cwd, sessionId);
+      else releaseWorkspaceOwner(cwd, sessionId);
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            schemaVersion: 1,
+            ...resolveWorkspaceOwner(target),
+          }),
+        },
+      ],
+    };
+  }
   if (req.params.name === "send_mail") {
     const {
       project,
       message,
       session,
+      role,
       reply_to,
       idempotency_key,
       ttl_seconds,
@@ -1026,10 +1090,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       project: string;
       message: string;
       session?: string;
+      role?: string;
       reply_to?: string;
       idempotency_key?: string;
       ttl_seconds?: number;
     };
+    if (role !== undefined && role !== "owner")
+      throw new Error("role supports only owner");
+    if (role && session !== undefined)
+      throw new Error("select role or session, not both");
     let target = canonicalProject(project);
     const meta: Record<string, string> = { sessionId };
     meta.fromName = myLabel;
@@ -1053,7 +1122,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           ],
         };
       }
-      if (!session) {
+      if (!session && !role) {
         const recipient = replyRecipient(parent, listLive());
         if (!recipient.ok) {
           return {
@@ -1104,6 +1173,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
       }
       meta.toSession = matches[0].sessionId;
+    }
+    if (role === "owner") {
+      const owner = resolveWorkspaceOwner(target);
+      if (owner.status !== "resolved")
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `${describeWorkspaceOwner(owner)}. Nothing was sent.`,
+            },
+          ],
+        };
+      meta.toSession = owner.sessionId;
+      meta.toRole = "owner";
+      meta.ownerSource = owner.source;
     }
     const status = await deliver(
       {
@@ -1480,6 +1565,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         state?: WorkState;
         activity?: string;
       };
+    assertGenericWorkResource({ type: resource_type, key: resource_key });
     const lease = withConflictGuidance(cwd, () =>
       work.acquire(
         cwd,
@@ -1516,6 +1602,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (state === undefined && activity === undefined) {
       throw new Error("update_work requires state or activity");
     }
+    const existing = work.list(cwd).find((lease) => lease.id === work_id);
+    if (existing) assertGenericWorkResource(existing.resource);
     const lease = work.update(cwd, work_id, workOwner, { state, activity });
     return {
       content: [{ type: "text", text: `updated ${describeWork(lease)}` }],
@@ -1560,6 +1648,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
   if (req.params.name === "release_work") {
     const { work_id } = req.params.arguments as { work_id: string };
+    const existing = work.list(cwd).find((lease) => lease.id === work_id);
+    if (existing) assertGenericWorkResource(existing.resource);
     const lease = work.release(cwd, work_id, workOwner);
     return {
       content: [{ type: "text", text: `released ${describeWork(lease)}` }],
@@ -1642,7 +1732,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         `work lease ${coordination_id} belongs to ${lease.project}; request it from a session in that project`,
       );
     }
-    const result = transfers.request(lease, workOwner, {
+    const requester = isWorkspaceOwnerResource(lease.resource)
+      ? workspaceOwnerIdentity(cwd, sessionId)
+      : workOwner;
+    const result = transfers.request(lease, requester, {
       reason,
       timeoutSeconds: timeout_seconds,
     });
@@ -1667,7 +1760,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       decision: "accept" | "decline";
       message?: string;
     };
-    const result = transfers.respond(request_id, workOwner, decision, message);
+    const request = transfers.get(request_id);
+    if (!request) throw new Error(`transfer request not found: ${request_id}`);
+    const owner = isWorkspaceOwnerResource({
+      type: request.resourceType,
+      key: request.resourceKey,
+    })
+      ? workspaceOwnerIdentity(request.project, sessionId)
+      : workOwner;
+    const result = transfers.respond(request_id, owner, decision, message);
     flushTransferNotifications();
     return {
       content: [{ type: "text", text: JSON.stringify(result.request) }],

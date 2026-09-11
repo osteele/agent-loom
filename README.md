@@ -88,6 +88,12 @@ project, use `list_sessions` to find its full name and pass that name to
 `send_mail`. The target project determines which inbox stores the message; the
 optional session name limits who can see it.
 
+To reach the project's owner without choosing a session name, use `send_mail`
+with `role: "owner"`. `project_owner` inspects, claims, or releases that role.
+Without an explicit assignment, a sole live session is inferred as owner;
+multiple sessions make it ambiguous and owner-addressed mail is refused.
+See [project owner commands](docs/cli.md#project-owner) for assignment and handoff.
+
 Generated addresses use a credited 256 × 256 subset of Glitch's
 [`friendly-words`](https://github.com/glitchdotcom/friendly-words). Agent-mail
 does not reuse a noun held by another registered session and normally waits 30

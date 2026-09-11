@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Address a project's owner through `notify --role owner` or `send_mail role`.
+  Inspect, claim, and release ownership with `owner` or `project_owner`; a sole
+  live session is inferred when no assignment exists, and ambiguous ownership
+  refuses delivery instead of broadcasting.
 - Add `agent-mail triage-candidates` for unread broadcasts, direct mail without
   a live recipient, and direct mail its live recipient refused.
 - Accept repeated `--id` flags on `agent-mail mark-read` so triage can settle an

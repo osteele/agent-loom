@@ -41,3 +41,11 @@ Q, accepting D.*
   from wrapped shells or hosts with multiple mailboxes. This extends the
   proof of identity in
   [0014](0014-cli-identity-requires-a-host-process-match.md).
+
+- **2026-09-11** — In the context of project-owner addressing, facing projects
+  with one or several attached sessions, we decided to prefer an explicit
+  assignment and otherwise infer only a sole live logical session. We
+  neglected mandatory assignment for every send, to make single-session
+  projects addressable without setup, accepting ambiguity when another session
+  joins. Resolution pins the recipient at send time rather than retargeting
+  queued mail during a handoff.

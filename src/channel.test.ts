@@ -1126,3 +1126,204 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
     await Promise.all(clients.map((client) => client.close()));
   }
 }, 20_000);
+
+test("owner addressing refuses ambiguity and pins delivery across an accepted handoff", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-owner-routing-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const remote = join(root, "remote");
+  for (const path of [home, project, remote]) mkdirSync(path);
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const env = {
+    ...environment,
+    HOME: home,
+    AGENT_MAIL_PORT: "0",
+    CLAUDE_CODE_SESSION_ID: "",
+    AGENT_SESSION_ID: "",
+    AGENT_SESSION_PID: "",
+  };
+  const clients: Client[] = [];
+  async function connect(cwd: string, sessionId: string) {
+    const client = new Client({ name: "agent-mail-test", version: "1" });
+    clients.push(client);
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [join(import.meta.dir, "channel.ts")],
+        cwd,
+        env: { ...env, CODEX_THREAD_ID: sessionId },
+        stderr: "pipe",
+      }),
+    );
+    return client;
+  }
+  async function cli(args: string[]) {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "cli.ts"),
+        ...args,
+        "--project",
+        project,
+      ],
+      {
+        env: { ...env, CODEX_THREAD_ID: "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return { stdout, stderr, exit };
+  }
+  const inbox = async (client: Client) =>
+    textContent(
+      await client.callTool({
+        name: "check_inbox",
+        arguments: { peek: true },
+      }),
+    );
+  try {
+    const sender = await connect(remote, "owner-sender");
+    const alpha = await connect(project, "owner-alpha");
+    const send = (message: string, extra = {}) =>
+      sender.callTool({
+        name: "send_mail",
+        arguments: { project, role: "owner", message, ...extra },
+      });
+    expect((await send("inferred delivery")).isError).not.toBe(true);
+    const parentId = (await inbox(alpha)).split(" ")[0];
+    const ownerReply = await alpha.callTool({
+      name: "send_mail",
+      arguments: {
+        project,
+        role: "owner",
+        reply_to: parentId,
+        message: "explicit owner reply",
+      },
+    });
+    expect(ownerReply.isError).not.toBe(true);
+    expect(await inbox(alpha)).toContain("explicit owner reply");
+    expect(await inbox(sender)).not.toContain("explicit owner reply");
+    expect(
+      (await send("missing owner reply parent", { reply_to: "missing-parent" }))
+        .isError,
+    ).toBe(true);
+    expect(await inbox(alpha)).not.toContain("missing owner reply parent");
+    const beta = await connect(project, "owner-beta");
+    expect((await send("must not broadcast")).isError).toBe(true);
+    await expect(send("invalid role", { role: "reviewer" })).rejects.toThrow();
+    await expect(
+      send("conflicting target", { session: "owner-alpha" }),
+    ).rejects.toThrow();
+    expect(await inbox(beta)).not.toContain("must not broadcast");
+    expect(await inbox(beta)).not.toContain("inferred delivery");
+    const forged = await cli([
+      "work",
+      "acquire",
+      "--type",
+      "project-owner",
+      "--key",
+      "owner",
+      "--owner",
+      "forged",
+    ]);
+    expect(forged.exit, forged.stderr).toBe(1);
+    await expect(
+      alpha.callTool({
+        name: "acquire_work",
+        arguments: {
+          resource_type: " project-owner ",
+          resource_key: " owner ",
+        },
+      }),
+    ).rejects.toThrow();
+    const assignment = JSON.parse(
+      textContent(
+        await alpha.callTool({
+          name: "project_owner",
+          arguments: { action: "claim" },
+        }),
+      ),
+    );
+    expect(assignment).toMatchObject({
+      source: "assigned",
+      sessionId: "owner-alpha",
+    });
+    for (const args of [
+      ["work", "update", "--id", assignment.leaseId, "--state", "waiting"],
+      ["work", "release", "--id", assignment.leaseId],
+    ]) {
+      const result = await cli(args);
+      expect(result.exit, result.stderr).toBe(1);
+    }
+    await expect(
+      beta.callTool({ name: "project_owner", arguments: { action: "claim" } }),
+    ).rejects.toThrow();
+    await expect(
+      sender.callTool({
+        name: "project_owner",
+        arguments: { action: "claim", project },
+      }),
+    ).rejects.toThrow();
+    const notify = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "cli.ts"),
+        "notify",
+        "--project",
+        project,
+        "--role",
+        "owner",
+        "--message",
+        "pinned before handoff",
+        "--no-slack",
+      ],
+      {
+        env: { ...env, CODEX_THREAD_ID: "" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const diagnostic = await new Response(notify.stderr).text();
+    expect(await notify.exited, diagnostic).toBe(0);
+    const request = JSON.parse(
+      textContent(
+        await beta.callTool({
+          name: "request_coordination_transfer",
+          arguments: { coordination_id: assignment.leaseId },
+        }),
+      ),
+    );
+    const accepted = await alpha.callTool({
+      name: "respond_coordination_transfer",
+      arguments: { request_id: request.request_id, decision: "accept" },
+    });
+    expect(JSON.parse(textContent(accepted)).status).toBe("accepted");
+    expect((await send("after handoff")).isError).not.toBe(true);
+    const alphaInbox = await inbox(alpha);
+    const betaInbox = await inbox(beta);
+    expect(alphaInbox).toContain("pinned before handoff");
+    expect(alphaInbox).not.toContain("after handoff");
+    expect(betaInbox).toContain("after handoff");
+    expect(betaInbox).not.toContain("pinned before handoff");
+    await beta.callTool({
+      name: "project_owner",
+      arguments: { action: "release" },
+    });
+    expect((await send("ambiguous after release")).isError).toBe(true);
+    await beta.close();
+    expect((await send("singleton after departure")).isError).not.toBe(true);
+    expect(await inbox(alpha)).toContain("singleton after departure");
+  } finally {
+    await Promise.all(clients.map((client) => client.close()));
+  }
+}, 20_000);

@@ -2,7 +2,7 @@
 /** agent-mail CLI.
  *
  * Messaging:
- *   agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id>] [--no-slack]
+ *   agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id> | --role owner] [--no-slack]
  *   agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek]
  *   agent-mail triage-candidates [--project <dir>] [--limit N]
  *   agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)
@@ -178,6 +178,15 @@ import { unregisteredActiveSessions } from "./unregistered.ts";
 import { weftJobsForSession } from "./weftJobs.ts";
 import { type WorkLease, type WorkState, work } from "./work.ts";
 import { WorkConflictError } from "./work.ts";
+import {
+  assertGenericWorkResource,
+  claimWorkspaceOwner,
+  describeWorkspaceOwner,
+  isWorkspaceOwnerResource,
+  releaseWorkspaceOwner,
+  resolveWorkspaceOwner,
+  workspaceOwnerIdentity,
+} from "./workspaceOwner.ts";
 
 function capabilityTag(r: Registration): string {
   const capabilities = r.capabilities;
@@ -696,12 +705,16 @@ async function cmdNotify(
   const message = flags.message;
   if (typeof project !== "string" || typeof message !== "string") {
     console.error(
-      "usage: agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id>] [--reply-to <id>] [--idempotency-key <key>] [--ttl <seconds>] [--no-slack]",
+      "usage: agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id> | --role owner] [--reply-to <id>] [--idempotency-key <key>] [--ttl <seconds>] [--no-slack]",
     );
     process.exit(1);
   }
   const config = loadConfig();
   let resolvedProject = resolveProjectArg(project);
+  if (flags.role !== undefined && flags.role !== "owner")
+    throw new Error("--role supports only owner");
+  if (flags.role && flags.session !== undefined)
+    throw new Error("select --role owner or --session, not both");
   const replyTo =
     typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined;
   const idempotencyKey =
@@ -734,6 +747,7 @@ async function cmdNotify(
   // (spool.ts `messageVisibleToSession`), so resolving here is the whole of
   // the fan-out fix — no delivery-path change is needed.
   let toSession: string | undefined;
+  let ownerSource: "assigned" | "inferred" | undefined;
   const parent = replyTo
     ? (readMessages(resolvedProject, 0).find((m) => m.id === replyTo) ??
       (sender && sender.cwd !== resolvedProject
@@ -744,7 +758,11 @@ async function cmdNotify(
     console.error(`reply parent "${replyTo}" was not found. Nothing was sent.`);
     process.exit(1);
   }
-  if (replyTo && !(typeof flags.session === "string" && flags.session !== "")) {
+  if (
+    replyTo &&
+    !flags.role &&
+    !(typeof flags.session === "string" && flags.session !== "")
+  ) {
     const recipient = replyRecipient(parent, listLive());
     if (!recipient.ok) {
       console.error(
@@ -774,8 +792,20 @@ async function cmdNotify(
       console.error(`broadcasting to the project: ${resolved.reason}`);
     }
   }
+  if (flags.role === "owner") {
+    const owner = resolveWorkspaceOwner(resolvedProject);
+    if (owner.status !== "resolved")
+      throw new Error(`${describeWorkspaceOwner(owner)}. Nothing was sent.`);
+    toSession = owner.sessionId;
+    ownerSource = owner.source;
+    console.error(`sending to ${describeWorkspaceOwner(owner)}`);
+  }
   const meta: Record<string, string> = {};
   if (toSession) meta.toSession = toSession;
+  if (ownerSource) {
+    meta.toRole = "owner";
+    meta.ownerSource = ownerSource;
+  }
   if (sender) {
     meta.sessionId = sender.sessionId;
     meta.fromName = sender.fullName;
@@ -1859,7 +1889,13 @@ function cmdCoordination(
     const lease = findWorkLease(flags.id);
     const timeoutSeconds =
       typeof flags.timeout === "string" ? Number(flags.timeout) : undefined;
-    const result = transfers.request(lease, cliOwner(flags, lease.project), {
+    const requester = isWorkspaceOwnerResource(lease.resource)
+      ? workspaceOwnerIdentity(
+          lease.project,
+          verifiedOwnerSession(flags, lease.project),
+        )
+      : cliOwner(flags, lease.project);
+    const result = transfers.request(lease, requester, {
       reason: typeof flags.reason === "string" ? flags.reason : undefined,
       timeoutSeconds,
     });
@@ -1880,7 +1916,15 @@ function cmdCoordination(
     if (!request) throw new Error(`transfer request not found: ${flags.id}`);
     const result = transfers.respond(
       request.id,
-      cliOwner(flags, request.project),
+      isWorkspaceOwnerResource({
+        type: request.resourceType,
+        key: request.resourceKey,
+      })
+        ? workspaceOwnerIdentity(
+            request.project,
+            verifiedOwnerSession(flags, request.project),
+          )
+        : cliOwner(flags, request.project),
       flags.decision,
       typeof flags.message === "string" ? flags.message : undefined,
     );
@@ -1941,6 +1985,43 @@ function describeWork(lease: WorkLease, live = listLive()): string {
   return `${lease.id} ${displayName(lease.project)}/${label} — ${lease.owner.label} [${lease.state}]${activity} [updated ${lease.updatedAt}]${ownerStatus}`;
 }
 
+function verifiedOwnerSession(
+  flags: Record<string, string | boolean>,
+  project: string,
+): string {
+  if (flags.session !== undefined || flags.owner !== undefined)
+    throw new Error("owner changes act only for the verified calling session");
+  const caller = callingSession(project);
+  if (!caller)
+    throw new Error(
+      "owner changes require a verified live session in this project",
+    );
+  return caller.sessionId;
+}
+
+function cmdOwner(
+  flags: Record<string, string | boolean>,
+  args: string[],
+): void {
+  const action = args[0]?.startsWith("-") ? "show" : (args[0] ?? "show");
+  if (!["show", "claim", "release"].includes(action))
+    throw new Error(
+      "usage: agent-mail owner [show|claim|release] [--project <dir>] [--json]",
+    );
+  const project = claimProject(flags);
+  if (action !== "show") {
+    const sessionId = verifiedOwnerSession(flags, project);
+    if (action === "claim") claimWorkspaceOwner(project, sessionId);
+    else releaseWorkspaceOwner(project, sessionId);
+  }
+  const owner = resolveWorkspaceOwner(project);
+  console.log(
+    flags.json
+      ? JSON.stringify({ schemaVersion: 1, ...owner })
+      : describeWorkspaceOwner(owner),
+  );
+}
+
 function cmdWork(
   flags: Record<string, string | boolean>,
   args: string[],
@@ -1982,6 +2063,7 @@ function cmdWork(
     const owner = cliOwner(flags, project);
     const resourceType = flags.type;
     const resourceKey = flags.key;
+    assertGenericWorkResource({ type: resourceType, key: resourceKey });
     const lease = withConflictGuidance(project, () =>
       work.acquire(
         project,
@@ -2025,6 +2107,7 @@ function cmdWork(
     const project = claimProject(flags);
     const lease = work.list(project).find((item) => item.id === flags.id);
     if (!lease) throw new Error(`work lease not found: ${flags.id}`);
+    assertGenericWorkResource(lease.resource);
     const state = parseWorkState(flags.state);
     const activity =
       typeof flags.activity === "string" ? flags.activity : undefined;
@@ -2045,9 +2128,11 @@ function cmdWork(
         "usage: agent-mail work release --id <work-id> [--project <dir>]",
       );
     }
-    console.log(
-      `released ${describeWork(work.release(claimProject(flags), flags.id))}`,
-    );
+    const project = claimProject(flags);
+    const lease = work.list(project).find((item) => item.id === flags.id);
+    if (!lease) throw new Error(`work lease not found: ${flags.id}`);
+    assertGenericWorkResource(lease.resource);
+    console.log(`released ${describeWork(work.release(project, flags.id))}`);
     return;
   }
 
@@ -2796,7 +2881,7 @@ Usage: agent-mail <command> [options]
 
 Messaging:
   notify --project <dir> --message <text> [--from <label>] [--reply-to <id>]
-         [--session <name-or-id>] [--idempotency-key <key>] [--ttl <seconds>]
+         [--session <name-or-id> | --role owner] [--idempotency-key <key>] [--ttl <seconds>]
          [--no-slack]
                         Send a message to a project's inbox. --session
                         addresses one live session instead of broadcasting;
@@ -2804,6 +2889,8 @@ Messaging:
                         --reply-to addresses the original sender in their live
                         mailbox and inherits the thread; --session overrides it.
                         An unresolved reply recipient is an error, not a broadcast.
+                        --role owner selects the project's owner instead of a
+                        session. Unknown or ambiguous owners never broadcast.
   inbox [--project <dir>] [--limit N] [--unread] [--peek]
                         Read a project's spool (defaults to cwd). A read with a
                         session id in the environment records a pushed receipt
@@ -2831,6 +2918,10 @@ Messaging:
                         Set inbound treatment for matching sessions
 
 Coordination:
+  owner [show|claim|release] [--project <dir>] [--json]
+                        Inspect the project owner, or claim/release your explicit
+                        assignment. With no assignment, the sole live session is
+                        the inferred owner; multiple sessions require a claim.
   claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
                         Atomically reserve the next EXP-NNN number
   claim-path --path <path> [--path <path> ...] [--directory]
@@ -3072,6 +3163,9 @@ switch (cmd) {
     break;
   case "release-claim":
     cmdReleaseClaim(flags);
+    break;
+  case "owner":
+    cmdOwner(flags, rest);
     break;
   case "work":
     cmdWork(flags, rest);
