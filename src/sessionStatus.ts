@@ -62,45 +62,34 @@ export function pushDeliveryFor(
   return "unknown";
 }
 
-/** A logical session owns work only through the process instance that acquired it. */
+/** A logical session owns its work across quit-and-resume: the join is on
+ * the session id, not on the process instance that acquired the lease. A
+ * resume keeps the session id and changes the instance, so an instance
+ * match would orphan the plan line on every restart. The lease must still
+ * name a session, and that session must be live; instance fields on the
+ * owner remain for displacement and force-release decisions. */
 export function statusWorkForSession(
   leases: WorkLease[],
   sessionId: string,
   sessions: Registration[],
 ): StatusWork {
-  const registrations = sessions.filter((r) => r.sessionId === sessionId);
-  const items = leases
-    .filter(
-      (lease) =>
-        lease.owner.sessionId === sessionId &&
-        registrations.some((registration) => {
-          if (lease.owner.instanceId !== undefined) {
-            return lease.owner.instanceId === registration.instanceId;
-          }
-          if (lease.owner.procStart !== undefined) {
-            return (
-              lease.owner.pid === registration.pid &&
-              lease.owner.procStart === registration.procStart
-            );
-          }
-          return (
-            lease.owner.pid !== undefined &&
-            lease.owner.pid === registration.pid
-          );
-        }),
-    )
-    .map((lease) => ({
-      id: lease.id,
-      resourceType: lease.resource.type,
-      resourceKey: lease.resource.key,
-      ...(lease.resource.label ? { label: lease.resource.label } : {}),
-      ...(lease.resource.sourcePath
-        ? { sourcePath: lease.resource.sourcePath }
-        : {}),
-      state: lease.state,
-      ...(lease.activity ? { activity: lease.activity } : {}),
-      updatedAt: lease.updatedAt,
-    }));
+  const registered = sessions.some((r) => r.sessionId === sessionId);
+  const items = registered
+    ? leases
+        .filter((lease) => lease.owner.sessionId === sessionId)
+        .map((lease) => ({
+          id: lease.id,
+          resourceType: lease.resource.type,
+          resourceKey: lease.resource.key,
+          ...(lease.resource.label ? { label: lease.resource.label } : {}),
+          ...(lease.resource.sourcePath
+            ? { sourcePath: lease.resource.sourcePath }
+            : {}),
+          state: lease.state,
+          ...(lease.activity ? { activity: lease.activity } : {}),
+          updatedAt: lease.updatedAt,
+        }))
+    : [];
   return { version: 1, items };
 }
 

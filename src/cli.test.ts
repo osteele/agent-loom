@@ -233,7 +233,7 @@ test("status-line exposes this session's work through an opt-in versioned field"
         instanceId: "old-mcp-instance",
       },
       state: "working",
-      activity: "must not be attributed to the resumed session",
+      activity: "carried across quit-and-resume",
       createdAt: "2026-08-31T12:00:00.000Z",
       updatedAt: "2026-08-31T12:01:00.000Z",
       revision: 1,
@@ -270,6 +270,14 @@ test("status-line exposes this session's work through an opt-in versioned field"
     expect(JSON.parse(fields[5] ?? "")).toEqual({
       version: 1,
       items: [
+        {
+          id: "stale-plan-lease",
+          resourceType: "research-plan",
+          resourceKey: "stale-plan",
+          state: "working",
+          activity: "carried across quit-and-resume",
+          updatedAt: "2026-08-31T12:01:00.000Z",
+        },
         {
           id: "plan-lease",
           resourceType: "research-plan",

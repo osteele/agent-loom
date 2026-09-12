@@ -3,9 +3,13 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Registration } from "./registry.ts";
-import { SESSION_STATUS_TTL_MS, SessionStatusCache } from "./sessionStatus.ts";
+import {
+  SESSION_STATUS_TTL_MS,
+  SessionStatusCache,
+  statusWorkForSession,
+} from "./sessionStatus.ts";
 import { appendMessage } from "./spool.ts";
-import { work } from "./work.ts";
+import { type WorkLease, work } from "./work.ts";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -104,7 +108,7 @@ test("status preserves exact project scope and muted counts without announcing t
   });
 });
 
-test("status joins work to its component instance and degrades work failures independently", async () => {
+test("status joins work to the logical session across instance restarts and degrades work failures independently", async () => {
   const owner = registration("work-owner");
   const sibling = {
     ...owner,
@@ -151,7 +155,10 @@ test("status joins work to its component instance and degrades work failures ind
     delivery: "push",
     work: {
       version: 1,
-      items: [expect.objectContaining({ id: lease.id, resourceKey: "owned" })],
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: lease.id, resourceKey: "owned" }),
+        expect.objectContaining({ resourceKey: "obsolete" }),
+      ]),
     },
   });
   const failure = spyOn(work, "list").mockImplementation(() => {
@@ -170,4 +177,68 @@ test("status joins work to its component instance and degrades work failures ind
   } finally {
     failure.mockRestore();
   }
+});
+
+test("status work follows the logical session across quit-and-resume", () => {
+  const lease: WorkLease = {
+    version: 1,
+    id: "lease-1",
+    project: "/project",
+    resource: { type: "research-plan", key: "plan-key" },
+    owner: {
+      id: "route-a",
+      label: "Route A",
+      sessionId: "route-a",
+      pid: 1,
+      instanceId: "instance-before-restart",
+    },
+    state: "working",
+    createdAt: "2026-09-12T00:00:00.000Z",
+    updatedAt: "2026-09-12T00:01:00.000Z",
+    revision: 1,
+  };
+  const resumed = registration("route-a", {
+    pid: 102,
+    instanceId: "instance-after-restart",
+  });
+  expect(statusWorkForSession([lease], "route-a", [resumed])).toEqual({
+    version: 1,
+    items: [
+      {
+        id: "lease-1",
+        resourceType: "research-plan",
+        resourceKey: "plan-key",
+        state: "working",
+        updatedAt: "2026-09-12T00:01:00.000Z",
+      },
+    ],
+  });
+});
+
+test("status work excludes other sessions, manual owners, and dead sessions", () => {
+  const owned: WorkLease = {
+    version: 1,
+    id: "lease-1",
+    project: "/project",
+    resource: { type: "research-plan", key: "plan-key" },
+    owner: { id: "route-a", label: "Route A", sessionId: "route-a", pid: 1 },
+    state: "working",
+    createdAt: "2026-09-12T00:00:00.000Z",
+    updatedAt: "2026-09-12T00:01:00.000Z",
+    revision: 1,
+  };
+  const manual: WorkLease = {
+    ...owned,
+    id: "lease-2",
+    owner: { id: "cli:label", label: "label" },
+  };
+  const other: WorkLease = {
+    ...owned,
+    id: "lease-3",
+    owner: { id: "route-b", label: "Route B", sessionId: "route-b" },
+  };
+  const live = registration("route-a");
+  expect(statusWorkForSession([manual], "route-a", [live]).items).toEqual([]);
+  expect(statusWorkForSession([other], "route-a", [live]).items).toEqual([]);
+  expect(statusWorkForSession([owned], "route-a", []).items).toEqual([]);
 });

@@ -23,6 +23,7 @@ import {
   lastActivityMs,
   legacyGeneratedSessionName,
   matchSessions,
+  registrationForCallingProcess,
   resetSessionAliasCache,
   resolveSessionQuery,
   resumeIdFromCommand,
@@ -702,4 +703,35 @@ test("an OMP record without a parseable session file yields nothing", () => {
   expect(
     sessionIdFromOmpTerminal("omp", project, "ttys999", {}, "/nonexistent"),
   ).toBeUndefined();
+});
+
+test("OMP resolves the calling session from the registered process tree", () => {
+  const project = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
+  const elsewhere = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
+  const started = new Date().toISOString();
+  const self = { cwd: project, sessionId: "self", pid: 4242, started };
+  const other = { cwd: elsewhere, sessionId: "other", pid: 5151, started };
+  const parents: Record<number, number> = { 3001: 4242, 4242: 1 };
+  expect(
+    registrationForCallingProcess(
+      [other, self],
+      project,
+      (pid) => parents[pid],
+      3001,
+    )?.sessionId,
+  ).toBe("self");
+  expect(
+    registrationForCallingProcess(
+      [other],
+      project,
+      (pid) => parents[pid],
+      3001,
+    ),
+  ).toBeUndefined();
+  const cycle: Record<number, number> = { 3001: 3001 };
+  expect(
+    registrationForCallingProcess([self], project, (pid) => cycle[pid], 3001),
+  ).toBeUndefined();
+  rmSync(project, { recursive: true, force: true });
+  rmSync(elsewhere, { recursive: true, force: true });
 });

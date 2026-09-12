@@ -149,6 +149,7 @@ import {
   activityTag,
   claudeSessions,
   lastActivityMs,
+  registrationForCallingProcess,
   resolveSessionQuery,
   sessionIdFromEnv,
   sessionNames,
@@ -1614,32 +1615,43 @@ function cliOwner(
   project: string,
 ): ClaimOwner {
   const label = typeof flags.owner === "string" ? flags.owner : undefined;
-  const sessionId = sessionIdFromEnv();
-  if (sessionId) {
-    const registration = listLive().find(
-      (entry) =>
-        entry.sessionId === sessionId &&
-        canonicalProject(entry.cwd) === canonicalProject(project),
+  const live = listLive();
+  // Only an id minted for this process is trusted: a dispatched executor
+  // launches with its launcher's AGENT_SESSION_ID, and filing under it
+  // attributes the work to the wrong session — a specific wrong answer,
+  // which is worse than having none.
+  const sessionId = sessionIdFromEnv(process.env, process.pid);
+  const registration =
+    (sessionId
+      ? (live.find(
+          (entry) =>
+            entry.sessionId === sessionId &&
+            canonicalProject(entry.cwd) === canonicalProject(project),
+        ) as (Registration & { sessionId: string }) | undefined)
+      : undefined) ??
+    // Nothing in the environment names this shell's own session, so resolve
+    // it from the process tree. A registered pid in the caller's parent
+    // chain names the session the shell belongs to, which keeps work
+    // session-scoped across quit-and-resume instead of degrading to manual
+    // label ownership.
+    registrationForCallingProcess(live, project, parentPidViaPs);
+  if (registration) {
+    const { sessionId: boundSessionId } = registration;
+    const identity = sessionNames(
+      boundSessionId,
+      claudeSessions().get(boundSessionId),
+      registration.cwd,
     );
-    if (registration) {
-      const identity = sessionNames(
-        sessionId,
-        claudeSessions().get(sessionId),
-        registration.cwd,
-      );
-      return {
-        id: sessionId,
-        label: label ?? identity.displayName,
-        sessionId,
-        pid: registration.pid,
-        ...(registration.procStart
-          ? { procStart: registration.procStart }
-          : {}),
-        ...(registration.instanceId
-          ? { instanceId: registration.instanceId }
-          : {}),
-      };
-    }
+    return {
+      id: boundSessionId,
+      label: label ?? identity.displayName,
+      sessionId: boundSessionId,
+      pid: registration.pid,
+      ...(registration.procStart ? { procStart: registration.procStart } : {}),
+      ...(registration.instanceId
+        ? { instanceId: registration.instanceId }
+        : {}),
+    };
   }
   if (!label) {
     throw new Error(
@@ -1650,6 +1662,13 @@ function cliOwner(
     id: `cli:${label}`,
     label,
   };
+}
+
+function parentPidViaPs(pid: number): number | undefined {
+  const result = Bun.spawnSync(["ps", "-o", "ppid=", "-p", String(pid)]);
+  if (result.exitCode !== 0) return undefined;
+  const ppid = Number.parseInt(result.stdout.toString().trim(), 10);
+  return Number.isInteger(ppid) ? ppid : undefined;
 }
 
 function describeClaim(claim: Claim): string {

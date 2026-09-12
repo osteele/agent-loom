@@ -23,6 +23,7 @@ import { loadSessionAliases } from "./config.ts";
 import { withFileLock } from "./lock.ts";
 import { ADJECTIVES, NOUNS } from "./nameWords.ts";
 import { REGISTRY_DIR, SESSION_NAMES_DIR, canonicalProject } from "./paths.ts";
+import type { Registration } from "./registry.ts";
 
 const SESSIONS_DIR = join(
   process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
@@ -534,6 +535,33 @@ export function sessionIdFromEnv(
     if (!value) continue;
     if (name === "AGENT_SESSION_ID" && !mintedForHost(env, hostPid)) continue;
     return value;
+  }
+  return undefined;
+}
+
+/** The live registration whose process sits in the caller's parent chain,
+ * nearest first, scoped to one project. Coordination CLIs run as children of
+ * the agent process they serve, so a registered pid in the parent chain
+ * names the session the shell belongs to — unlike an inherited
+ * `AGENT_SESSION_ID`, which names the launching agent and files work under
+ * the wrong session when the caller is a dispatched executor. */
+export function registrationForCallingProcess(
+  registrations: Registration[],
+  project: string,
+  readParentPid: (pid: number) => number | undefined,
+  callerPid: number = process.pid,
+): (Registration & { sessionId: string }) | undefined {
+  const canonical = canonicalProject(project);
+  let pid = readParentPid(callerPid);
+  for (let hop = 0; pid !== undefined && hop < 8; hop += 1) {
+    const match = registrations.find(
+      (registration) =>
+        registration.pid === pid &&
+        registration.sessionId !== undefined &&
+        canonicalProject(registration.cwd) === canonical,
+    );
+    if (match) return match as Registration & { sessionId: string };
+    pid = readParentPid(pid);
   }
   return undefined;
 }
