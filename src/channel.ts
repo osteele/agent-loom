@@ -1100,7 +1100,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (role && session !== undefined)
       throw new Error("select role or session, not both");
     let target = canonicalProject(project);
-    const meta: Record<string, string> = { sessionId };
+    const meta: Record<string, string> = { sessionId, fromProject: cwd };
     meta.fromName = myLabel;
     let replyTo: string | undefined;
     let threadId: string | undefined;

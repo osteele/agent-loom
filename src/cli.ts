@@ -800,7 +800,9 @@ async function cmdNotify(
     ownerSource = owner.source;
     console.error(`sending to ${describeWorkspaceOwner(owner)}`);
   }
-  const meta: Record<string, string> = {};
+  const meta: Record<string, string> = {
+    fromProject: sender?.cwd ?? canonicalProject(process.cwd()),
+  };
   if (toSession) meta.toSession = toSession;
   if (ownerSource) {
     meta.toRole = "owner";

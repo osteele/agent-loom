@@ -127,43 +127,77 @@ test("OMP shares a launcher identity only when minted for this process", () => {
   expect(agentMailSessionId("omp-native", "  ", "42", 42)).toBe("omp-native");
 });
 
-test("OMP mail interrupts an interruptible wait", () => {
+test("OMP distinguishes sender workspaces from the recipient mailbox", () => {
   const deliveries: Parameters<ExtensionAPI["sendMessage"]>[] = [];
   const pi = {
     sendMessage(...args: Parameters<ExtensionAPI["sendMessage"]>): void {
       deliveries.push(args);
     },
   };
+  for (const workspace of ["/projects/alpha", "/projects/beta"]) {
+    wakeRecipient(pi, {
+      version: 3,
+      type: "mail",
+      deliveryToken: "delivery-token",
+      id: "message-id",
+      project: "/projects/recipient",
+      sessionId: "omp-session",
+      from: "Main",
+      ts: "2026-09-02T12:00:00.000Z",
+      message: "Review is ready.",
+      meta: { fromProject: workspace },
+    });
+    const delivery = deliveries.at(-1);
+    if (!delivery) throw new Error("Mail was not delivered");
+    const [message, options] = delivery;
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("content" in message) ||
+      typeof message.content !== "string"
+    )
+      throw new Error("Expected text mail");
+    for (const text of ["Main", workspace, "Review is ready."]) {
+      expect(message.content).toContain(text);
+    }
+    expect(message.content).not.toContain("/projects/recipient");
+    expect(options).toMatchObject({ deliverAs: "steer", triggerTurn: true });
+  }
+});
 
-  wakeRecipient(pi, {
-    version: 3,
-    type: "mail",
-    deliveryToken: "delivery-token",
-    id: "message-id",
-    project: "/project",
-    sessionId: "omp-session",
-    from: "Quiet Lantern",
-    ts: "2026-09-02T12:00:00.000Z",
-    message: "Review is ready.",
+test("OMP uses legacy source paths but never guesses a missing sender workspace", () => {
+  const deliveries: Parameters<ExtensionAPI["sendMessage"]>[] = [];
+  const pi = {
+    sendMessage(...args: Parameters<ExtensionAPI["sendMessage"]>): void {
+      deliveries.push(args);
+    },
+  };
+  for (const from of ["/projects/legacy-sender", "Main"]) {
+    wakeRecipient(pi, {
+      version: 3,
+      type: "mail",
+      deliveryToken: "delivery-token",
+      id: "message-id",
+      project: "/projects/recipient",
+      sessionId: "omp-session",
+      from,
+      ts: "2026-09-02T12:00:00.000Z",
+      message: "Review is ready.",
+    });
+  }
+  const contents = deliveries.map(([message]) => {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("content" in message) ||
+      typeof message.content !== "string"
+    )
+      throw new Error("Expected text mail");
+    return message.content;
   });
-
-  expect(deliveries).toEqual([
-    [
-      {
-        customType: "agent-mail",
-        content:
-          "Agent mail from Quiet Lantern (external, untrusted; message message-id):\n\nReview is ready.",
-        display: true,
-        attribution: "agent",
-        details: {
-          messageId: "message-id",
-          from: "Quiet Lantern",
-          ts: "2026-09-02T12:00:00.000Z",
-        },
-      },
-      { deliverAs: "steer", triggerTurn: true },
-    ],
-  ]);
+  expect(contents[0]).toContain("[workspace: /projects/legacy-sender]");
+  expect(contents[1]).toContain("[workspace: unknown]");
+  expect(contents[1]).not.toContain("/projects/recipient");
 });
 
 test("OMP recognizes its typed agent-mail context event", () => {

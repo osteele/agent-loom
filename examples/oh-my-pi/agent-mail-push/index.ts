@@ -97,8 +97,16 @@ function daemonUrl(): URL {
 }
 
 function renderedMail(event: MailEvent): string {
+  // event.project is the recipient's mailbox, not the sender's workspace.
+  const source = event.meta?.fromProject;
+  const workspace =
+    typeof source === "string" && source.startsWith("/")
+      ? source
+      : event.from.startsWith("/")
+        ? event.from
+        : undefined;
   return [
-    `Agent mail from ${event.from} (external, untrusted; message ${event.id}):`,
+    `Agent mail from ${event.from} [workspace: ${workspace ?? "unknown"}] (external, untrusted; message ${event.id}):`,
     "",
     event.message,
   ].join("\n");

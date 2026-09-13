@@ -895,7 +895,10 @@ test("notify --session addresses one live session instead of broadcasting", asyn
       { HOME: home },
     );
     expect(addressed.exitCode).toBe(0);
-    expect(addressed.body?.meta).toEqual({ toSession: "submitter-session" });
+    expect(addressed.body?.meta).toHaveProperty(
+      "toSession",
+      "submitter-session",
+    );
   } finally {
     rmSync(root, { recursive: true });
   }
@@ -922,7 +925,7 @@ test("notify never broadens an empty or unresolved explicit session to a broadca
     );
     expect(broadcast.exitCode).toBe(0);
     expect(broadcast.body).toMatchObject({ message: "project announcement" });
-    expect(broadcast.body?.meta).toBeUndefined();
+    expect(broadcast.body?.meta).not.toHaveProperty("toSession");
   } finally {
     rmSync(root, { recursive: true });
   }
@@ -1654,7 +1657,7 @@ test("notify without a resolving sender stamps no identity and keeps the label",
       { ...ghostEnv, HOME: home },
     );
     expect(ghost.exitCode).toBe(0);
-    expect(ghost.body?.meta).toBeUndefined();
+    expect(ghost.body?.meta).not.toHaveProperty("sessionId");
     expect(ghost.body?.from).toBe("cli");
 
     const unlabeled = await notifyRequest(
@@ -1662,7 +1665,7 @@ test("notify without a resolving sender stamps no identity and keeps the label",
       { ...anonymous, HOME: home },
     );
     expect(unlabeled.exitCode).toBe(0);
-    expect(unlabeled.body?.meta).toBeUndefined();
+    expect(unlabeled.body?.meta).not.toHaveProperty("sessionId");
     expect(unlabeled.body?.from).toBe("cli");
 
     const labeled = await notifyRequest(
@@ -1670,7 +1673,11 @@ test("notify without a resolving sender stamps no identity and keeps the label",
       { ...ghostEnv, HOME: home },
     );
     expect(labeled.exitCode).toBe(0);
-    expect(labeled.body?.meta).toBeUndefined();
+    expect(labeled.body?.meta).not.toHaveProperty("sessionId");
+    expect(labeled.body?.meta).toHaveProperty(
+      "fromProject",
+      realpathSync(process.cwd()),
+    );
     expect(labeled.body?.from).toBe("ops-robot");
   } finally {
     rmSync(root, { recursive: true, force: true });
