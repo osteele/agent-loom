@@ -43,6 +43,7 @@ import { dashboardResponse } from "./dashboard.ts";
 import { LOG_PATH, PID_PATH, canonicalProject, ensureDirs } from "./paths.ts";
 import { writePresenceSnapshot } from "./presence.ts";
 import { writeProcessSnapshot } from "./processSnapshot.ts";
+import { RecipientError, resolveRecipient } from "./recipients.ts";
 import { listLive } from "./registry.ts";
 import { serve, spawnCapture, which } from "./runtime.ts";
 import { OhMyPiPushBridge } from "./sessionPush.ts";
@@ -278,6 +279,31 @@ const server = await serve({
         ...(body.slackEcho === false ? { slackEcho: false } : {}),
         ...(body.meta ? { meta: body.meta } : {}),
       };
+      if (msg.meta?.toSession !== undefined) {
+        if (typeof msg.meta.toSession !== "string")
+          return json(
+            { error: "meta.toSession must be an exact session ID" },
+            400,
+          );
+        try {
+          const recipient = resolveRecipient(
+            msg.project,
+            msg.meta.toSession,
+            true,
+          );
+          if (recipient.project !== msg.project) {
+            msg.meta = {
+              ...msg.meta,
+              sourceProject: msg.meta.sourceProject ?? msg.project,
+              fromProject: msg.meta.fromProject ?? msg.project,
+            };
+          }
+          msg.project = recipient.project;
+        } catch (error) {
+          if (!(error instanceof RecipientError)) throw error;
+          return json({ error: error.message }, error.status);
+        }
+      }
       const result = appendMessageGuarded(msg, admissionOptions(), now);
       if (result.status === "rate_limited") {
         return json(result, 429);

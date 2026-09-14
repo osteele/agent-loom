@@ -63,8 +63,15 @@ generated session identity has two forms:
   example `Quiet Lantern`.
 
 Pass a session's full name, display name, or session ID as `session` to reach it
-specifically. Use `list_sessions` to discover these values. A display name is
-matched without regard to case and must be unambiguous in the target project.
+specifically. Use `list_sessions` to discover these values. An exact opaque ID
+selects its registered mailbox globally, independently of the supplied project.
+IDs take precedence over human names; prefixes and UUID-shaped guesses have no
+special meaning. Unique human names also resolve globally, with display names
+matched case-insensitively. If several sessions match a name, a unique match in
+the supplied project disambiguates it; otherwise the error lists candidate
+IDs and projects. One ID registered in multiple
+mailboxes is ambiguous; multiple transport components in one mailbox are one
+recipient. CLI, MCP, and HTTP ingress share this routing implementation.
 These names belong to agent-mail; they are not aliases for the separate agent
 IDs returned by Claude's native `ListAgents`, and must not be passed to native
 `SendMessage`.
@@ -211,8 +218,13 @@ Pass `--session <name-or-id>` to address a single session instead. The name may
 be its id, its full name (`augur-quiet-lantern`), or its display name
 (`Quiet Lantern`, matched case-insensitively); `agent-mail listeners` lists them.
 An addressed message is hidden from every other session in the project.
+Exact IDs and unique human names select their live registered mailbox globally.
+`--project` disambiguates name collisions. The stored `project` is the recipient mailbox;
+`meta.sourceProject` preserves the supplied project, `meta.fromProject` the
+sender's registered workspace (or supplied project for unattributed CLI sends),
+and CLI `meta.fromCwd` the invoking process's working directory.
 
-An empty, unknown, or ambiguous explicit recipient is an error. This includes
+An empty, unknown, ambiguous, or refusing explicit recipient is an error. This includes
 `--session ""`, which a job notifier can produce when submission recorded no
 identity. Failed addressing never widens the audience to other sessions.
 Omitting `--session` requests an intentional project broadcast.

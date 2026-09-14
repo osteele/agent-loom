@@ -71,6 +71,7 @@ import {
   spoolPath,
 } from "./paths.ts";
 import { readPresenceSnapshot } from "./presence.ts";
+import { RecipientError, resolveRecipient } from "./recipients.ts";
 import {
   type InboundPolicy,
   type SessionCapabilities,
@@ -101,7 +102,6 @@ import {
   claudeSessions,
   hasSeenSession,
   lastActivityMs,
-  matchSessions,
   resumeIdFromCommand,
   sessionIdFromEnv,
   sessionIdFromHostEnviron,
@@ -495,15 +495,15 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           project: {
             type: "string",
             description:
-              "Target project directory (absolute path); reply_to without session or role selects the original sender's mailbox instead",
+              "Project directory (absolute path) for owner routing, broadcast, or disambiguating human-name collisions. Exact IDs and globally unique names select the recipient's registered mailbox.",
           },
           message: { type: "string", description: "The message" },
           session: {
             type: "string",
             description:
-              "Optional: agent-mail full name, display name, or id of a specific session " +
-              "in the target directory (see list_sessions). This is a separate namespace " +
-              "from Claude's native agent ids. Overrides reply_to's recipient; omit both session and role to reach all sessions there.",
+              "Optional: exact opaque session ID, or agent-mail full/display name (see list_sessions). " +
+              "IDs take precedence; unique names resolve globally. Project disambiguates name collisions, never IDs with multiple live mailboxes. " +
+              "This is separate from Claude's native agent ids. Overrides reply_to's recipient; missing, ambiguous, empty, or refusing recipients are errors. Omit both session and role to broadcast.",
           },
           role: {
             type: "string",
@@ -1023,21 +1023,24 @@ async function deliver(msg: Message, audience: string): Promise<string> {
   // having sent a duplicate. The distinction existed on the fallback path only,
   // which is the path that almost never runs.
   const attempt = withAttemptKey(msg);
+  let resp: Response | undefined;
   try {
-    const resp = await fetch(`http://127.0.0.1:${config.port}/notify`, {
+    resp = await fetch(`http://127.0.0.1:${config.port}/notify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(attempt),
       signal: AbortSignal.timeout(3000),
     });
-    if (resp.ok) {
-      return describeOutcome(
-        classifyFallback((await resp.json()) as AdmissionResult),
-        audience,
-      );
-    }
   } catch {
-    // daemon down, slow, or the response was lost; fall through
+    // No response: direct admission below preserves the attempt key.
+  }
+  if (resp) {
+    if (!resp.ok)
+      throw new Error(`daemon error: HTTP ${resp.status} ${await resp.text()}`);
+    return describeOutcome(
+      classifyFallback((await resp.json()) as AdmissionResult),
+      audience,
+    );
   }
   return describeOutcome(
     classifyFallback(appendMessageGuarded(attempt, admissionOptions)),
@@ -1077,6 +1080,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       ],
     };
   }
+
+  if (
+    req.params.name === "send_mail" &&
+    req.params.arguments?.session !== undefined &&
+    (typeof req.params.arguments.session !== "string" ||
+      !req.params.arguments.session.trim())
+  )
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "session requires a nonempty name or ID. Nothing was sent.",
+        },
+      ],
+    };
   if (req.params.name === "send_mail") {
     const {
       project,
@@ -1101,6 +1120,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       throw new Error("select role or session, not both");
     let target = canonicalProject(project);
     const meta: Record<string, string> = { sessionId, fromProject: cwd };
+    meta.sourceProject = target;
     meta.fromName = myLabel;
     let replyTo: string | undefined;
     let threadId: string | undefined;
@@ -1143,36 +1163,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       meta.replyToPreview = preview(parent.message);
     }
     if (session) {
-      const peers = liveSessions(target);
-      const matches = matchSessions(peers, session);
-      if (matches.length === 0) {
-        const tail = peers.length
-          ? `Live sessions in that directory:\n${describeSessions(peers)}`
-          : "No sessions are listening in that directory.";
+      try {
+        const recipient = resolveRecipient(target, session);
+        target = recipient.project;
+        meta.toSession = recipient.sessionId;
+      } catch (error) {
+        if (!(error instanceof RecipientError)) throw error;
         return {
           isError: true,
-          content: [
-            {
-              type: "text",
-              text: `no live session "${session}" in ${target}. ${tail} A sender name shown on a message from an automation/cli origin is a free-form label, not an address; it resolves only when the sender stamped a session.`,
-            },
-          ],
+          content: [{ type: "text", text: error.message }],
         };
       }
-      if (matches.length > 1) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                `"${session}" is ambiguous — multiple sessions match; ` +
-                `resend with the exact id:\n${describeSessions(matches)}`,
-            },
-          ],
-        };
-      }
-      meta.toSession = matches[0].sessionId;
     }
     if (role === "owner") {
       const owner = resolveWorkspaceOwner(target);

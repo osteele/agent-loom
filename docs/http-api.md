@@ -30,6 +30,18 @@ The daemon binds 127.0.0.1, so any process running as the local user can
 submit text. The README's [security section](../README.md#security) covers
 what that exposes and the inbound policies that contain it.
 
+For addressed notifications, set `meta.toSession` to an exact opaque session ID.
+The daemon resolves it globally and stores the message in that session's
+registered mailbox. Human names and ID prefixes are not accepted by this field.
+Omit it for an intentional broadcast to `project`. Empty or non-string IDs
+return 400, missing IDs 404, multiple live mailboxes 409, and refusing recipients
+403. Held recipients accept durable mail without authorizing push.
+
+On cross-project routing, `meta.sourceProject` and `meta.fromProject` default
+to the supplied `project`; explicit provenance values are preserved.
+The stored top-level `project` is the destination mailbox. Local provenance
+remains descriptive and cannot grant push authorization or user authority.
+
 The OMP stream verifies the exact protocol version and that `pid` names a
 current process before adding a listener. A protocol mismatch returns 409 with
 the required version in `X-Agent-Mail-Protocol`. The first stream event echoes

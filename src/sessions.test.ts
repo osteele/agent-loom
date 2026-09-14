@@ -25,7 +25,6 @@ import {
   matchSessions,
   registrationForCallingProcess,
   resetSessionAliasCache,
-  resolveSessionQuery,
   resumeIdFromCommand,
   sessionDisplayName,
   sessionFullName,
@@ -467,28 +466,6 @@ test("multiple components under one session id resolve as one address", () => {
     { sessionId: "same", fullName: "p-same", displayName: "Same" },
   ];
   expect(matchSessions(components, "Same")).toEqual([components[1]]);
-  expect(resolveSessionQuery(components, "Same").kind).toBe("unique");
-});
-
-test("resolveSessionQuery separates unique, absent, and ambiguous names", () => {
-  // The three cases callers branch on. Which of them count as errors is the
-  // caller's policy: send_mail refuses on none/ambiguous because an agent is
-  // there to retry, while notify broadcasts because an automation's addressee
-  // may have exited mid-job and refusing would discard the message entirely.
-  const unique = resolveSessionQuery(ADDRESSES, "Quiet Lantern");
-  expect(unique.kind).toBe("unique");
-  expect(unique.kind === "unique" && unique.session.sessionId).toBe(SID);
-
-  expect(resolveSessionQuery(ADDRESSES, "augur-absent-moon").kind).toBe("none");
-  expect(resolveSessionQuery([], "anything").kind).toBe("none");
-
-  const twins = [
-    { sessionId: "a", fullName: "p-twin", displayName: "Twin" },
-    { sessionId: "b", fullName: "p-twin-2", displayName: "Twin" },
-  ];
-  const ambiguous = resolveSessionQuery(twins, "Twin");
-  expect(ambiguous.kind).toBe("ambiguous");
-  expect(ambiguous.kind === "ambiguous" && ambiguous.matches).toHaveLength(2);
 });
 
 // --- adopting the host agent's id ---------------------------------------

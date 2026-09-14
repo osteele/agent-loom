@@ -123,6 +123,7 @@ import {
   sessionAddress,
   statusLineName,
 } from "./presence.ts";
+import { resolveRecipient } from "./recipients.ts";
 import {
   type InboundPolicy,
   type Registration,
@@ -150,7 +151,6 @@ import {
   claudeSessions,
   lastActivityMs,
   registrationForCallingProcess,
-  resolveSessionQuery,
   sessionIdFromEnv,
   sessionNames,
 } from "./sessions.ts";
@@ -669,31 +669,6 @@ function callingSession(project?: string): NamedSession | undefined {
     : undefined;
 }
 
-/** Resolve an explicitly addressed notification without widening its audience. */
-function resolveNotifySession(
-  project: string,
-  session: string,
-):
-  | { kind: "session"; sessionId: string; label: string }
-  | { kind: "unresolved"; reason: string } {
-  const candidates = liveNamedSessions(project);
-  const resolved = resolveSessionQuery(candidates, session);
-  if (resolved.kind === "unique") {
-    return {
-      kind: "session",
-      sessionId: resolved.session.sessionId,
-      label: resolved.session.displayName,
-    };
-  }
-  return {
-    kind: "unresolved",
-    reason:
-      resolved.kind === "none"
-        ? `no live session "${session}" in ${project}. A sender name shown on a message from an automation/cli origin is a free-form label, not an address; it resolves only when the sender stamped a session.`
-        : `"${session}" matches ${resolved.matches.length} live sessions`,
-  };
-}
-
 async function cmdNotify(
   flags: Record<string, string | boolean>,
 ): Promise<void> {
@@ -715,7 +690,8 @@ async function cmdNotify(
     process.exit(1);
   }
   const config = loadConfig();
-  let resolvedProject = resolveProjectArg(project);
+  const sourceProject = resolveProjectArg(project);
+  let resolvedProject = sourceProject;
   if (flags.role !== undefined && flags.role !== "owner")
     throw new Error("--role supports only owner");
   if (flags.role && flags.session !== undefined)
@@ -783,14 +759,10 @@ async function cmdNotify(
     resolvedProject = recipient.project;
     toSession = recipient.sessionId;
   }
-  if (typeof flags.session === "string" && flags.session !== "") {
-    const resolved = resolveNotifySession(resolvedProject, flags.session);
-    if (resolved.kind === "session") {
-      toSession = resolved.sessionId;
-    } else {
-      console.error(`${resolved.reason}\nNothing was sent.`);
-      process.exit(1);
-    }
+  if (typeof flags.session === "string") {
+    const recipient = resolveRecipient(sourceProject, flags.session);
+    resolvedProject = recipient.project;
+    toSession = recipient.sessionId;
   }
   if (flags.role === "owner") {
     const owner = resolveWorkspaceOwner(resolvedProject);
@@ -801,7 +773,9 @@ async function cmdNotify(
     console.error(`sending to ${describeWorkspaceOwner(owner)}`);
   }
   const meta: Record<string, string> = {
-    fromProject: sender?.cwd ?? canonicalProject(process.cwd()),
+    fromProject: sender?.cwd ?? sourceProject,
+    sourceProject,
+    fromCwd: canonicalProject(process.cwd()),
   };
   if (toSession) meta.toSession = toSession;
   if (ownerSource) {
@@ -2832,6 +2806,8 @@ Messaging:
          [--no-slack]
                         Send a message to a project's inbox. --session
                         addresses one live session instead of broadcasting.
+                        Exact IDs and unique human names resolve globally.
+                        --project disambiguates name collisions, never IDs.
                         Empty, unknown, or ambiguous targets are errors.
                         --reply-to addresses the original sender in their live
                         mailbox and inherits the thread; --session overrides it.

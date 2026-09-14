@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Route exact session IDs to their registered mailbox across projects in CLI,
+  MCP, and HTTP notifications, preserving source-project provenance. CLI and
+  MCP resolve unique human names globally and use project to disambiguate name
+  collisions. Missing, ambiguous, or refusing recipients fail explicitly.
 - Refuse empty, unknown, or ambiguous `notify --session` recipients instead of
   broadcasting job completions to unrelated sessions in the project.
 - Keep OMP subagents from replacing their parent's mail connection and causing

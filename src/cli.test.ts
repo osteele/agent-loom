@@ -860,10 +860,12 @@ async function notifyRequest(
   }
 }
 
-test("notify --session addresses one live session instead of broadcasting", async () => {
+test("notify --session routes to the live mailbox despite an unrelated project", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-session-"));
   const home = join(root, "home");
   const project = join(root, "project");
+  const sourceProject = join(root, "scratch");
+  mkdirSync(sourceProject, { recursive: true });
   const registry = join(home, ".claude", "agent-mail", "registry");
   mkdirSync(project, { recursive: true });
   mkdirSync(registry, { recursive: true });
@@ -886,7 +888,7 @@ test("notify --session addresses one live session instead of broadcasting", asyn
     const addressed = await notifyRequest(
       [
         "--project",
-        project,
+        sourceProject,
         "--message",
         "job done",
         "--session",
@@ -895,10 +897,15 @@ test("notify --session addresses one live session instead of broadcasting", asyn
       { HOME: home },
     );
     expect(addressed.exitCode).toBe(0);
+    expect(addressed.body?.project).toBe(canonical);
     expect(addressed.body?.meta).toHaveProperty(
       "toSession",
       "submitter-session",
     );
+    expect(addressed.body?.meta).toMatchObject({
+      sourceProject: realpathSync(sourceProject),
+      fromCwd: realpathSync(process.cwd()),
+    });
   } finally {
     rmSync(root, { recursive: true });
   }
@@ -1674,10 +1681,6 @@ test("notify without a resolving sender stamps no identity and keeps the label",
     );
     expect(labeled.exitCode).toBe(0);
     expect(labeled.body?.meta).not.toHaveProperty("sessionId");
-    expect(labeled.body?.meta).toHaveProperty(
-      "fromProject",
-      realpathSync(process.cwd()),
-    );
     expect(labeled.body?.from).toBe("ops-robot");
   } finally {
     rmSync(root, { recursive: true, force: true });

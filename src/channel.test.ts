@@ -973,13 +973,14 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
     await caller.callTool({
       name: "send_mail",
       arguments: {
-        project: answerProject,
+        project: callerProject,
         session: "answerer",
         message: "cross-project question",
       },
     });
     const question = await inbox(answerer);
     expect(question).toContain("cross-project question");
+    expect(await inbox(bystander)).not.toContain("cross-project question");
     const questionId = question.split(" ")[0];
     await answerer.callTool({
       name: "send_mail",
@@ -1004,6 +1005,21 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
       },
     });
     expect(await inbox(answerer)).toContain("follow-up question");
+
+    for (const session of ["", "   "]) {
+      const emptyRecipient = await caller.callTool({
+        name: "send_mail",
+        arguments: {
+          project: answerProject,
+          session,
+          message: "empty recipient must not broadcast",
+        },
+      });
+      expect(emptyRecipient.isError).toBe(true);
+    }
+    expect(await inbox(answerer)).not.toContain(
+      "empty recipient must not broadcast",
+    );
 
     await answerer.callTool({
       name: "send_mail",
@@ -1081,7 +1097,7 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
         join(import.meta.dir, "cli.ts"),
         "notify",
         "--project",
-        callerProject,
+        answerProject,
         "--session",
         address,
         "--reply-to",
@@ -1107,21 +1123,69 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
     expect(await notify.exited, diagnostic).toBe(0);
     expect(await inbox(caller)).toContain("CLI named reply");
     expect(await inbox(bystander)).not.toContain("CLI named reply");
+    await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: answerProject,
+        session: address,
+        message: "MCP global full name",
+      },
+    });
+    expect(await inbox(caller)).toContain("MCP global full name");
+    expect(await inbox(bystander)).not.toContain("MCP global full name");
 
-    // A full name can also be another session's native id.
-    const collision = await connect(callerProject, address);
-    const ambiguousRecipient = await answerer.callTool({
+    await answerer.callTool({
+      name: "set_inbound_policy",
+      arguments: { policy: "refuse" },
+    });
+    const refused = await caller.callTool({
+      name: "send_mail",
+      arguments: {
+        project: callerProject,
+        session: "answerer",
+        message: "refused send must not be stored",
+      },
+    });
+    expect(refused.isError).toBe(true);
+    await answerer.callTool({
+      name: "set_inbound_policy",
+      arguments: { policy: "accept" },
+    });
+    expect(await inbox(answerer)).not.toContain(
+      "refused send must not be stored",
+    );
+
+    // An exact opaque ID takes precedence over a project-local human name.
+    const collision = await connect(answerProject, address);
+    const exactRecipient = await answerer.callTool({
       name: "send_mail",
       arguments: {
         project: callerProject,
         reply_to: questionId,
         session: address,
-        message: "ambiguous explicit reply",
+        message: "exact ID takes precedence",
       },
     });
-    expect(ambiguousRecipient.isError).toBe(true);
-    expect(await inbox(caller)).not.toContain("ambiguous explicit reply");
-    expect(await inbox(collision)).not.toContain("ambiguous explicit reply");
+    expect(exactRecipient.isError).not.toBe(true);
+    expect(await inbox(caller)).not.toContain("exact ID takes precedence");
+    expect(await inbox(collision)).toContain("exact ID takes precedence");
+
+    const duplicateMailbox = await connect(answerProject, "questioner");
+    const ambiguousMailbox = await answerer.callTool({
+      name: "send_mail",
+      arguments: {
+        project: callerProject,
+        session: "questioner",
+        message: "duplicate mailbox must not receive",
+      },
+    });
+    expect(ambiguousMailbox.isError).toBe(true);
+    expect(await inbox(caller)).not.toContain(
+      "duplicate mailbox must not receive",
+    );
+    expect(await inbox(duplicateMailbox)).not.toContain(
+      "duplicate mailbox must not receive",
+    );
   } finally {
     await Promise.all(clients.map((client) => client.close()));
   }

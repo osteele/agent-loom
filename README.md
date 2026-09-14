@@ -85,8 +85,9 @@ In a session working in that receiving project, ask:
 
 That sends a project broadcast. To reach one session when several share the
 project, use `list_sessions` to find its full name and pass that name to
-`send_mail`. The target project determines which inbox stores the message; the
-optional session name limits who can see it.
+`send_mail`. Exact IDs and globally unique full/display names select the
+recipient's registered inbox. The supplied project disambiguates name
+collisions. Missing, ambiguous, or refusing recipients are errors.
 
 To reach the project's owner without choosing a session name, use `send_mail`
 with `role: "owner"`. `project_owner` inspects, claims, or releases that role.

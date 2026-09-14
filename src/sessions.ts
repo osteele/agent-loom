@@ -764,9 +764,8 @@ export interface SessionAddress {
   displayName: string;
 }
 
-/** Sessions a `--session` argument names: exact id, exact full name, or
- * case-insensitive display name. Returning every match lets each caller decide
- * what an ambiguous name means — send_mail refuses, notify broadcasts. */
+/** Match exact id, exact full name, or case-insensitive display name within
+ * the supplied candidates. Recipient routing chooses the lookup scope. */
 export function matchSessions<T extends SessionAddress>(
   candidates: T[],
   query: string,
@@ -783,27 +782,6 @@ export function matchSessions<T extends SessionAddress>(
     }
   }
   return [...matches.values()];
-}
-
-export type SessionQueryResult<T> =
-  | { kind: "unique"; session: T }
-  | { kind: "none" }
-  | { kind: "ambiguous"; matches: T[] };
-
-/** `matchSessions` reduced to the three cases callers actually branch on.
- *
- * Whether "none" and "ambiguous" are errors is the caller's policy, not this
- * function's: an agent calling send_mail is present to read an error and retry,
- * while an automation reporting a finished job is not, and refusing there would
- * discard the message. */
-export function resolveSessionQuery<T extends SessionAddress>(
-  candidates: T[],
-  query: string,
-): SessionQueryResult<T> {
-  const matches = matchSessions(candidates, query);
-  if (matches.length === 1) return { kind: "unique", session: matches[0] };
-  if (matches.length === 0) return { kind: "none" };
-  return { kind: "ambiguous", matches };
 }
 
 // --- Session recency ---------------------------------------------------------

@@ -38,9 +38,15 @@ down. The direct fallback cannot echo to Slack.
 - `--from <label>` sets the display label. A verified calling session supplies
   its reply address independently of this label, including cross-project sends.
   Without a verified session, the default label is `cli`.
-- `--session <name-or-id>` addresses one live session instead of broadcasting
-  to the project. An empty, unknown, or ambiguous recipient is an error;
-  nothing is sent. Omit `--session` only for an intentional project broadcast.
+- `--session <name-or-id>` addresses one live session. Exact opaque IDs resolve
+  globally and select the recipient's registered mailbox, regardless of
+  `--project`. Unique full/display names also resolve globally; display names are
+  case-insensitive. If names collide, one match in `--project` disambiguates them.
+  Otherwise the error lists candidate IDs and projects, with nothing sent.
+  Exact IDs take precedence over names, and prefixes do not
+  match. An empty, unknown, ambiguous, or refusing recipient fails with a
+  nonzero exit status; nothing is sent. A held recipient remains addressable.
+  Omit `--session` only for an intentional project broadcast.
   [architecture.md](architecture.md#addressing-one-session-from-an-automation)
   covers the contract.
 - `--role owner` addresses the project's [owner](#owner), resolved to a concrete
@@ -50,7 +56,8 @@ down. The direct fallback cannot echo to Slack.
   project mailbox and inherits the conversation's thread. Set `--project` to
   the inbox containing that message; the verified calling session's inbox is
   also searched. An explicit `--session` or `--role owner` overrides automatic
-  return routing and uses the selected `--project` as the destination.
+  return routing. Session addressing uses the global ID/name rules above;
+  owner routing uses `--project`.
   Missing parents, unstamped senders, and senders without one identifiable
   live mailbox cause an error before sending. For historical or automation
   messages without a reply address, select `--project` and `--session`
@@ -60,6 +67,12 @@ down. The direct fallback cannot echo to Slack.
 - `--ttl <seconds>` expires the message after that long; expired messages stay
   visible to dashboards but never enter an inbox.
 - `--no-slack` suppresses the Slack echo for this message.
+
+The stored message's `project` identifies the recipient mailbox.
+`meta.sourceProject` preserves the supplied `--project` (for example, a job's
+scratch directory), and `meta.fromCwd` records the invoking working directory.
+`meta.fromProject` identifies the verified sender's workspace, or the supplied
+project when the sender is unattributed. Routing does not change job ownership.
 
 A send reports its outcome: spooled, dropped as a duplicate inside the
 duplicate window, matched to an earlier attempt whose reply was lost, or rate
