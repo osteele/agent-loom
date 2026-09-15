@@ -142,6 +142,7 @@ import {
   WorkConflictError,
   type WorkLease,
   type WorkOwner,
+  type WorkProgress,
   type WorkState,
   work,
 } from "./work.ts";
@@ -754,6 +755,18 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Optional short description of the current activity",
           },
+          progress: {
+            type: ["object", "null"],
+            description:
+              "Reported position; omit to preserve, null to clear. current <= total.",
+            properties: {
+              current: { type: "integer", minimum: 1 },
+              total: { type: "integer", minimum: 1 },
+              label: { type: "string" },
+            },
+            required: ["current"],
+            additionalProperties: false,
+          },
         },
         required: ["resource_type", "resource_key"],
       },
@@ -761,7 +774,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "update_work",
       description:
-        "Update the state or current activity of one of this session's work leases.",
+        "Update the state, current activity, or reported position of one of this session's work leases.",
       inputSchema: {
         type: "object",
         properties: {
@@ -771,6 +784,18 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description:
               "Short current activity; pass an empty string to clear",
+          },
+          progress: {
+            type: ["object", "null"],
+            description:
+              "Reported position; omit to preserve, null to clear. current <= total.",
+            properties: {
+              current: { type: "integer", minimum: 1 },
+              total: { type: "integer", minimum: 1 },
+              label: { type: "string" },
+            },
+            required: ["current"],
+            additionalProperties: false,
           },
         },
         required: ["work_id"],
@@ -1557,15 +1582,23 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
   }
   if (req.params.name === "acquire_work") {
-    const { resource_type, resource_key, label, source_path, state, activity } =
-      req.params.arguments as {
-        resource_type: string;
-        resource_key: string;
-        label?: string;
-        source_path?: string;
-        state?: WorkState;
-        activity?: string;
-      };
+    const {
+      resource_type,
+      resource_key,
+      label,
+      source_path,
+      state,
+      activity,
+      progress,
+    } = req.params.arguments as {
+      resource_type: string;
+      resource_key: string;
+      label?: string;
+      source_path?: string;
+      state?: WorkState;
+      activity?: string;
+      progress?: WorkProgress | null;
+    };
     assertGenericWorkResource({ type: resource_type, key: resource_key });
     const lease = withConflictGuidance(cwd, () =>
       work.acquire(
@@ -1580,6 +1613,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         {
           state,
           activity,
+          progress,
           ownerIsLive: (owner, lease) =>
             workOwnerIsLive(owner, listLive(), lease.createdAt),
         },
@@ -1595,17 +1629,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
   }
   if (req.params.name === "update_work") {
-    const { work_id, state, activity } = req.params.arguments as {
+    const { work_id, state, activity, progress } = req.params.arguments as {
       work_id: string;
       state?: WorkState;
       activity?: string;
+      progress?: WorkProgress | null;
     };
-    if (state === undefined && activity === undefined) {
-      throw new Error("update_work requires state or activity");
+    if (
+      state === undefined &&
+      activity === undefined &&
+      progress === undefined
+    ) {
+      throw new Error("update_work requires state, activity, or progress");
     }
     const existing = work.list(cwd).find((lease) => lease.id === work_id);
     if (existing) assertGenericWorkResource(existing.resource);
-    const lease = work.update(cwd, work_id, workOwner, { state, activity });
+    const lease = work.update(cwd, work_id, workOwner, {
+      state,
+      activity,
+      progress,
+    });
     return {
       content: [{ type: "text", text: `updated ${describeWork(lease)}` }],
     };

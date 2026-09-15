@@ -379,6 +379,243 @@ test("listeners --no-sync emits snapshot JSON without pruning registry", async (
   }
 });
 
+test("session-address resolves only fresh project-scoped identity without writes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-address-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const data = join(home, ".claude", "agent-mail");
+  const registry = join(data, "registry");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(registry, { recursive: true });
+  const snapshotPath = join(data, "presence.json");
+  const canonical = realpathSync(project);
+  const row = {
+    cwd: canonical,
+    pid: process.pid + 1,
+    parentPid: process.pid,
+    sessionId: "registered",
+    procStart: "channel-process-start-not-host-start",
+    started: new Date().toISOString(),
+  };
+  // A live-looking registry entry must never become a snapshot fallback.
+  writeFileSync(join(registry, "live.json"), JSON.stringify(row));
+  writeFileSync(join(registry, "invalid.json"), "not a registration");
+  const tree = (dir: string): Record<string, string> => {
+    const files: Record<string, string> = {};
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) Object.assign(files, tree(path));
+      else files[path] = readFileSync(path, "utf8");
+    }
+    return files;
+  };
+  const cases: Array<{
+    label: string;
+    requested: string;
+    sessions?: unknown[];
+    age?: number;
+    raw?: string;
+    expected: string | null;
+    parentPid?: number | null;
+  }> = [
+    {
+      label: "exact ID wins over a different host match",
+      requested: "exact",
+      sessions: [row, { ...row, sessionId: "exact", parentPid: 987654321 }],
+      expected: "exact",
+      parentPid: 987654321,
+    },
+    {
+      label: "exact ID survives missing host PID",
+      requested: "registered",
+      sessions: [{ ...row, parentPid: undefined }],
+      expected: "registered",
+      parentPid: null,
+    },
+    {
+      label: "clear rotates the ID but not the host",
+      requested: "rotated",
+      sessions: [row],
+      expected: "registered",
+    },
+    {
+      label: "multiple host registrations are ambiguous",
+      requested: "rotated",
+      sessions: [row, { ...row, sessionId: "second" }],
+      expected: null,
+    },
+    {
+      label: "other project exact ID is excluded",
+      requested: "registered",
+      sessions: [{ ...row, cwd: root }],
+      expected: null,
+    },
+    {
+      label: "unproven host does not match",
+      requested: "rotated",
+      sessions: [{ ...row, parentPid: 987654321 }],
+      expected: null,
+    },
+    {
+      label: "missing snapshot does not scan the registry",
+      requested: "registered",
+      expected: null,
+    },
+    {
+      label: "stale snapshot does not scan the registry",
+      requested: "registered",
+      sessions: [row],
+      age: 31_000,
+      expected: null,
+    },
+    {
+      label: "empty snapshot does not echo the requested ID",
+      requested: "registered",
+      sessions: [],
+      expected: null,
+    },
+    {
+      label: "stale registration activity is excluded",
+      requested: "registered",
+      sessions: [
+        { ...row, started: new Date(Date.now() - 25 * 3600_000).toISOString() },
+      ],
+      expected: null,
+    },
+    {
+      label: "malformed rows cannot supply a project",
+      requested: "registered",
+      sessions: [null, 3, {}, { ...row, cwd: "." }, { ...row, cwd: 7 }],
+      expected: null,
+    },
+    {
+      label: "malformed activity cannot remove a host competitor",
+      requested: "rotated",
+      sessions: [row, { ...row, sessionId: "second", started: {} }],
+      expected: null,
+    },
+    {
+      label: "null snapshot is unavailable",
+      requested: "registered",
+      raw: "null",
+      expected: null,
+    },
+    {
+      label: "torn snapshot is unavailable",
+      requested: "registered",
+      raw: "{",
+      expected: null,
+    },
+  ];
+  try {
+    for (const scenario of cases) {
+      rmSync(snapshotPath, { force: true });
+      if (scenario.raw !== undefined) writeFileSync(snapshotPath, scenario.raw);
+      else if (scenario.sessions !== undefined) {
+        writeFileSync(
+          snapshotPath,
+          JSON.stringify({
+            version: 1,
+            generatedAt: Date.now() - (scenario.age ?? 0),
+            generatedBy: process.pid,
+            sessions: scenario.sessions,
+          }),
+        );
+      }
+      const before = tree(root);
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          join(import.meta.dir, "cli.ts"),
+          "session-address",
+          "--project",
+          project,
+          "--session",
+          scenario.requested,
+          "--json",
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: home,
+            BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+            CLAUDE_CODE_SESSION_ID: "inherited-wrong-session",
+            CLAUDE_PROJECT_DIR: root,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(await child.exited, scenario.label).toBe(0);
+      expect(await new Response(child.stderr).text(), scenario.label).toBe("");
+      expect(
+        JSON.parse(await new Response(child.stdout).text()),
+        scenario.label,
+      ).toEqual({
+        version: 1,
+        project: canonical,
+        requestedSessionId: scenario.requested,
+        sessionId: scenario.expected,
+        parentPid:
+          scenario.expected === null
+            ? null
+            : scenario.parentPid === undefined
+              ? process.pid
+              : scenario.parentPid,
+        procStart: null,
+      });
+      expect(tree(root), scenario.label).toEqual(before);
+    }
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
+test("session-address requires explicit absolute project, raw session, and JSON", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-address-args-"));
+  const home = join(root, "home");
+  mkdirSync(home);
+  const file = join(root, "file");
+  writeFileSync(file, "");
+  try {
+    for (const args of [
+      ["--session", "raw", "--json"],
+      ["--project", ".", "--session", "raw", "--json"],
+      ["--project", join(root, "missing"), "--session", "raw", "--json"],
+      ["--project", file, "--session", "raw", "--json"],
+      ["--project", root, "--json"],
+      ["--project", root, "--session", "", "--json"],
+      ["--project", root, "--session", "   ", "--json"],
+      ["--project", root, "--session", "raw"],
+    ]) {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          join(import.meta.dir, "cli.ts"),
+          "session-address",
+          ...args,
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: home,
+            BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+            CLAUDE_CODE_SESSION_ID: "inherited",
+            CLAUDE_PROJECT_DIR: root,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(await child.exited).toBe(1);
+      expect(await new Response(child.stdout).text()).toBe("");
+      expect(readdirSync(home)).toEqual([]);
+    }
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
 test("state --no-sync emits versioned aggregate data without pruning", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-state-"));
   const home = join(root, "home");

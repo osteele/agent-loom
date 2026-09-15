@@ -304,8 +304,13 @@ the source file.
 the current canonical project. Repeating the acquisition from the same session
 is idempotent and updates its metadata. A live different owner causes a
 conflict; a definitively dead session can be displaced on the next acquisition.
-`update_work` records a concise `working` or `waiting` state and current
-activity. `release_work` relinquishes responsibility.
+`update_work` records a concise `working` or `waiting` state, current activity,
+and optional structured `progress` (`current`, optional `total` and `label`).
+Position is explicitly reported, never inferred from activity or source text;
+omission preserves it and `null` clears it. `release_work` relinquishes
+responsibility. The read-only `work tui --session ID --project ABS` command
+inspects exact-session leases and contained source files without a live-registry
+scan; [the CLI reference](cli.md#work-tui) defines controls and source limits.
 
 Coordination CLI commands run from a registered Claude Code or Codex shell use
 that host's session identity, so their leases and claims have the same liveness

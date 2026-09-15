@@ -22,6 +22,7 @@
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { PRESENCE_SNAPSHOT_PATH, canonicalProject } from "./paths.ts";
 import {
   type Registration,
@@ -104,6 +105,7 @@ export function readPresenceSnapshot(
   } catch {
     return undefined; // missing or unparseable
   }
+  if (parsed === null || typeof parsed !== "object") return undefined;
   const snapshot = parsed as Partial<PresenceSnapshot>;
   if (snapshot.version !== SNAPSHOT_VERSION) return undefined;
   if (!Array.isArray(snapshot.sessions)) return undefined;
@@ -130,7 +132,12 @@ export function readListenerSnapshot(
     sessions:
       snapshot?.sessions.filter(
         (registration) =>
-          canon === undefined || canonicalProject(registration.cwd) === canon,
+          registration !== null &&
+          typeof registration === "object" &&
+          typeof registration.cwd === "string" &&
+          isAbsolute(registration.cwd) &&
+          !registration.cwd.includes("\0") &&
+          (canon === undefined || canonicalProject(registration.cwd) === canon),
       ) ?? [],
   };
 }

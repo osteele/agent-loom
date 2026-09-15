@@ -242,3 +242,29 @@ test("status work excludes other sessions, manual owners, and dead sessions", ()
   expect(statusWorkForSession([other], "route-a", [live]).items).toEqual([]);
   expect(statusWorkForSession([owned], "route-a", []).items).toEqual([]);
 });
+
+test("published position survives a session restart and becomes unreported after clear", async () => {
+  const owner = registration("reported-position");
+  const lease = work.acquire(
+    owner.cwd,
+    { type: "plan", key: "position" },
+    { id: "reported-position", label: "Reporter", sessionId: owner.sessionId },
+    { progress: { current: 2, total: 3 } },
+  );
+  try {
+    const cache = new SessionStatusCache();
+    const resumed = { ...owner, pid: 202, instanceId: "resumed" };
+    cache.refresh([resumed]);
+    const reported = await cache
+      .response(owner.cwd, "reported-position")
+      .json();
+    expect(reported.work.items[0].progress).toEqual({ current: 2, total: 3 });
+    work.update(owner.cwd, lease.id, lease.owner.id, { progress: null });
+    cache.refresh([resumed]);
+    const cleared = await cache.response(owner.cwd, "reported-position").json();
+    expect(cleared.work.version).toBe(1);
+    expect(cleared.work.items[0].progress).toBeUndefined();
+  } finally {
+    work.release(owner.cwd, lease.id);
+  }
+});

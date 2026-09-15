@@ -336,6 +336,26 @@ agent-mail records that action in an audit log.
 [docs/architecture.md](docs/architecture.md#coordination-claims) specifies the
 conflict rules, recovery, and transferring a lease between live sessions.
 
+Inspect one session's work and full plan files with
+`agent-mail work tui --session ID --project /absolute/project`.
+Both selectors are explicit: the view matches the exact originating session ID
+and canonical project, including leases retained across restarts. It reads
+without starting a daemon, pruning records, or changing claims. `--once` emits
+one plain-text snapshot; redirected input or output does the same.
+
+In a terminal, use `n`/`p` to select a lease, arrows or `j`/`k` to scroll,
+Page Up/Page Down or Space for pages, `g`/`G` for the start/end, `r` to refresh,
+and `q` or Ctrl-C to quit. The view refreshes every two seconds and on resize.
+It labels freeform text **Current activity** and missing position **unreported**.
+Created/updated ages describe persisted lease reports, not owner liveness.
+
+`work acquire` and `work update` accept `--step N`, optional `--steps TOTAL`
+and `--step-label TEXT`, or `--clear-progress`. These are explicit position
+reports; checkboxes and activity prose never infer a step. Omitting all position
+flags preserves the prior report; supplying `--step` replaces it in full.
+See [work command details](docs/cli.md#work-tui) for source-reading limits
+and the equivalent MCP metadata.
+
 ## Configuration
 
 `~/.config/agent-mail/config.toml` holds the port, the Slack echo and

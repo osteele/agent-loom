@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Resolve advisory session identity with
+  `session-address --project ABS --session RAW --json`, using only the fresh
+  listener snapshot and failing closed without registry scans or state writes.
+- Inspect exact-session work and full contained plan sources with
+  `work tui --session ID --project ABS`, including read-only interactive
+  navigation and plain-text `--once` snapshots.
+- Report optional structured work positions through CLI step flags and MCP
+  `progress` metadata, with explicit clearing and version-1 status projection.
 - Address a project's owner through `notify --role owner` or `send_mail role`.
   Inspect, claim, and release ownership with `owner` or `project_owner`; a sole
   live session is inferred when no assignment exists, and ambiguous ownership

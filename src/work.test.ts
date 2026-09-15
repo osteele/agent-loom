@@ -315,3 +315,52 @@ test("recovery only removes a lease whose owner is definitively offline", () => 
   expect(store.recover(project, lease.id, () => false)).toEqual(lease);
   expect(store.listAll()).toEqual([]);
 });
+
+test("reported position persists until replaced or explicitly cleared", () => {
+  const { project, store } = fixture();
+  const resource = { type: "research-plan", key: "position" };
+  const lease = store.acquire(project, resource, ownerA, {
+    progress: { current: 2, total: 4, label: "Pilot" },
+  });
+  store.update(project, lease.id, ownerA, { activity: "Waiting for results" });
+  expect(store.list(project)[0].progress).toEqual({
+    current: 2,
+    total: 4,
+    label: "Pilot",
+  });
+  store.acquire(project, resource, ownerA, { state: "waiting" });
+  expect(store.list(project)[0].progress?.current).toBe(2);
+  store.update(project, lease.id, ownerA, { progress: { current: 3 } });
+  expect(store.list(project)[0].progress).toEqual({ current: 3 });
+  store.update(project, lease.id, ownerA, { progress: null });
+  expect(store.list(project)[0].progress).toBeUndefined();
+  store.acquire(project, resource, ownerA, { progress: { current: 1 } });
+  store.acquire(project, resource, ownerA, { progress: null });
+  expect(store.list(project)[0].progress).toBeUndefined();
+});
+
+test("invalid reported position cannot change a lease or displace its owner", () => {
+  const { project, store } = fixture();
+  const resource = { type: "research-plan", key: "validated-position" };
+  const lease = store.acquire(project, resource, ownerA);
+  for (const progress of [
+    { current: 0 },
+    { current: 1.5 },
+    { current: Number.NaN },
+    { current: Number.MAX_SAFE_INTEGER + 1 },
+    { current: 2, total: 1 },
+    { current: 1, total: 0 },
+    { current: 1, total: 2.5 },
+  ]) {
+    expect(() =>
+      store.update(project, lease.id, ownerA, { progress }),
+    ).toThrow();
+    expect(() =>
+      store.acquire(project, resource, ownerB, {
+        progress,
+        ownerIsLive: () => false,
+      }),
+    ).toThrow();
+    expect(store.list(project)).toEqual([lease]);
+  }
+});

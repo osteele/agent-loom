@@ -20,6 +20,7 @@ import {
 import {
   type WorkLease,
   type WorkOwner,
+  type WorkProgress,
   type WorkStore,
   work,
 } from "./work.ts";
@@ -83,6 +84,7 @@ export interface CoordinationEntry {
   condition: CoordinationCondition;
   recoverable: boolean;
   state?: string;
+  progress?: WorkProgress;
   activity?: string;
   createdAt: string;
   updatedAt: string;
@@ -307,6 +309,7 @@ function workEntry(
     recoverable: isDisplaceable(status),
     state: lease.state,
     activity: lease.activity,
+    ...(lease.progress ? { progress: lease.progress } : {}),
     createdAt: lease.createdAt,
     updatedAt: lease.updatedAt,
   };

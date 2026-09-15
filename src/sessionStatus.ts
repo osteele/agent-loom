@@ -8,7 +8,12 @@ import {
   computeUnreadSummary,
 } from "./unreadSummary.ts";
 import { readWeftJobsSnapshot } from "./weftJobs.ts";
-import { type WorkLease, type WorkState, work } from "./work.ts";
+import {
+  type WorkLease,
+  type WorkProgress,
+  type WorkState,
+  work,
+} from "./work.ts";
 
 export type StatusDelivery = "" | "push" | "pull" | "unknown";
 
@@ -20,6 +25,7 @@ export interface StatusWorkItem {
   sourcePath?: string;
   state: WorkState;
   activity?: string;
+  progress?: WorkProgress;
   updatedAt: string;
 }
 
@@ -87,6 +93,7 @@ export function statusWorkForSession(
             : {}),
           state: lease.state,
           ...(lease.activity ? { activity: lease.activity } : {}),
+          ...(lease.progress ? { progress: lease.progress } : {}),
           updatedAt: lease.updatedAt,
         }))
     : [];

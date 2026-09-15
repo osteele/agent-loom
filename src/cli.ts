@@ -7,6 +7,7 @@
  *   agent-mail triage-candidates [--project <dir>] [--limit N]
  *   agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)
  *   agent-mail listeners [--project <dir>] [--json] [--no-sync]
+ *   agent-mail session-address --project <absolute-dir> --session <raw-id> --json
  *   agent-mail mute|unmute (--session <name-or-id> | --project <dir>)
  *   agent-mail claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
  *   agent-mail claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>]
@@ -51,7 +52,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type ParseError,
@@ -120,6 +121,7 @@ import {
   liveInProject,
   peersInProject,
   readListenerSnapshot,
+  resolveSelf,
   sessionAddress,
   statusLineName,
 } from "./presence.ts";
@@ -147,6 +149,7 @@ import { replyRecipient } from "./replies.ts";
 import { readFileSliceSync, readStdinText, sleepSync } from "./runtime.ts";
 import { pushDeliveryFor, statusWorkForSession } from "./sessionStatus.ts";
 import {
+  type ClaudeSessionMeta,
   activityTag,
   claudeSessions,
   lastActivityMs,
@@ -178,8 +181,15 @@ import { unreadVisibleForSession } from "./unread.ts";
 import { readUnreadSummarySnapshot } from "./unreadSummary.ts";
 import { unregisteredActiveSessions } from "./unregistered.ts";
 import { weftJobsForSession } from "./weftJobs.ts";
-import { type WorkLease, type WorkState, work } from "./work.ts";
+import {
+  type WorkLease,
+  type WorkProgress,
+  type WorkState,
+  validateWorkProgress,
+  work,
+} from "./work.ts";
 import { WorkConflictError } from "./work.ts";
+import { runWorkTui, terminalText, workTuiOptions } from "./workTui.ts";
 import {
   assertGenericWorkResource,
   claimWorkspaceOwner,
@@ -1084,6 +1094,68 @@ function cmdReceipts(flags: Record<string, string | boolean>): void {
   }
 }
 
+/** Advisory identity from the supported snapshot, never a registry scan. */
+function cmdSessionAddress(flags: Record<string, string | boolean>): void {
+  if (
+    typeof flags.project !== "string" ||
+    !isAbsolute(flags.project) ||
+    !existsSync(flags.project) ||
+    !statSync(flags.project).isDirectory()
+  ) {
+    console.error(
+      "agent-mail: --project must be an explicit absolute existing directory",
+    );
+    process.exit(1);
+  }
+  if (typeof flags.session !== "string" || !flags.session.trim()) {
+    console.error(
+      "agent-mail: --session must be an explicit nonempty raw session ID",
+    );
+    process.exit(1);
+  }
+  if (flags.json !== true) {
+    console.error("agent-mail: session-address requires --json");
+    process.exit(1);
+  }
+  const project = canonicalProject(flags.project);
+  const now = Date.now();
+  const snapshot = readListenerSnapshot(project, now);
+  // Validate only identity/activity fields consumed here. Do not join metadata
+  // or names: the snapshot is the sole source of registration evidence.
+  const valid = snapshot.sessions.every(
+    (r) =>
+      (r.sessionId === undefined || typeof r.sessionId === "string") &&
+      typeof r.started === "string" &&
+      (r.lastSeen === undefined || typeof r.lastSeen === "string"),
+  );
+  // A malformed candidate must not turn an ambiguous host into a unique one.
+  const sessions = valid ? snapshot.sessions : [];
+  const meta = new Map<string, ClaudeSessionMeta>();
+  const exact = resolveSelf(sessions, flags.session, meta, now).self;
+  const self =
+    exact ??
+    (sessions.length > 0
+      ? resolveSelf(sessions, flags.session, meta, now, hostAncestorPids()).self
+      : undefined);
+  const sessionId = self?.sessionId?.trim() ? self.sessionId : null;
+  console.log(
+    JSON.stringify({
+      version: 1,
+      project,
+      requestedSessionId: flags.session,
+      sessionId,
+      parentPid:
+        sessionId !== null &&
+        Number.isSafeInteger(self?.parentPid) &&
+        (self?.parentPid ?? 0) > 0
+          ? self?.parentPid
+          : null,
+      // Registration.procStart identifies the MCP sibling, not its host.
+      procStart: null,
+    }),
+  );
+}
+
 function cmdListeners(flags: Record<string, string | boolean>): void {
   const project =
     typeof flags.project === "string"
@@ -1943,11 +2015,59 @@ function cmdOwner(
   );
 }
 
+function parseWorkProgress(
+  flags: Record<string, string | boolean>,
+): WorkProgress | null | undefined {
+  const current = flags.step;
+  const total = flags.steps;
+  const label = flags["step-label"];
+  if (flags["clear-progress"] !== undefined) {
+    if (
+      flags["clear-progress"] !== true ||
+      current !== undefined ||
+      total !== undefined ||
+      label !== undefined
+    ) {
+      throw new Error(
+        "--clear-progress takes no value and cannot accompany step flags",
+      );
+    }
+    return null;
+  }
+  if (current === undefined && total === undefined && label === undefined)
+    return undefined;
+  if (
+    typeof current !== "string" ||
+    !/^[1-9]\d*$/.test(current) ||
+    (total !== undefined &&
+      (typeof total !== "string" || !/^[1-9]\d*$/.test(total))) ||
+    (label !== undefined && typeof label !== "string")
+  ) {
+    throw new Error(
+      "--step requires a positive integer; --steps and --step-label require --step",
+    );
+  }
+  return validateWorkProgress({
+    current: Number(current),
+    ...(total !== undefined ? { total: Number(total) } : {}),
+    ...(typeof label === "string" ? { label } : {}),
+  });
+}
+
 function cmdWork(
   flags: Record<string, string | boolean>,
   args: string[],
 ): void {
   const subcommand = args[0];
+  if (subcommand === "tui") {
+    try {
+      runWorkTui(workTuiOptions(args.slice(1)));
+    } catch (error) {
+      console.error(`work tui: ${terminalText(String(error))}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (subcommand === "list") {
     if (flags.all && typeof flags.project === "string") {
       throw new Error("work list accepts --project or --all, not both");
@@ -2001,6 +2121,7 @@ function cmdWork(
           state: parseWorkState(flags.state),
           activity:
             typeof flags.activity === "string" ? flags.activity : undefined,
+          progress: parseWorkProgress(flags),
           ownerIsLive: (candidate, existing) =>
             !isDisplaceable(
               coordinationOwnerStatus(
@@ -2032,12 +2153,23 @@ function cmdWork(
     const state = parseWorkState(flags.state);
     const activity =
       typeof flags.activity === "string" ? flags.activity : undefined;
-    if (state === undefined && activity === undefined) {
-      throw new Error("work update requires --state or --activity");
+    const progress = parseWorkProgress(flags);
+    if (
+      state === undefined &&
+      activity === undefined &&
+      progress === undefined
+    ) {
+      throw new Error(
+        "work update requires --state, --activity, --step, or --clear-progress",
+      );
     }
     console.log(
       describeWork(
-        work.update(project, lease.id, lease.owner.id, { state, activity }),
+        work.update(project, lease.id, lease.owner.id, {
+          state,
+          activity,
+          progress,
+        }),
       ),
     );
     return;
@@ -2058,7 +2190,7 @@ function cmdWork(
   }
 
   throw new Error(
-    "usage: agent-mail work list|acquire|update|release [options]",
+    "usage: agent-mail work list|tui|acquire|update|release [options]",
   );
 }
 
@@ -2830,6 +2962,9 @@ Messaging:
   listeners [--project <dir>] [--json] [--no-sync]
                         List sessions. --no-sync reads only the daemon's fresh
                         snapshot and never scans or prunes the registry.
+  session-address --project <absolute-dir> --session <raw-id> --json
+                        Resolve advisory identity from the fresh snapshot only.
+                        No environment selectors, registry scans, or writes.
   unregistered [--window <minutes>]
                         Name sessions that recorded delivery with no live
                         registration — a session the registry has lost is
@@ -2856,11 +2991,15 @@ Coordination:
                         Release a claim
   work list [--project <dir> | --all] [--type <type>] [--owner <owner>]
                         List exclusive logical-work leases
+  work tui --session <id> --project <absolute-dir> [--once]
+                        Read-only plans for one exact session and project
   work acquire --type <type> --key <key> [--label <label>] [--source <path>]
                [--state working|waiting] [--activity <text>] [--project <dir>]
                [--owner <label>]
+               [--step <n> [--steps <n>] [--step-label <text>] | --clear-progress]
                         Acquire exclusive responsibility for logical work
   work update --id <work-id> [--state working|waiting] [--activity <text>]
+              [--step <n> [--steps <n>] [--step-label <text>] | --clear-progress]
                         Update a work lease
   work release --id <work-id> [--project <dir>]
                         Release responsibility for logical work
@@ -3050,6 +3189,9 @@ switch (cmd) {
     break;
   case "listeners":
     cmdListeners(flags);
+    break;
+  case "session-address":
+    cmdSessionAddress(flags);
     break;
   case "status-line":
     await cmdStatusLine(flags);

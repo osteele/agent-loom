@@ -92,8 +92,12 @@ no unprocessed jobs for this session.
 `work: null` means work collection failed. Otherwise, each item has `id`,
 `resourceType`, `resourceKey`, `state` (`working` or `waiting`), and an ISO
 `updatedAt` timestamp, with optional string `label`, `sourcePath`, and
-`activity` fields. A work lease must match a live component's instance identity,
-not just its session ID. Muted sessions still receive unread status counts;
+`activity` fields. Optional `progress` is an object with positive safe integer
+`current`, optional positive safe integer `total >= current`, and optional string
+`label`. Missing progress means position is unreported; clearing removes the
+field. This remains a version-1 contract. A work lease matches the logical
+session ID of a live registration, including across process restarts.
+Muted sessions still receive unread status counts;
 muting suppresses their reminders, not their status lookup.
 
 Missing query fields return 400. Unknown project/session pairs return 404.

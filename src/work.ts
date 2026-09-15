@@ -33,6 +33,39 @@ export interface WorkResource {
 
 export type WorkState = "working" | "waiting";
 
+export interface WorkProgress {
+  current: number;
+  total?: number;
+  label?: string;
+}
+
+/** Omitted preserves the report; null explicitly clears it. */
+export function validateWorkProgress(
+  value: WorkProgress | null | undefined,
+): WorkProgress | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (
+    typeof value !== "object" ||
+    !Number.isSafeInteger(value.current) ||
+    value.current < 1 ||
+    (value.total !== undefined &&
+      (!Number.isSafeInteger(value.total) ||
+        value.total < 1 ||
+        value.current > value.total)) ||
+    (value.label !== undefined && typeof value.label !== "string")
+  ) {
+    throw new Error(
+      "progress requires positive integers with current <= total",
+    );
+  }
+  const label = validateText(value.label, "progress label");
+  return {
+    current: value.current,
+    ...(value.total !== undefined ? { total: value.total } : {}),
+    ...(label ? { label } : {}),
+  };
+}
+
 export interface WorkLease {
   version: 1;
   id: string;
@@ -41,6 +74,7 @@ export interface WorkLease {
   owner: WorkOwner;
   state: WorkState;
   activity?: string;
+  progress?: WorkProgress;
   createdAt: string;
   updatedAt: string;
   revision: number;
@@ -157,8 +191,15 @@ export class WorkStore {
   }
 
   private readDirectory(dir: string): WorkLease[] {
-    if (!existsSync(dir)) return [];
-    return readdirSync(dir)
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return [];
+      throw error;
+    }
+    return names
       .filter((name) => name.endsWith(".json"))
       .map(
         (name) =>
@@ -212,10 +253,12 @@ export class WorkStore {
     options: {
       state?: WorkState;
       activity?: string;
+      progress?: WorkProgress | null;
       ownerIsLive?: (owner: WorkOwner, lease: WorkLease) => boolean;
     } = {},
   ): WorkLease {
     const canonical = canonicalProject(project);
+    const progress = validateWorkProgress(options.progress);
     const label = validateText(resource.label, "resource label");
     const normalizedResource: WorkResource = {
       type: validateToken(resource.type, "resource type"),
@@ -263,6 +306,7 @@ export class WorkStore {
             owner,
             state: options.state ?? owned.state,
             ...(options.activity !== undefined ? { activity } : {}),
+            ...(options.progress !== undefined ? { progress } : {}),
             updatedAt: now,
           };
           const written = this.write(updated, true);
@@ -283,6 +327,7 @@ export class WorkStore {
           owner,
           state: options.state ?? "working",
           ...(activity ? { activity } : {}),
+          ...(progress ? { progress } : {}),
           createdAt: now,
           updatedAt: now,
           revision: 1,
@@ -306,9 +351,14 @@ export class WorkStore {
     project: string,
     leaseId: string,
     owner: string | WorkOwner,
-    changes: { state?: WorkState; activity?: string },
+    changes: {
+      state?: WorkState;
+      activity?: string;
+      progress?: WorkProgress | null;
+    },
   ): WorkLease {
     const canonical = canonicalProject(project);
+    const progress = validateWorkProgress(changes.progress);
     return this.withLock(
       canonical,
       () => {
@@ -325,6 +375,7 @@ export class WorkStore {
           ...(changes.activity !== undefined
             ? { activity: validateText(changes.activity, "activity") }
             : {}),
+          ...(changes.progress !== undefined ? { progress } : {}),
           updatedAt: new Date().toISOString(),
         };
         return this.write(updated, true);

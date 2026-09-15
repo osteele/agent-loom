@@ -5,7 +5,7 @@ Every `agent-mail` subcommand, grouped by area. The README's
 reference. Running `agent-mail` with no arguments, or `agent-mail help`,
 prints a compact version of the same listing.
 
-Two conventions apply everywhere below.
+These conventions apply except where a command specifies explicit selectors.
 
 - `--project <dir>` names the project whose spool, claims, or leases the
   command touches. It defaults to the current directory. An existing path
@@ -169,6 +169,56 @@ for a versioned object. [automation.md](automation.md#the-presence-snapshot)
 specifies the snapshot output.
 
 ## Sessions
+
+### `session-address`
+
+```
+agent-mail session-address --project ABS --session RAW --json
+```
+
+Resolves an advisory session identity for companion-pane launchers. All three
+flags are required. `ABS` must be an absolute path to an existing directory;
+the output uses its canonical, symlink-resolved path. `RAW` must be a nonempty
+raw session ID, not a display name. Neither selector is inherited from the
+environment, and project basenames are not resolved heuristically. Invalid
+arguments exit nonzero with a diagnostic on stderr.
+
+Successful queries print only a versioned JSON object to stdout:
+
+```json
+{
+  "version": 1,
+  "project": "/absolute/canonical/project",
+  "requestedSessionId": "raw-requested-id",
+  "sessionId": "registered-id",
+  "parentPid": 12345,
+  "procStart": null
+}
+```
+
+The query reads only the supported listener snapshot, with a 30-second TTL.
+Within the explicit project, it applies `resolveSelf`'s stale-activity filter
+and prefers an exact session ID. Otherwise, exactly one registration must have
+a host `parentPid` in the query process's ancestor chain. This can resolve the
+original registration after Claude `/clear` changes the session ID. Run the
+query beneath the host agent when relying on that fallback.
+
+A missing, stale, or unavailable snapshot, an unresolved identity, or ambiguous
+host matches return `sessionId`, `parentPid`, and `procStart` as `null`, with
+exit status zero. Empty snapshots never fall back to the requested ID.
+Malformed rows cannot supply a project identity; malformed identity/activity
+fields in the selected project fail closed.
+
+`parentPid` is the selected registration's host agent PID, when available.
+An exact session match remains valid without it and returns `parentPid: null`.
+`procStart` is currently always `null`: the registration's start stamp belongs
+to the MCP channel process, not its host. Consumers must independently capture
+and verify the host's process start stamp. Snapshot identity is advisory, not
+a current liveness guarantee.
+
+This command never scans or prunes the registry, starts or refreshes the daemon,
+joins session-name metadata, or writes snapshots, leases, names, or other state.
+Only a host-fallback query inspects process ancestry.
 
 ### `mute` / `unmute`
 
@@ -344,19 +394,75 @@ Lists active leases with resource, owner, state, current activity, and an
 owner-offline marker. `--type` filters by resource type and `--owner` by owner
 id, session id, or label.
 
+### `work tui`
+
+```
+agent-mail work tui --session ID --project /absolute/existing/project [--once]
+```
+
+Shows every work lease whose `owner.sessionId` exactly matches `ID` in the
+canonical project. It includes retained leases without a live registration.
+Session and project must both be supplied explicitly; the project must be an
+absolute existing directory. Project symlink aliases resolve to the same
+directory. Empty sessions, relative projects, duplicate flags, positional
+arguments, and all other selectors (including `--all`, `--owner`, and `--type`)
+are rejected. The command never infers identity from the environment.
+
+The view shows resource type/key, label, last-reported working/waiting state,
+**Current activity**, explicit **Current position**, creation/update timestamps
+and ages, source path, and full source text. Missing activity or position is
+`unreported`. Markdown checkboxes and freeform activity do not establish a
+position. Ages are measured from persisted lease timestamps at snapshot time;
+an old report may be stale but does not prove the owner dead. Updating any lease
+metadata changes `updatedAt`, even if the activity text was preserved.
+
+`--once` prints one plain-text snapshot without ANSI and exits. Non-TTY stdin
+or stdout also selects one-shot output. An unavailable work store produces a
+visible diagnostic and exit status 1, distinct from no claimed work. A missing
+or unreadable source is reported on its lease without hiding the other leases.
+No refresh writes leases, claims, locks, registry entries, or session names,
+and no daemon is started.
+
+Interactive controls:
+
+| Key | Action |
+| --- | --- |
+| `n`, Right, Tab | Next lease |
+| `p`, Left, Shift-Tab | Previous lease |
+| `j` / Down, `k` / Up | Scroll down / up |
+| Page Down / Space, Page Up | Scroll one page |
+| `g` / Home, `G` / End | Start / end of selected lease content |
+| `r` | Refresh immediately |
+| `q`, Ctrl-C | Quit |
+
+Refresh runs every two seconds and preserves the selected lease by ID when it
+still exists. Resize reflows the text. Long lines wrap and all supported content
+is scrollable; very small terminals need resizing to at least 3 columns and
+2 rows. Quitting, EOF, SIGINT, SIGTERM, SIGHUP, SIGQUIT, and SIGTSTP restore raw
+mode, cursor visibility, and the main screen. SIGTSTP exits rather than suspends.
+
+Sources are read only from regular files contained in the project after symlink
+resolution. Escaping symlinks, devices, FIFOs, and directories are refused.
+Files above 1 MiB are explicitly reported as unsupported, with no partial
+content presented as complete. Files changed during reading report unavailable
+until a later refresh. Source text is read at refresh time and may be newer than
+the lease's activity. Terminal controls are escaped visibly; source line breaks
+are preserved, CRLF becomes LF, and tabs become four spaces.
+
 ### `work acquire`
 
 ```
 agent-mail work acquire --type <type> --key <key> [--label <label>]
   [--source <path>] [--state working|waiting] [--activity <text>]
   [--project <dir>] [--owner <label>]
+  [--step N [--steps TOTAL] [--step-label TEXT] | --clear-progress]
 ```
 
 Acquires exclusive responsibility for the resource `type:key`, or updates the
 caller-owned lease in place. Research plans use the plan's filename stem as
 the key so status-directory moves keep the lease's identity. `--source`
 records the file the lease is about, `--label` gives it a display name, and
-`--state` and `--activity` set the initial progress note. A conflict with a
+`--state` and `--activity` set the initial state and activity note. A conflict with a
 live owner fails with recovery advice; acquisition displaces only an owner
 proven dead. Run inside a registered agent shell, or pass `--owner`.
 
@@ -364,9 +470,26 @@ proven dead. Run inside a registered agent shell, or pass `--owner`.
 
 ```
 agent-mail work update --id <work-id> [--state working|waiting] [--activity <text>]
+  [--step N [--steps TOTAL] [--step-label TEXT] | --clear-progress]
 ```
 
-Updates a lease's state or current activity. One of the two flags is required.
+Updates a lease's state, current activity, or structured position. At least one
+of `--state`, `--activity`, `--step`, or `--clear-progress` is required.
+
+For both acquire and update, `--step N` supplies a positive safe integer and
+replaces the entire prior position report. `--steps TOTAL` supplies an optional
+positive safe integer total with `N <= TOTAL`; `--step-label TEXT` supplies an
+optional short label (trimmed, at most 500 characters, no C0 controls). Both
+require `--step`. Omitting a total or label from a replacement removes that
+field. `--clear-progress` takes no value, conflicts with all step flags, and
+removes the position. Omitting all position flags preserves the existing report.
+
+MCP `acquire_work` and `update_work` accept the same optional
+`progress: { current: N, total?: TOTAL, label?: TEXT }`. Omission preserves;
+`progress: null` clears. WorkStore uses this same object and validation.
+Leases and published status-work documents remain version 1; old records
+without `progress` remain valid. Position is a caller report, not verified step
+completion. Ownership, transfer, recovery, and delivery rules are unchanged.
 
 ### `work release`
 

@@ -88,6 +88,13 @@ rendering it. `resourceKey` is the stable plan filename stem; `sourcePath` is
 optional provenance rather than identity. The JSON is opt-in so existing shell
 adapters that bind the fifth field as the remainder of the row keep working.
 
+Items may also contain `progress: { current: 2, total: 5, label: "Pilot" }`.
+`current` is a positive safe integer; optional `total` is a positive safe integer
+at least as large as `current`, and optional `label` is a string. Missing
+`progress` means position is unreported, including for older version-1 leases.
+An explicit clear removes the field. `activity` remains freeform current
+activity, never an inferred step. Existing widget formats are unchanged.
+
 ### The push/pull field
 
 The fourth field is `push` when channel push is expected to land, `pull` when it
