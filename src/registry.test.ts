@@ -29,6 +29,7 @@ import {
   scanProcesses,
   setInboundPolicy,
   setMuted,
+  signalPid,
   touchInboxPoll,
 } from "./registry.ts";
 
@@ -654,4 +655,23 @@ test("a legacy entry without procStart is judged by its command", () => {
 
 test("an exited pid that ps does not report at all is not live", () => {
   expect(isCurrentProcess(reg(ZOMBIE_START), undefined)).toBe(false);
+});
+
+test("signalling a reaped pid reports not-running instead of throwing", async () => {
+  // A pid that has exited and been reaped is exactly what `install` raced
+  // against: liveness was confirmed, then `launchctl bootout` took the daemon
+  // down before the SIGTERM landed, and the unguarded kill threw ESRCH and
+  // abandoned the remaining client registrations.
+  const child = Bun.spawn(["sh", "-c", "exit 0"]);
+  const pid = child.pid;
+  await child.exited;
+  expect(signalPid(pid, "SIGTERM")).toBe(false);
+  expect(signalPid(pid, "SIGHUP")).toBe(false);
+});
+
+test("signalling a live process succeeds and stops it", async () => {
+  const child = Bun.spawn(["sleep", "30"]);
+  expect(signalPid(child.pid, "SIGTERM")).toBe(true);
+  await child.exited;
+  expect(signalPid(child.pid, "SIGTERM")).toBe(false);
 });

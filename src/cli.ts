@@ -136,6 +136,7 @@ import {
   processInfo,
   setInboundPolicy,
   setMuted,
+  signalPid,
   touchInboxPoll,
 } from "./registry.ts";
 import {
@@ -500,7 +501,10 @@ function cmdStop(): void {
     console.log("daemon not running");
     return;
   }
-  process.kill(pid, "SIGTERM");
+  if (!signalPid(pid, "SIGTERM")) {
+    console.log("daemon not running");
+    return;
+  }
   console.log(`daemon stopped (pid ${pid})`);
 }
 
@@ -522,7 +526,10 @@ function cmdGraceful(): void {
     console.log("daemon not running");
     return;
   }
-  process.kill(pid, "SIGHUP");
+  if (!signalPid(pid, "SIGHUP")) {
+    console.log("daemon not running");
+    return;
+  }
   console.log(`daemon reloaded config (SIGHUP to pid ${pid})`);
 }
 
@@ -2721,8 +2728,7 @@ function cmdInstall(flags: Record<string, string | boolean>): void {
   }
   // Stop any bare-mode daemon so launchd can own the port.
   const pid = daemonPid();
-  if (pid !== null) {
-    process.kill(pid, "SIGTERM");
+  if (pid !== null && signalPid(pid, "SIGTERM")) {
     sleepSync(500);
   }
   launchctl("bootstrap", guiDomain(), PLIST_PATH);

@@ -883,3 +883,21 @@ export function scanParentPids(
   }
   return parents;
 }
+
+/** Send a signal to a pid, tolerating a process that is already gone.
+ *
+ * Every daemon kill races: liveness is confirmed, then the process can exit
+ * before the signal lands -- `launchctl bootout` during `install` makes that
+ * the common case rather than the rare one. ESRCH means the caller's goal
+ * (that pid not running) already holds, so it is reported as "was not
+ * running", not raised as a crash that abandons the rest of an install.
+ * Any other errno is a real fault and still throws. */
+export function signalPid(pid: number, signal: "SIGTERM" | "SIGHUP"): boolean {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
