@@ -31,6 +31,7 @@
   },
   "files": [
     "dist",
+    ".claude-plugin",
     "plugins/agent-mail/.claude-plugin",
     "plugins/agent-mail/skills",
     "docs",
