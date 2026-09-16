@@ -617,3 +617,57 @@ export function claudeRegistrationMatches(
     value.args[0] === channelPath
   );
 }
+
+/** The prefix of every sub-table belonging to Codex's agent-mail entry. */
+const CODEX_ENTRY_SUBTABLE_PREFIX = "[mcp_servers.agent-mail.";
+
+/** Sub-tables of Codex's agent-mail entry, verbatim.
+ *
+ * `codex mcp add` can only write a transport, so agent-mail registers by
+ * `remove` then `add` -- and `remove` takes the whole subtree with it,
+ * including the `[mcp_servers.agent-mail.tools.<name>]` tables that carry
+ * `approval_mode`. Dropping those silently un-gates every tool the user had
+ * asked to approve, so they are captured before the rewrite and restored
+ * after it. `codex mcp get --json` cannot serve as the snapshot: it reports
+ * `enabled_tools` and `disabled_tools` and omits per-tool approval entirely.
+ *
+ * Returned as text rather than parsed: no TOML writer exists in-repo, and
+ * round-tripping the bytes preserves comments and any key this version does
+ * not know about. */
+export function codexEntrySubTables(text: string): string[] {
+  const lines = text.split("\n");
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  for (const line of lines) {
+    const header = line.trimStart();
+    if (header.startsWith("[")) {
+      if (current !== null) blocks.push(current.join("\n").trimEnd());
+      current = header.startsWith(CODEX_ENTRY_SUBTABLE_PREFIX) ? [line] : null;
+      continue;
+    }
+    if (current !== null) current.push(line);
+  }
+  if (current !== null) blocks.push(current.join("\n").trimEnd());
+  return blocks;
+}
+
+/** Restore captured sub-tables that the rewrite dropped.
+ *
+ * A `[a.b]` table is valid anywhere in the file, so appending at EOF needs no
+ * knowledge of where `codex mcp add` put the parent. Blocks already present
+ * are left alone, which makes a repeated install a no-op. */
+export function restoreCodexEntrySubTables(
+  text: string,
+  blocks: string[],
+): { document: string; restored: string[] } {
+  const present = new Set(
+    codexEntrySubTables(text).map((block) => block.split("\n", 1)[0]?.trim()),
+  );
+  const missing = blocks.filter(
+    (block) => !present.has(block.split("\n", 1)[0]?.trim()),
+  );
+  if (missing.length === 0) return { document: text, restored: [] };
+  const separator = text === "" || text.endsWith("\n") ? "" : "\n";
+  const document = `${text}${separator}\n${missing.join("\n\n")}\n`;
+  return { document, restored: missing };
+}

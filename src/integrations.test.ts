@@ -5,6 +5,7 @@ import {
   addReminderHookGemini,
   addReminderHookKimi,
   claudeRegistrationMatches,
+  codexEntrySubTables,
   codexRegistrationMatches,
   codexReminderHookEvents,
   enabledAgentMailPlugin,
@@ -16,6 +17,7 @@ import {
   removeReminderHookGemini,
   removeReminderHookKimi,
   removeStdioMcpRegistration,
+  restoreCodexEntrySubTables,
   stdioRegistrationMatches,
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
@@ -553,5 +555,64 @@ test("kimi reminder hook removal is a no-op when the block is absent", () => {
   const text = "[other]\nkey = 1\n";
   const result = removeReminderHookKimi(text);
   expect(result.changed).toBe(false);
+  expect(result.document).toBe(text);
+});
+
+const CODEX_WITH_APPROVALS = `[mcp_servers.agent-mail]
+command = "/bin/bun"
+args = ["/pkg/dist/channel.js"]
+
+[mcp_servers.agent-mail.tools.send_mail]
+approval_mode = "approve"
+
+[mcp_servers.agent-mail.tools.check_inbox]
+approval_mode = "approve"
+
+[mcp_servers.other]
+command = "/bin/other"
+`;
+
+test("codex sub-tables are captured without the entry or its neighbours", () => {
+  const blocks = codexEntrySubTables(CODEX_WITH_APPROVALS);
+  expect(blocks).toEqual([
+    '[mcp_servers.agent-mail.tools.send_mail]\napproval_mode = "approve"',
+    '[mcp_servers.agent-mail.tools.check_inbox]\napproval_mode = "approve"',
+  ]);
+});
+
+test("an entry with no sub-tables captures nothing", () => {
+  expect(
+    codexEntrySubTables('[mcp_servers.agent-mail]\ncommand = "/bin/bun"\n'),
+  ).toEqual([]);
+});
+
+test("per-tool approvals survive a codex remove-and-add rewrite", () => {
+  const blocks = codexEntrySubTables(CODEX_WITH_APPROVALS);
+  // What `codex mcp remove` + `codex mcp add` leaves behind: the transport
+  // only, with every approval gate gone.
+  const rewritten = `[mcp_servers.other]
+command = "/bin/other"
+
+[mcp_servers.agent-mail]
+command = "/bin/bun"
+args = ["/pkg/dist/channel.js"]
+`;
+  const { document, restored } = restoreCodexEntrySubTables(rewritten, blocks);
+  expect(restored).toHaveLength(2);
+  expect(codexEntrySubTables(document)).toEqual(blocks);
+  expect(document).toContain('[mcp_servers.other]\ncommand = "/bin/other"');
+});
+
+test("restoring is a no-op when the sub-tables are already present", () => {
+  const blocks = codexEntrySubTables(CODEX_WITH_APPROVALS);
+  const result = restoreCodexEntrySubTables(CODEX_WITH_APPROVALS, blocks);
+  expect(result.restored).toEqual([]);
+  expect(result.document).toBe(CODEX_WITH_APPROVALS);
+});
+
+test("restoring nothing leaves the document untouched", () => {
+  const text = '[mcp_servers.agent-mail]\ncommand = "/bin/bun"\n';
+  const result = restoreCodexEntrySubTables(text, []);
+  expect(result.restored).toEqual([]);
   expect(result.document).toBe(text);
 });

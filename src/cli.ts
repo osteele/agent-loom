@@ -88,6 +88,7 @@ import {
   addReminderHookGemini,
   addReminderHookKimi,
   claudeRegistrationMatches,
+  codexEntrySubTables,
   codexRegistrationMatches,
   codexReminderHookEvents,
   enabledAgentMailPlugin,
@@ -99,6 +100,7 @@ import {
   removeReminderHookGemini,
   removeReminderHookKimi,
   removeStdioMcpRegistration,
+  restoreCodexEntrySubTables,
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
 } from "./integrations.ts";
@@ -283,6 +285,7 @@ const CLAUDE_SETTINGS = join(
   "settings.json",
 );
 const CODEX_HOOKS_PATH = join(homedir(), ".codex", "hooks.json");
+const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
 const KIMI_CONFIG_PATH = join(homedir(), ".kimi-code", "config.toml");
 const KIMI_MCP_PATH = join(homedir(), ".kimi-code", "mcp.json");
 const GEMINI_SETTINGS_PATH = join(homedir(), ".gemini", "settings.json");
@@ -2398,6 +2401,7 @@ function runCodexMcp(args: string[]): boolean {
 }
 
 function registerCodex(replace: boolean): void {
+  let preserved: string[] = [];
   const registration = codexRegistration();
   if (registration.status === "unavailable") {
     console.error("codex not found; skipping Codex MCP registration");
@@ -2423,11 +2427,34 @@ function registerCodex(replace: boolean): void {
       );
       return;
     }
+    preserved = readCodexEntrySubTables();
     if (!runCodexMcp(["remove", "agent-mail"])) return;
   }
   if (runCodexMcp(["add", "agent-mail", "--", runtimePath(), CHANNEL_ENTRY])) {
     console.log("registered agent-mail with Codex");
+    restoreCodexSubTables(preserved);
   }
+}
+
+/** Codex's agent-mail sub-tables as they stand on disk, or none. */
+function readCodexEntrySubTables(): string[] {
+  if (!existsSync(CODEX_CONFIG_PATH)) return [];
+  return codexEntrySubTables(readFileSync(CODEX_CONFIG_PATH, "utf8"));
+}
+
+/** Put back what `codex mcp remove` took with the entry. */
+function restoreCodexSubTables(blocks: string[]): void {
+  if (blocks.length === 0) return;
+  if (!existsSync(CODEX_CONFIG_PATH)) return;
+  const { document, restored } = restoreCodexEntrySubTables(
+    readFileSync(CODEX_CONFIG_PATH, "utf8"),
+    blocks,
+  );
+  if (restored.length === 0) return;
+  writeFileSync(CODEX_CONFIG_PATH, document);
+  console.log(
+    `restored ${restored.length} Codex agent-mail sub-table(s) that the rewrite dropped`,
+  );
 }
 
 function unregisterCodex(): void {
