@@ -14,6 +14,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -22,7 +23,12 @@ import { join } from "node:path";
 import { loadSessionAliases } from "./config.ts";
 import { withFileLock } from "./lock.ts";
 import { ADJECTIVES, NOUNS } from "./nameWords.ts";
-import { REGISTRY_DIR, SESSION_NAMES_DIR, canonicalProject } from "./paths.ts";
+import {
+  REGISTRY_DIR,
+  SESSION_NAMES_BY_HOST_PID_DIR,
+  SESSION_NAMES_DIR,
+  canonicalProject,
+} from "./paths.ts";
 import type { Registration } from "./registry.ts";
 
 const SESSIONS_DIR = join(
@@ -316,6 +322,71 @@ function selectedAdjectiveNounName(
     throw new Error("all friendly session-name nouns are currently in use");
   }
   return adjectiveNounName(adjective, oldestNoun);
+}
+
+/** Record this session's name against the pid of the agent process it serves.
+ *
+ * Read by exit paths that run after the session is gone -- a shell printing an
+ * agent's exit receipt knows which process it launched, but not which id this
+ * server settled on, and for Codex those differ. The registry answers the same
+ * question while the session is live, and is pruned at exit, which is exactly
+ * when a receipt asks.
+ *
+ * Best-effort: a breadcrumb that cannot be written costs a name on a receipt
+ * and nothing else, so no failure here may reach the caller.
+ */
+export function recordSessionNameForHostPid(
+  hostPid: number,
+  sessionId: string,
+  name: GeneratedSessionName,
+  directory = SESSION_NAMES_BY_HOST_PID_DIR,
+  nowMs = Date.now(),
+): void {
+  if (!Number.isInteger(hostPid) || hostPid <= 1 || !sessionId) return;
+  try {
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, `${hostPid}.json`);
+    // Pids are reused, so a breadcrumb is only ever the latest claim on one:
+    // written whole, replacing whatever an earlier process left there. Readers
+    // reject one older than the launch they are reporting on.
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          hostPid,
+          sessionId,
+          recordedAt: new Date(nowMs).toISOString(),
+          ...name,
+        },
+        null,
+        1,
+      ),
+    );
+    pruneHostPidBreadcrumbs(directory, nowMs);
+  } catch {
+    // See the doc comment: a receipt without a name is the whole cost.
+  }
+}
+
+/** Drop breadcrumbs older than a week. Keyed by pid, they would otherwise
+ * accumulate one file per agent process ever run. */
+function pruneHostPidBreadcrumbs(directory: string, nowMs: number): void {
+  const cutoff = nowMs - 7 * 24 * 60 * 60 * 1000;
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const path = join(directory, entry);
+    try {
+      if (statSync(path).mtimeMs < cutoff) rmSync(path, { force: true });
+    } catch {
+      // A breadcrumb another process removed first is already pruned.
+    }
+  }
 }
 
 /** Whether agent-mail has ever registered a session under this id.

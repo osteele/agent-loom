@@ -32,6 +32,15 @@ export const READ_DIR = join(STATE_DIR, "read");
 export const RECEIPTS_DIR = join(STATE_DIR, "receipts");
 export const REGISTRY_DIR = join(STATE_DIR, "registry");
 export const SESSION_NAMES_DIR = join(STATE_DIR, "session-names");
+/** Session names keyed by the host agent's pid, for readers that know which
+ * process ran but not which id this server resolved for it. A launcher knows
+ * the id it minted, which the precedence chain may have passed over -- a Codex
+ * thread id outranks it -- so a hash of the launcher's id can miss a name that
+ * exists. This is written from inside, after the resolution. */
+export const SESSION_NAMES_BY_HOST_PID_DIR = join(
+  SESSION_NAMES_DIR,
+  "by-host-pid",
+);
 export const CLAIMS_DIR = join(STATE_DIR, "claims");
 export const WORK_DIR = join(STATE_DIR, "work");
 export const TRANSFERS_DIR = join(STATE_DIR, "transfers");
@@ -92,6 +101,7 @@ export function ensureDirs(): void {
     RECEIPTS_DIR,
     REGISTRY_DIR,
     SESSION_NAMES_DIR,
+    SESSION_NAMES_BY_HOST_PID_DIR,
     CLAIMS_DIR,
     WORK_DIR,
     TRANSFERS_DIR,

@@ -102,6 +102,7 @@ import {
   claudeSessions,
   hasSeenSession,
   lastActivityMs,
+  recordSessionNameForHostPid,
   resumeIdFromCommand,
   sessionIdFromEnv,
   sessionIdFromHostEnviron,
@@ -197,6 +198,12 @@ const myMeta = claudeSessions().get(sessionId);
 const myName = myMeta?.name; // raw Claude name for the registry snapshot
 setMcpStartupPhase("resolve-session-name");
 const myGeneratedName = assignedGeneratedSessionNameForRegistration(sessionId);
+// Leave the resolved name where a process that only knows our host agent's pid
+// can find it after that agent exits. The precedence chain above may have
+// passed over the id a launcher minted, so hashing the launcher's id is not a
+// reliable way back to this name; the registry knows, but is pruned at exit,
+// which is when an exit receipt asks.
+recordSessionNameForHostPid(process.ppid, sessionId, myGeneratedName);
 const mySessionNames = sessionNames(sessionId, myMeta, cwd, myGeneratedName);
 const myLabel = mySessionNames.displayName;
 const startupIdentity = `${mySessionNames.displayName} — address: ${mySessionNames.fullName}`;
