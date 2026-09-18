@@ -102,9 +102,10 @@ import {
   claudeSessions,
   hasSeenSession,
   lastActivityMs,
+  launcherSessionIdFromEnv,
+  nativeSessionIdFromEnv,
   recordSessionNameForHostPid,
   resumeIdFromCommand,
-  sessionIdFromEnv,
   sessionIdFromHostEnviron,
   sessionIdFromOmpTerminal,
   sessionNames,
@@ -182,16 +183,44 @@ const cwd = canonicalProject(process.cwd());
 // identifies only this run. It comes after our own environment because that is
 // what the harness actually set for this process, and argv records only what
 // was asked for.
+//
+// The two groups below are ordered, and the grouping is the point: every source
+// of a *native* id is consulted before any source of the launcher's, wherever
+// the launcher's is read from. `AGENT_SESSION_ID` exists for agents that expose
+// no id of their own, so letting it preempt one that could have been discovered
+// is the inversion 0011 rejected for the command line. It is also what named
+// OMP sessions after an id OMP cannot resume: OMP records its conversation id
+// per terminal, so the source that finds it sits below the environment, and a
+// flat chain let the launcher id win before it was ever consulted.
+//
+// A new way to reach a native id belongs in the first group. Appending it to
+// the end — the shape a flat chain invites — would place it below the launcher
+// id and silently do nothing.
 setMcpStartupPhase("resolve-session-id");
+const nativeSessionIdSources = [
+  () => nativeSessionIdFromEnv(process.env),
+  () => resumeIdFromCommand(processCommand(process.ppid)),
+  () =>
+    sessionIdFromOmpTerminal(
+      processCommand(process.ppid),
+      cwd,
+      processTty(process.pid),
+    ),
+];
+const launcherSessionIdSources = [
+  () => launcherSessionIdFromEnv(process.env, process.ppid),
+  () => sessionIdFromHostEnviron(processEnviron(process.ppid), process.ppid),
+];
+const firstSessionId = (sources: (() => string | undefined)[]) => {
+  for (const source of sources) {
+    const value = source();
+    if (value) return value;
+  }
+  return undefined;
+};
 const sessionId =
-  sessionIdFromEnv(process.env, process.ppid) ??
-  resumeIdFromCommand(processCommand(process.ppid)) ??
-  sessionIdFromHostEnviron(processEnviron(process.ppid), process.ppid) ??
-  sessionIdFromOmpTerminal(
-    processCommand(process.ppid),
-    cwd,
-    processTty(process.pid),
-  ) ??
+  firstSessionId(nativeSessionIdSources) ??
+  firstSessionId(launcherSessionIdSources) ??
   randomUUID();
 setMcpStartupPhase("read-session-metadata");
 const myMeta = claudeSessions().get(sessionId);

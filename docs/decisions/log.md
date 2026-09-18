@@ -58,3 +58,21 @@ Q, accepting D.*
   a completion whose owner cannot be identified needs triage from the job
   system's record. Omitting `--session` remains an intentional broadcast.
 - **2026-09-12** — In the context of quit-and-resume orphaning a logical session's plan rows in the status projection, and coordination CLIs run from dispatched executors whose inherited `AGENT_SESSION_ID` names the launching agent, we decided to join the work projection on the session id alone (with the session live) and to resolve the acquiring shell's session from the registered process tree before falling back to manual label ownership, neglecting the per-instance join in [0012](0012-allow-friendly-session-names-to-recycle.md)'s shadow, so a resumed session keeps its leases and claims and new acquisitions attribute to the shell's own session. We accept that a retired instance's lease rows render until the session releases or recovers them; `coordination recover` and displacement rules are unchanged.
+
+- **2026-09-18** — In the context of session-id resolution, facing a flat
+  precedence chain in which the launcher's `AGENT_SESSION_ID` preempted OMP's
+  own conversation id — leaving OMP sessions named after an id OMP cannot
+  resume — we decided to group the sources, consulting every native id source
+  before any launcher one, and neglected persisting `cwd` and `client` into the
+  session-name record so callers could join a launcher id back to a native
+  session, to extend
+  [0011](0011-prefer-a-resume-id-from-the-host-command-line.md)'s "a
+  conversation id outranks a launch id" to sources outside the environment. We
+  accept that the 869 existing launcher-keyed names are not migrated: measured
+  2026-09-18, none of the 869 names an id any harness store can open, so they
+  address launches that were never resumable and there is no continuity to
+  carry. A launch id is minted fresh per launch, so an OMP conversation was
+  renamed every time it was reopened by `--continue`, the picker, or a name; it
+  now keeps one name across resumes. The grouping is the enforcement: a new
+  native source appended to a flat chain would have sorted below the launcher
+  id and silently done nothing, which is how this arose.

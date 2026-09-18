@@ -578,6 +578,11 @@ export const SESSION_ID_ENV_VARS = [
   "AGENT_SESSION_ID",
 ] as const;
 
+/** The launcher's fallback id, for agents that expose none of their own. Last
+ * in the list above, and last among every source of an id: see
+ * `nativeSessionIdFromEnv`. */
+export const LAUNCHER_SESSION_ID_ENV_VAR = "AGENT_SESSION_ID";
+
 /** Process the launcher minted `AGENT_SESSION_ID` for. */
 export const AGENT_SESSION_PID_ENV_VAR = "AGENT_SESSION_PID";
 
@@ -601,13 +606,36 @@ export function sessionIdFromEnv(
   env: Record<string, string | undefined> = process.env,
   hostPid?: number,
 ): string | undefined {
+  return nativeSessionIdFromEnv(env) ?? launcherSessionIdFromEnv(env, hostPid);
+}
+
+/** The conversation id the harness itself set, ignoring the launcher's.
+ *
+ * Split out so a caller that has another way to reach a *native* id can try it
+ * before falling back to the launcher's. `AGENT_SESSION_ID` exists for agents
+ * that expose no id of their own, so it must not preempt one that can be
+ * discovered elsewhere — the principle
+ * [0011](../docs/decisions/0011-prefer-a-resume-id-from-the-host-command-line.md)
+ * states as "a conversation id outranks a launch id". */
+export function nativeSessionIdFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
   for (const name of SESSION_ID_ENV_VARS) {
+    if (name === LAUNCHER_SESSION_ID_ENV_VAR) continue;
     const value = env[name];
-    if (!value) continue;
-    if (name === "AGENT_SESSION_ID" && !mintedForHost(env, hostPid)) continue;
-    return value;
+    if (value) return value;
   }
   return undefined;
+}
+
+/** The launcher-minted `AGENT_SESSION_ID`, when it was minted for `hostPid`. */
+export function launcherSessionIdFromEnv(
+  env: Record<string, string | undefined> = process.env,
+  hostPid?: number,
+): string | undefined {
+  const value = env[LAUNCHER_SESSION_ID_ENV_VAR];
+  if (!value) return undefined;
+  return mintedForHost(env, hostPid) ? value : undefined;
 }
 
 /** The live registration whose process sits in the caller's parent chain,

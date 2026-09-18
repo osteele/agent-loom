@@ -21,8 +21,10 @@ import {
   generatedNameNoun,
   isStaleSession,
   lastActivityMs,
+  launcherSessionIdFromEnv,
   legacyGeneratedSessionName,
   matchSessions,
+  nativeSessionIdFromEnv,
   registrationForCallingProcess,
   resetSessionAliasCache,
   resumeIdFromCommand,
@@ -357,6 +359,29 @@ test("a native session id wins over a launcher-minted one", () => {
       CODEX_THREAD_ID: "codex-native",
     }),
   ).toBe("codex-native");
+});
+
+test("the launcher id is separable from the harness's own", () => {
+  // OMP records its conversation id per terminal rather than in the
+  // environment, so the id it can resume is reachable — but only if the
+  // launcher's id does not win the chain before anything looks. Splitting the
+  // two is what lets a caller try every native source first.
+  const both = {
+    AGENT_SESSION_ID: "launcher-minted",
+    AGENT_SESSION_PID: "4242",
+    CODEX_THREAD_ID: "codex-native",
+  };
+  expect(nativeSessionIdFromEnv(both)).toBe("codex-native");
+  expect(launcherSessionIdFromEnv(both, 4242)).toBe("launcher-minted");
+  // An agent whose harness exports nothing has no native id to find.
+  expect(
+    nativeSessionIdFromEnv({ AGENT_SESSION_ID: "launcher-minted" }),
+  ).toBeUndefined();
+  // The marker still gates the launcher id when it is reached on its own.
+  expect(launcherSessionIdFromEnv(both, 9999)).toBeUndefined();
+  // Together they reproduce the combined chain exactly.
+  expect(sessionIdFromEnv(both, 4242)).toBe("codex-native");
+  expect(sessionIdFromEnv({ AGENT_SESSION_ID: "x" }, 1)).toBe("x");
 });
 
 test("a launcher id minted for another process is not adopted", () => {
