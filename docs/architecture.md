@@ -111,13 +111,21 @@ channel flag) or `channel:identity-unauthorized` (the host will not authorize
 this server's identity). Both mean the same thing to a sender: that session's
 mail waits for its next inbox check.
 
-Session identity comes from the environment, in the order
-`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `AGENT_SESSION_ID`. Native ids come
-first, since an agent that mints its own knows more than a launcher wrapping it
-does. kimi and opencode set no id of their own, so a launcher exports
-`AGENT_SESSION_ID` before starting them. Without one, a session receives a
-random ID that no sibling process can learn, which leaves project-wide broadcast
-as the only way to reach it.
+Session identity is resolved in two groups, and every native source is
+consulted before any launcher source. The native group is
+`CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID` from the process environment, a
+resume id on the host's command line, and OMP's per-terminal record of the
+session file it is appending to. The launcher group is `AGENT_SESSION_ID`, taken
+from this process's environment or read from the host's, and accepted only when
+`AGENT_SESSION_PID` names that exact process.
+
+The grouping carries the rule, not the order within it: a conversation id
+outranks a launch id, because a launch id is minted fresh per launch while a
+conversation id survives `--continue`, the picker, and a resume by name. kimi
+and opencode mint no id of their own, so a launcher exports `AGENT_SESSION_ID`
+before starting them. Without any id, a session receives a random one that no
+sibling process can learn, which leaves project-wide broadcast as the only way
+to reach it.
 
 ## Presence
 
