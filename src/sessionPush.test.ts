@@ -1,8 +1,16 @@
 import { afterEach, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isMuted, listLiveInProject, setMuted } from "./registry.ts";
+import {
+  isMuted,
+  listLiveInProject,
+  register,
+  scanProcesses,
+  setMuted,
+  unregister,
+} from "./registry.ts";
 import { replyRecipient } from "./replies.ts";
 import {
   OhMyPiPushBridge,
@@ -27,6 +35,49 @@ function projectDirectory(): string {
   return realpathSync(directory);
 }
 
+const hostSessions: Array<{
+  project: string;
+  pid: number;
+  instanceId: string;
+}> = [];
+
+afterEach(() => {
+  for (const entry of hostSessions.splice(0)) {
+    unregister(entry.project, entry.pid, entry.instanceId);
+  }
+});
+
+/** The MCP-side registration a push transport attaches to.
+ *
+ * Every connect test needs one: a transport joins a session's identity rather
+ * than inventing one, so a host with no registered session is refused. The
+ * entry has to survive liveness pruning, so it is filed under a genuinely live
+ * pid — the test runner's parent — carrying that process's real start time. */
+function registerHostSession(
+  project: string,
+  sessionId: string,
+  hostPid: number = process.pid,
+  pid: number = process.ppid,
+): void {
+  const scan = scanProcesses([pid]);
+  const procStart = scan.reliable ? scan.processes.get(pid)?.start : undefined;
+  if (!procStart) throw new Error("cannot observe a live pid for the fixture");
+  const instanceId = randomUUID();
+  register(
+    project,
+    pid,
+    sessionId,
+    undefined,
+    "omp-coding-agent",
+    undefined,
+    "accept",
+    procStart,
+    instanceId,
+    hostPid,
+  );
+  hostSessions.push({ project, pid, instanceId });
+}
+
 async function nextEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   buffered: { text: string },
@@ -48,6 +99,7 @@ async function nextEvent(
 
 test("Oh My Pi push uses its exact session without another routing id", async () => {
   const project = projectDirectory();
+  registerHostSession(project, "omp-session");
   let now = Date.parse("2026-09-01T13:00:00.000Z");
   const bridge = new OhMyPiPushBridge(
     () => "test process start",
@@ -130,6 +182,10 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
 test("OMP tool shells without session variables carry a working reply address", async () => {
   const project = projectDirectory();
   const destination = projectDirectory();
+  registerHostSession(project, "omp-reply-host");
+  // The second mailbox this test needs under one host pid is a second session,
+  // which now has to exist before a transport can attach to it.
+  registerHostSession(destination, "other-host-mailbox");
   const bridge = new OhMyPiPushBridge();
   const response = bridge.connect({
     project,
@@ -215,6 +271,11 @@ test("OMP tool shells without session variables carry a working reply address", 
 test("an identity-changing reconnect retires only the same project's host connection", async () => {
   const project = projectDirectory();
   const otherProject = projectDirectory();
+  // The transport's identity is now the session's, so an identity change is a
+  // change on the session side — a resume, say — not a differently addressed
+  // connect.
+  registerHostSession(project, "before-reconnect");
+  registerHostSession(otherProject, "before-reconnect");
   const bridge = new OhMyPiPushBridge();
   const abort = new AbortController();
   const input: SessionPushConnectInput = {
@@ -237,6 +298,7 @@ test("an identity-changing reconnect retires only the same project's host connec
     await nextEvent(otherReader, otherBuffer);
     setMuted(project, process.pid, true);
 
+    registerHostSession(project, "after-reconnect");
     const replacement = bridge.connect({
       ...input,
       sessionId: "after-reconnect",
@@ -259,12 +321,13 @@ test("an identity-changing reconnect retires only the same project's host connec
     expect(await reader.read()).toEqual({ done: true, value: undefined });
     // The old request may observe its abort only after the replacement connects.
     abort.abort();
-    expect(listLiveInProject(project).map((r) => r.sessionId)).toEqual([
-      "after-reconnect",
-    ]);
-    expect(listLiveInProject(otherProject).map((r) => r.sessionId)).toEqual([
-      "before-reconnect",
-    ]);
+    // The MCP registration and the transport now share one id, which is the
+    // point: a host holds several registrations but only one identity.
+    const identities = (directory: string) => [
+      ...new Set(listLiveInProject(directory).map((r) => r.sessionId)),
+    ];
+    expect(identities(project)).toEqual(["after-reconnect"]);
+    expect(identities(otherProject)).toEqual(["before-reconnect"]);
 
     for (const [destination, sessionId] of [
       [project, "after-reconnect"],
@@ -291,8 +354,10 @@ test("an identity-changing reconnect retires only the same project's host connec
       id: "mail-for-before-reconnect",
     });
     await replacementReader.cancel();
-    expect(listLiveInProject(project)).toEqual([]);
-    expect(listLiveInProject(otherProject).map((r) => r.sessionId)).toEqual([
+    const pushEntries = (directory: string) =>
+      listLiveInProject(directory).filter((r) => r.pid === process.pid);
+    expect(pushEntries(project)).toEqual([]);
+    expect(pushEntries(otherProject).map((r) => r.sessionId)).toEqual([
       "before-reconnect",
     ]);
   } finally {
@@ -302,6 +367,7 @@ test("an identity-changing reconnect retires only the same project's host connec
 
 test("a stale bridge cannot unregister a replacement owned by another bridge", async () => {
   const project = projectDirectory();
+  registerHostSession(project, "reconnected-session");
   const oldBridge = new OhMyPiPushBridge();
   const newBridge = new OhMyPiPushBridge();
   const input: SessionPushConnectInput = {
@@ -319,13 +385,11 @@ test("a stale bridge cannot unregister a replacement owned by another bridge", a
     const reader = replacement.body.getReader();
     const buffered = { text: "" };
     await nextEvent(reader, buffered);
-    expect(listLiveInProject(project).map((r) => r.sessionId)).toEqual([
-      input.sessionId,
-    ]);
+    const pushEntries = () =>
+      listLiveInProject(project).filter((r) => r.pid === process.pid);
+    expect(pushEntries().map((r) => r.sessionId)).toEqual([input.sessionId]);
     oldBridge.close();
-    expect(listLiveInProject(project).map((r) => r.sessionId)).toEqual([
-      input.sessionId,
-    ]);
+    expect(pushEntries().map((r) => r.sessionId)).toEqual([input.sessionId]);
     appendMessage({
       id: "replacement-mail",
       ts: new Date().toISOString(),
@@ -340,7 +404,7 @@ test("a stale bridge cannot unregister a replacement owned by another bridge", a
       id: "replacement-mail",
     });
     await reader.cancel();
-    expect(listLiveInProject(project)).toEqual([]);
+    expect(pushEntries()).toEqual([]);
   } finally {
     oldBridge.close();
     newBridge.close();
@@ -349,6 +413,7 @@ test("a stale bridge cannot unregister a replacement owned by another bridge", a
 
 test("Oh My Pi push rejects an incompatible protocol before registering", async () => {
   const project = projectDirectory();
+  registerHostSession(project, "old-omp-session");
   const bridge = new OhMyPiPushBridge(() => "test process start");
   const input: SessionPushConnectInput = {
     project,
@@ -387,27 +452,131 @@ test("Oh My Pi push adopts the one MCP identity registered under its host", () =
     started: "2026-09-01T13:00:00.000Z",
   });
   expect(
-    resolveSessionPushId(project, 42, "omp-native", [
+    resolveSessionPushId(project, 42, [
       registration("mcp-shared", 42, 101),
       registration("previous-push-session", 42, 42),
     ]),
-  ).toBe("mcp-shared");
+  ).toEqual({ kind: "joined", sessionId: "mcp-shared" });
   expect(
-    resolveSessionPushId(project, 42, "omp-native", [
+    resolveSessionPushId(project, 42, [
       registration("mcp-shared", 42, 101),
       registration("mcp-shared", 42, 102),
     ]),
-  ).toBe("mcp-shared");
+  ).toEqual({ kind: "joined", sessionId: "mcp-shared" });
+  // Neither of these is an identification, and there is nothing to fall back
+  // to: the id the extension proposed is not a parameter of this function.
   expect(
-    resolveSessionPushId(project, 42, "omp-native", [
+    resolveSessionPushId(project, 42, [
       registration("one", 42, 101),
       registration("two", 42, 102),
     ]),
-  ).toBe("omp-native");
+  ).toEqual({ kind: "ambiguous", sessionIds: ["one", "two"] });
   expect(
-    resolveSessionPushId(project, 42, "omp-native", [
+    resolveSessionPushId(project, 42, [
       registration("other-host", 41, 101),
       registration("previous-push-session", 42, 42),
     ]),
-  ).toBe("omp-native");
+  ).toEqual({ kind: "none" });
+});
+
+test("a transport attaches to its session's identity, not the one it asked for", async () => {
+  const project = projectDirectory();
+  registerHostSession(project, "session-identity");
+  const bridge = new OhMyPiPushBridge(() => "test process start");
+  try {
+    const response = bridge.connect({
+      project,
+      protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+      // What the OMP extension proposes when it cannot see the session's own
+      // id: a launcher-minted value from its environment. It is a request, and
+      // registering under it would give this session a second identity.
+      sessionId: "launcher-proposal",
+      pid: process.pid,
+      defaultInboundPolicy: "accept",
+      heldMessageLimit: 100,
+    });
+    expect(response.status).toBe(200);
+    if (!response.body) throw new Error("OMP push response has no body");
+    const reader = response.body.getReader();
+    expect(await nextEvent(reader, { text: "" })).toMatchObject({
+      type: "connected",
+      requestedSessionId: "launcher-proposal",
+      sessionId: "session-identity",
+    });
+    expect([
+      ...new Set(listLiveInProject(project).map((r) => r.sessionId)),
+    ]).toEqual(["session-identity"]);
+    await reader.cancel();
+  } finally {
+    bridge.close();
+  }
+});
+
+test("a host with no registered session is refused rather than registered", async () => {
+  const project = projectDirectory();
+  const bridge = new OhMyPiPushBridge(() => "test process start");
+  try {
+    // The ordinary startup order: the extension runs inside the host and
+    // connects before the MCP subprocess has finished registering.
+    const refused = bridge.connect({
+      project,
+      protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+      sessionId: "launcher-proposal",
+      pid: process.pid,
+      defaultInboundPolicy: "accept",
+      heldMessageLimit: 100,
+    });
+    expect(refused.status).toBe(503);
+    await expect(refused.json()).resolves.toMatchObject({
+      error: expect.stringContaining("no agent-mail session is registered"),
+    });
+    // The point of the refusal: nothing was written, so no second identity and
+    // no name for peers to address.
+    expect(listLiveInProject(project)).toEqual([]);
+
+    // The extension's reconnect finds the session a moment later.
+    registerHostSession(project, "session-identity");
+    const accepted = bridge.connect({
+      project,
+      protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+      sessionId: "launcher-proposal",
+      pid: process.pid,
+      defaultInboundPolicy: "accept",
+      heldMessageLimit: 100,
+    });
+    expect(accepted.status).toBe(200);
+    await accepted.body?.cancel();
+  } finally {
+    bridge.close();
+  }
+});
+
+test("a host with several registered sessions is refused, not guessed at", async () => {
+  const project = projectDirectory();
+  // Both entries have to survive liveness pruning, so the second identity gets
+  // a real process of its own rather than an invented pid.
+  const spare = Bun.spawn(["sleep", "30"]);
+  registerHostSession(project, "one", process.pid, process.ppid);
+  registerHostSession(project, "two", process.pid, spare.pid);
+  const bridge = new OhMyPiPushBridge(() => "test process start");
+  try {
+    const refused = bridge.connect({
+      project,
+      protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+      sessionId: "launcher-proposal",
+      pid: process.pid,
+      defaultInboundPolicy: "accept",
+      heldMessageLimit: 100,
+    });
+    expect(refused.status).toBe(503);
+    await expect(refused.json()).resolves.toMatchObject({
+      error: expect.stringContaining("several registered sessions"),
+    });
+    expect(listLiveInProject(project).some((r) => r.pid === process.pid)).toBe(
+      false,
+    );
+  } finally {
+    spare.kill();
+    bridge.close();
+  }
 });

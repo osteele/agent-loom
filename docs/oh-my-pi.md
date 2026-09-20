@@ -40,13 +40,27 @@ Unknown Weft state renders as `unprocessed ?`. A known zero remains `0 unprocess
 ## Session identity
 
 The extension runs only in interactive contexts (`ctx.hasUI`). In-process
-subagents share their parent's PID, so they must not open a separate push
-connection or poll the status line. Headless contexts leave this extension
-inactive.
+subagents share their parent's PID, and they do not participate in mail: a
+subagent's mail is its parent's, so it opens no push connection and polls no
+status line of its own. Headless contexts leave this extension inactive.
 
-OMP's extension process and its agent-mail MCP process share the launcher identity when `AGENT_SESSION_ID` was minted for the current OMP process. Otherwise, the extension sends OMP's native session ID and the daemon resolves it by the verified host-process join.
+The session's identity is the one its agent-mail MCP component registered. The
+extension does not supply it — it cannot; OMP owns a native conversation id but
+does not export it to MCP subprocesses, and the id the extension can reach is a
+launcher value that names a launch rather than a conversation. What the
+extension supplies is its host pid, which the daemon verifies, and the daemon
+joins the transport to the one session registered under that pid.
 
-The protocol-v3 connection response carries both the requested session ID and the resolved routing ID. Every later mail event must match the resolved project and routing ID. An ambiguous join is rejected instead of guessed. The daemon rejects a protocol mismatch before registering the listener; protocol v3 identifies steering-capable clients whose acknowledgement follows exact-session context insertion.
+The session id in the connect request is therefore a proposal, echoed back as
+`requestedSessionId` for diagnosis and never registered under. When the join
+names no session — the ordinary case at startup, since the extension connects
+from inside the host before the MCP subprocess has registered — or names
+several, the daemon refuses with `503` and registers nothing, and the
+extension's reconnect joins a moment later. A transport attaches to an identity;
+it never creates one
+([0018](decisions/0018-a-transport-attaches-to-an-identity.md)).
+
+The protocol-v3 connection response carries both the requested session ID and the resolved routing ID. Every later mail event must match the resolved project and routing ID. The daemon rejects a protocol mismatch before registering the listener; protocol v3 identifies steering-capable clients whose acknowledgement follows exact-session context insertion.
 
 Status-name lookups wait for that routing ID. A reconnect to the same ID keeps
 the cached name; a changed ID clears the previous session's status. Results

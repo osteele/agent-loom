@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop giving an OMP session a second mail identity. Its push transport joins
+  the session registered under its verified host pid; when no session is
+  registered there yet — the ordinary startup order — or several are, the
+  daemon refuses the connection and registers nothing instead of falling back to
+  the id the extension proposed. A session that held two identities had its
+  status line reporting the unread count, and the delivery mode, of a mailbox
+  its own agent never read.
+
 ### Added
 
 - Resolve advisory session identity with

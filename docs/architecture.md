@@ -71,7 +71,13 @@ matched case-insensitively. If several sessions match a name, a unique match in
 the supplied project disambiguates it; otherwise the error lists candidate
 IDs and projects. One ID registered in multiple
 mailboxes is ambiguous; multiple transport components in one mailbox are one
-recipient. CLI, MCP, and HTTP ingress share this routing implementation.
+recipient. Only a session has a mail identity: a transport, status line, or
+dashboard attaches to one that already exists and never creates one, and a
+component that cannot name the session it belongs to reports that rather than
+registering under a guess ([0018](decisions/0018-a-transport-attaches-to-an-identity.md)).
+Subagents do not participate in mail; a subagent shares its parent's process and
+channel server, so its mail is its parent's. CLI, MCP, and HTTP ingress share
+this routing implementation.
 These names belong to agent-mail; they are not aliases for the separate agent
 IDs returned by Claude's native `ListAgents`, and must not be passed to native
 `SendMessage`.

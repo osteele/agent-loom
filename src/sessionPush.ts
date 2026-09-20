@@ -127,19 +127,36 @@ function connectionKey(project: string, sessionId: string): string {
   return `${project}\u0000${sessionId}`;
 }
 
-/** Resolve the routing id shared with the host's agent-mail MCP component.
+/** The outcome of joining a push transport to its session's identity. */
+export type SessionPushJoin =
+  | { kind: "joined"; sessionId: string }
+  | { kind: "none" }
+  | { kind: "ambiguous"; sessionIds: string[] };
+
+/** The routing id this transport attaches to: the one its host's agent-mail MCP
+ * component registered.
  *
  * OMP owns a native conversation id but does not export it to MCP subprocesses.
  * The MCP registration does record OMP's exact host pid, which the extension
- * supplies and the daemon verifies. One distinct registration id under that
- * pid is therefore an exact join; zero or several are not, and retain the
- * requested id rather than guessing. */
+ * supplies and the daemon verifies. Exactly one distinct registration id under
+ * that pid is an exact join.
+ *
+ * The id the extension asked for is deliberately not a parameter. A transport
+ * attaches to an identity; it never creates one, and a function that cannot see
+ * the requested id cannot register under it. Zero or several matches is not an
+ * identification — 0014 — and there is nothing to fall back to: registering
+ * under the proposal would give a session a second identity, leaving its status
+ * line watching a mailbox the agent never reads.
+ *
+ * `none` is the ordinary startup case rather than an error. The extension runs
+ * inside the host and connects before the MCP subprocess has finished
+ * registering, so the caller refuses and the extension's reconnect finds the
+ * registration a moment later. */
 export function resolveSessionPushId(
   project: string,
   hostPid: number,
-  requestedSessionId: string,
   registrations: Registration[] = listLiveInProject(project),
-): string {
+): SessionPushJoin {
   const ids = new Set(
     registrations
       .filter(
@@ -150,7 +167,10 @@ export function resolveSessionPushId(
       )
       .map((registration) => registration.sessionId as string),
   );
-  return ids.size === 1 ? ([...ids][0] as string) : requestedSessionId;
+  if (ids.size === 1)
+    return { kind: "joined", sessionId: [...ids][0] as string };
+  if (ids.size === 0) return { kind: "none" };
+  return { kind: "ambiguous", sessionIds: [...ids].sort() };
 }
 
 function validIdentifier(value: string): boolean {
@@ -225,7 +245,22 @@ export class SessionPushBridge {
       );
     }
 
-    const sessionId = resolveSessionPushId(project, input.pid, input.sessionId);
+    const join = resolveSessionPushId(project, input.pid);
+    if (join.kind !== "joined") {
+      // Refused rather than registered. Retryable on both branches: an
+      // ambiguous host resolves when the extra registration is pruned, and the
+      // extension reconnects on its own backoff either way.
+      return Response.json(
+        {
+          error:
+            join.kind === "none"
+              ? `no agent-mail session is registered under ${this.#client.processLabel} pid ${input.pid} yet`
+              : `${this.#client.processLabel} pid ${input.pid} has several registered sessions (${join.sessionIds.join(", ")}); cannot tell which one this transport belongs to`,
+        },
+        { status: 503 },
+      );
+    }
+    const sessionId = join.sessionId;
 
     const key = connectionKey(project, sessionId);
     const id = randomUUID();
