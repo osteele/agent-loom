@@ -24,10 +24,11 @@ Sessions address each other by stable names across project directories.
 - **Durable delivery.** A message waits in the project's inbox until an
   intended recipient retrieves it with `check_inbox`, unless it expires. A
   running session with push enabled can receive it automatically.
-  Receipts distinguish spooled, pushed, read, held, refused, and expired mail.
+  Receipts distinguish spooled, pending, held, pushed, push-unreachable, read,
+  refused, and expired mail.
 - **Any endpoint.** agent-mail speaks standard MCP over stdio, so any MCP
-  client can use the same tools and inboxes. Setup is tested with Claude Code
-  and Codex; the CLI, an HTTP client, or a tool such as
+  client can use the same tools and inboxes. Setup is tested with Claude Code,
+  Antigravity CLI, and Codex; the CLI, an HTTP client, or a tool such as
   [weft](https://github.com/osteele/weft) reporting a finished job can send
   too.
 - **Push into supported sessions.** With the corresponding channel or extension
@@ -144,9 +145,9 @@ to the project's spool itself. On macOS, the daemon runs as a launchd service.
 Nothing about delivery depends on it.
 
 `agent-mail install` also registers agent-mail with Claude Code and Codex. If
-Kimi Code, Gemini CLI, or OpenCode has a user config directory, it registers
-with those clients too. Running both setup paths is harmless: a matching entry
-is a no-op, and an entry that points somewhere else is reported and left alone.
+Antigravity CLI (`agy`), Kimi Code, Gemini CLI, or OpenCode has a user config
+directory, it registers with those clients too. Running both setup paths is
+harmless: a matching entry is a no-op, and a different entry is left alone.
 
 On Linux, the CLI and MCP server work, and `agent-mail start` starts a detached
 bare-mode daemon; agent-mail does not install a Linux boot service.
@@ -208,13 +209,13 @@ agent-mail notify --project "$PWD" --from cli --message "agent-mail is ready"
 agent-mail inbox --project "$PWD"
 ```
 
-`inbox` acknowledges what it returns, the way the `check_inbox` tool does: it
-records a delivery receipt per message and marks them read. Pass `--peek` to
-read without acknowledging. Both depend on agent-mail being able to tell which
-session you are — it adopts a session id from the environment only when that
-session's own agent process is an ancestor of the CLI process, so a script or
-daemon cannot mark a peer's mail read by inheriting its id. When it cannot tell,
-it says so on stderr and leaves the mail unread.
+`inbox` prints the project-wide spool. A verified session acknowledges only the
+returned messages visible to that session; direct mail addressed to a sibling
+session stays unread. Pass `--peek` to read without acknowledging, or `--json`
+for versioned output with structured sender project, name, and session fields.
+Attribution depends on agent-mail proving that the registered session's host
+process is an ancestor of the CLI process. An unattributed read reports the
+condition on stderr and leaves the mail unread.
 
 For project-level cleanup, run `agent-mail triage-candidates --project <dir>`
 with optional `--limit N`. It returns unread broadcasts, direct mail whose
@@ -243,14 +244,14 @@ replying to it by name will not resolve.
 ### Unread-mail reminders for pull-only clients
 
 Every agent-mail MCP server reports an existing unread backlog in its initial
-instructions. Codex, Kimi Code, and Gemini CLI have no channel push for mail
-that arrives afterward, so reminder hooks close that gap: the harness runs
-`agent-mail remind` on turn events, and unread counts enter the model's context
-when there is mail waiting. Codex and Kimi also check once at Stop: a newly
-unannounced mail edge requests one follow-up turn, while unchanged unread mail
-allows the session to stop. The later-arrival reminders need the daemon, which
-computes the per-session unread summary. Reminder text never includes a sender,
-subject, topic, preview, or body.
+instructions. Antigravity CLI (`agy`), Codex, Kimi Code, and Gemini CLI have no
+channel push for mail that arrives afterward. Reminder hooks close that gap:
+the harness runs `agent-mail remind` on turn events, and unread counts enter
+the model's context when mail is waiting. Agy, Codex, and Kimi also check once
+at Stop. A newly unannounced mail edge requests one follow-up turn; unchanged
+unread mail allows the session to stop. The later-arrival reminders need the
+daemon, which computes the per-session unread summary. Reminder text never
+includes a sender, subject, topic, preview, or body.
 
 ```bash
 agent-mail hooks install
@@ -258,20 +259,21 @@ agent-mail hooks status
 ```
 
 With no flag, install covers every harness whose config directory exists;
-pass `--codex`, `--kimi`, or `--gemini` to pick one. Restart the harness
-sessions afterward. [docs/reminders.md](docs/reminders.md) covers the
-mechanism, per-harness details, and verifying the hooks reach the model.
+pass `--agy`, `--codex`, `--kimi`, or `--gemini` to pick one. Agy reads its
+global hook file between invocations; restart other harness sessions after
+installation. [docs/reminders.md](docs/reminders.md) covers the mechanism,
+per-harness details, and verifying that hook output reaches the model.
 
 ### Updating and restarting
 
 Installing the package puts the `agent-mail` command on `PATH`;
 `agent-mail install` is the separate step that creates the launchd service and
-registers agent-mail with Claude Code and Codex, plus Kimi Code, Gemini CLI,
-and OpenCode when their user config directories exist. It registers whichever
-copy you ran it from, and with whichever runtime ran it, so the same command
-works from an installed package and from a development checkout. `agent-mail
-uninstall` unloads and removes the launchd service, then removes the audit hook
-and MCP registrations that belong to this installation.
+registers agent-mail with Claude Code and Codex, plus Antigravity CLI, Kimi
+Code, Gemini CLI, and OpenCode when their user config directories exist. It
+registers whichever copy you ran it from, and with whichever runtime ran it,
+so the same command works from an installed package and from a development
+checkout. `agent-mail uninstall` unloads and removes the launchd service, then
+removes the audit hook and MCP registrations that belong to this installation.
 
 [docs/install.md](docs/install.md) covers the installer's edge cases: when an
 existing entry is preserved, replaced, or left alone, and the plugin versus
@@ -292,49 +294,49 @@ bound when the process starts.
 
 ## How delivery works
 
-Claude Code, Codex, and any other MCP client load the same MCP server and use
-the same tools and spools, and every sender (a session, the CLI, weft, an HTTP
-client) is delivered the same way. Under the default `accept` inbound policy,
-the receiving client determines how soon a message enters its context: a
-Claude Code session with channel push enabled receives it unasked, and
-otherwise reads it on the next `check_inbox`; a Codex session always reads on
-`check_inbox`, because Codex has no channel push. A `check_inbox` call marks the
-messages it returns read (pass `peek` to look without marking them). OMP
-steering push also marks a message read after inserting it into the exact
-session's context. `mark_read` covers mail handled from other push transports.
-Per-session `hold` and `refuse` policies delay or suppress entry into context.
-Codex's MCP tools still register the session, send mail, inspect peers, read
-and mark inbox messages, and manage claims. Messages remain available in the
-project spool after delivery.
+Claude Code, Antigravity CLI, Codex, and any other MCP client load the same MCP
+server and use the same tools and spools. Every sender (a session, the CLI,
+weft, or an HTTP client) is delivered the same way. Under the default `accept`
+inbound policy, the receiving client determines when a message enters its
+context. A Claude Code session with channel push enabled receives it unasked.
+A pull-only session reads the body on its next `check_inbox`; reminder hooks
+can inject the unread count first. A `check_inbox` call marks the messages it
+returns read (pass `peek` to look without marking them). OMP steering push also
+marks a message read after inserting it into the exact session's context.
+`mark_read` covers mail handled from other push transports. Per-session `hold`
+and `refuse` policies delay or suppress entry into context. Pull-only clients'
+MCP tools still register the session, send mail, inspect peers, read and mark
+inbox messages, and manage claims. Messages remain available in the project
+spool after delivery.
 
 ## Coordination
 
 Three primitives, all advisory, and all filesystem transactions rather than
 daemon state:
 
-- **Path claims** reserve a file or directory before you edit it. Claim a
-  multi-file edit set in one call so acquisition is atomic; a directory claim
-  conflicts with every claim beneath it.
+- **Path claims** reserve names before you edit them. Existing targets use
+  their observed file or directory kind; missing targets reserve a file name by
+  default. Multi-file claims are atomic, and directory claims cover
+  descendants. A new claim returns a one-time release token. Session claims
+  survive a disconnect for 15 minutes. A research plan can own claims through
+  its work lease, so transferring the lease transfers release authority.
 - **Work leases** record which session is responsible for a logical unit, such
-  as executing a research plan. A lease never blocks a file edit, and a path
-  claim never implies responsibility for the plan.
+  as executing a research plan. A lease does not block unrelated file edits.
 - **Experiment numbers** (`EXP-NNN`) are allocated atomically against a lab
   notebook, counting both existing files and outstanding reservations.
 
 The daemon reminds a live session when a claim reaches a condition or age
-milestone: a materialized experiment reservation after 15 minutes, an absent
-path target after 30 minutes, any claim after 2 and 8 hours, and then daily
-starting at 24 hours. Reminders are addressed only to the exact owning session
-and never release a live claim. Work leases are excluded because they represent
-longer-lived responsibility and carry explicit activity.
+milestone: a materialized experiment reservation after 15 minutes, any claim
+after 2 and 8 hours, and then daily starting at 24 hours. Reminders are
+addressed only to the exact owning session. Work leases carry explicit activity
+instead.
 
 `list_coordination` shows all three together, with owners and conditions.
-`recover_coordination` releases a record after revalidating that its owning
-process is dead or that a manual owner has expired. An explicit, user-supplied
-`authority` can force recovery when the owner is live or cannot be verified;
-agent-mail records that action in an audit log.
-[docs/architecture.md](docs/architecture.md#coordination-claims) specifies the
-conflict rules, recovery, and transferring a lease between live sessions.
+`recover_coordination` releases a record after revalidating its lifecycle.
+Forced recovery requires user-supplied `authority` and `reason` values;
+agent-mail records both in an audit log.
+[docs/architecture.md](docs/architecture.md#coordination-claims) specifies
+conflicts, ownership, release, recovery, and work-lease transfer.
 
 Inspect one session's work and full plan files with
 `agent-mail work tui --session ID --project /absolute/project`.
@@ -505,9 +507,9 @@ footers do not currently accept an external command or custom agent-mail field.
 Gemini and Codex can show their own session identifiers; those identifiers are
 not substitutes for the agent-mail display name or mailbox fields.
 
-Codex and Gemini (and Kimi, alongside its status line) can still learn about
-unread mail without polling: `agent-mail hooks install` registers a per-turn
-hook that injects unread counts into the model's context.
+Agy, Codex, and Gemini (and Kimi, alongside its status line) can still learn
+about unread mail without polling: `agent-mail hooks install` registers a
+per-turn hook that injects unread counts into the model's context.
 [docs/reminders.md](docs/reminders.md) covers setup.
 
 [docs/status-line.md](docs/status-line.md) specifies the `--fields` output and
@@ -560,9 +562,9 @@ Use agent-mail when the shape is different in one of these ways:
   lead and teammates for the lead's lifetime, one team per session. agent-mail
   addresses peers that started independently, in their own projects, with no
   hierarchy and nothing to promote or transfer.
-- **Not every endpoint is Claude Code.** Codex, Kimi Code, and Gemini CLI
-  sessions use the same tools and inboxes. So do the CLI, weft, and any HTTP
-  client.
+- **Not every endpoint is Claude Code.** Antigravity CLI, Codex, Kimi Code,
+  and Gemini CLI sessions use the same tools and inboxes. So do the CLI, weft,
+  and any HTTP client.
 - **The recipient can be offline.** Unless it expires, a project broadcast
   waits in the inbox for a future session to retrieve with `check_inbox`. A
   message addressed to a known session remains available to that same session

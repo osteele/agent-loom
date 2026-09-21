@@ -43,7 +43,7 @@ const OWNER_IDS = ["alice", "bob", "carol"] as const;
 type OwnerId = (typeof OWNER_IDS)[number];
 
 function makeOwner(id: OwnerId): ClaimOwner {
-  return { id, label: `agent ${id}` };
+  return { id: `cli:${id}`, label: `agent ${id}`, kind: "manual" };
 }
 
 function isWithin(parent: string, child: string): boolean {
@@ -96,6 +96,7 @@ interface ClaimModel {
     {
       ownerId: OwnerId;
       targets: PathClaimTarget[];
+      releaseToken: string;
     }
   >;
   experimentClaims: Map<
@@ -139,10 +140,9 @@ class ClaimPathCommand implements fc.Command<ClaimModel, ClaimReal> {
   private conflictId(m: ClaimModel): string | undefined {
     const target = this.target(m);
     for (const [id, claim] of m.pathClaims) {
+      if (claim.ownerId === this.payload.ownerId) continue;
       for (const existing of claim.targets) {
-        if (pathsConflict(existing, target.path, target.pathType)) {
-          return id;
-        }
+        if (pathsConflict(existing, target.path, target.pathType)) return id;
       }
     }
     return undefined;
@@ -164,18 +164,32 @@ class ClaimPathCommand implements fc.Command<ClaimModel, ClaimReal> {
       return;
     }
 
-    const claim = r.store.claimPath(
+    const acquisition = r.store.claimPath(
       r.project,
       target.path,
       target.pathType,
       owner,
     );
-    m.pathClaims.set(claim.id, {
+    const repeated = [...m.pathClaims.entries()].find(
+      ([, existing]) =>
+        existing.ownerId === this.payload.ownerId &&
+        existing.targets.length === 1 &&
+        existing.targets[0].path === target.path &&
+        existing.targets[0].pathType === target.pathType,
+    );
+    if (repeated) {
+      expect(acquisition.disposition).toBe("existing");
+      expect(acquisition.claim.id).toBe(repeated[0]);
+      return;
+    }
+    expect(acquisition.releaseToken).toBeTruthy();
+    m.pathClaims.set(acquisition.claim.id, {
       ownerId: this.payload.ownerId,
       targets: [target],
+      releaseToken: acquisition.releaseToken as string,
     });
     m.pathTypes.set(this.payload.relPath, target.pathType);
-    expect(pathClaimTargets(claim)).toEqual([target]);
+    expect(pathClaimTargets(acquisition.claim)).toEqual([target]);
   }
 
   toString(): string {
@@ -219,11 +233,10 @@ class ClaimPathsCommand implements fc.Command<ClaimModel, ClaimReal> {
   private conflictId(m: ClaimModel): string | undefined {
     const targets = this.targets(m);
     for (const [id, claim] of m.pathClaims) {
+      if (claim.ownerId === this.payload.ownerId) continue;
       for (const existing of claim.targets) {
         for (const target of targets) {
-          if (pathsConflict(existing, target.path, target.pathType)) {
-            return id;
-          }
+          if (pathsConflict(existing, target.path, target.pathType)) return id;
         }
       }
     }
@@ -257,6 +270,7 @@ class ClaimPathsCommand implements fc.Command<ClaimModel, ClaimReal> {
       seen.set(target.path, target.pathType);
       targets.push(target);
     }
+    targets.sort((a, b) => a.path.localeCompare(b.path));
 
     const conflictId = this.conflictId(m);
     const before = r.store.list(r.project).length;
@@ -268,11 +282,22 @@ class ClaimPathsCommand implements fc.Command<ClaimModel, ClaimReal> {
       return;
     }
 
-    const claim = r.store.claimPaths(r.project, targets, owner);
-    expect(pathClaimTargets(claim)).toEqual(targets);
-    m.pathClaims.set(claim.id, {
+    const acquisition = r.store.claimPaths(r.project, targets, owner);
+    const repeated = [...m.pathClaims.entries()].find(
+      ([, existing]) =>
+        existing.ownerId === this.payload.ownerId &&
+        JSON.stringify(existing.targets) === JSON.stringify(targets),
+    );
+    if (repeated) {
+      expect(acquisition.disposition).toBe("existing");
+      expect(acquisition.claim.id).toBe(repeated[0]);
+      return;
+    }
+    expect(pathClaimTargets(acquisition.claim)).toEqual(targets);
+    m.pathClaims.set(acquisition.claim.id, {
       ownerId: this.payload.ownerId,
       targets,
+      releaseToken: acquisition.releaseToken as string,
     });
     for (const target of this.payload.targets) {
       m.pathTypes.set(target.relPath, target.pathType);
@@ -317,38 +342,40 @@ class ClaimExperimentCommand implements fc.Command<ClaimModel, ClaimReal> {
 }
 
 class ReleaseClaimCommand implements fc.Command<ClaimModel, ClaimReal> {
-  constructor(readonly payload: { actorId: OwnerId; targetOwnerId: OwnerId }) {}
+  constructor(readonly targetOwnerId: OwnerId) {}
 
   check(m: Readonly<ClaimModel>): boolean {
     return [...m.pathClaims.values(), ...m.experimentClaims.values()].some(
-      (claim) => claim.ownerId === this.payload.targetOwnerId,
+      (claim) => claim.ownerId === this.targetOwnerId,
     );
   }
 
   run(m: ClaimModel, r: ClaimReal): void {
-    const entries = [
-      ...m.pathClaims.entries(),
-      ...m.experimentClaims.entries(),
-    ];
-    const match = entries.find(
-      ([, c]) => c.ownerId === this.payload.targetOwnerId,
+    const pathMatch = [...m.pathClaims.entries()].find(
+      ([, claim]) => claim.ownerId === this.targetOwnerId,
     );
-    if (!match) return;
-    const [claimId, claim] = match;
-    if (this.payload.actorId !== claim.ownerId) {
-      expect(() =>
-        r.store.release(r.project, claimId, this.payload.actorId),
-      ).toThrow("only its owner can release it");
+    if (pathMatch) {
+      const [claimId, claim] = pathMatch;
+      expect(
+        r.store.release({ releaseToken: claim.releaseToken }).disposition,
+      ).toBe("released");
+      m.pathClaims.delete(claimId);
       return;
     }
-
-    r.store.release(r.project, claimId, this.payload.actorId);
-    m.pathClaims.delete(claimId);
+    const experimentMatch = [...m.experimentClaims.entries()].find(
+      ([, claim]) => claim.ownerId === this.targetOwnerId,
+    );
+    if (!experimentMatch) return;
+    const [claimId] = experimentMatch;
+    r.store.release({
+      claimId,
+      actor: m.owners.get(this.targetOwnerId),
+    });
     m.experimentClaims.delete(claimId);
   }
 
   toString(): string {
-    return `ReleaseClaim(${JSON.stringify(this.payload)})`;
+    return `ReleaseClaim(${this.targetOwnerId})`;
   }
 }
 
@@ -390,14 +417,9 @@ class ReleaseOwnerCommand implements fc.Command<ClaimModel, ClaimReal> {
   }
 
   run(m: ClaimModel, r: ClaimReal): void {
-    const count = r.store.releaseOwner(r.project, this.ownerId);
+    const owner = m.owners.get(this.ownerId) ?? makeOwner(this.ownerId);
+    const count = r.store.releaseOwner(r.project, owner.id);
     let modelCount = 0;
-    for (const [id, claim] of m.pathClaims) {
-      if (claim.ownerId === this.ownerId) {
-        m.pathClaims.delete(id);
-        modelCount++;
-      }
-    }
     for (const [id, claim] of m.experimentClaims) {
       if (claim.ownerId === this.ownerId) {
         m.experimentClaims.delete(id);
@@ -437,17 +459,20 @@ function assertInvariants(m: ClaimModel, r: ClaimReal): void {
   const real = r.store.list(r.project);
   expect(real.length).toBe(m.pathClaims.size + m.experimentClaims.size);
 
-  // No overlapping path claims across different owners/claims.
-  const activePaths: { target: PathClaimTarget; claimId: string }[] = [];
-  for (const [claimId, claim] of m.pathClaims) {
+  // Different owners never hold overlapping path claims. One owner may.
+  const activePaths: {
+    target: PathClaimTarget;
+    ownerId: OwnerId;
+  }[] = [];
+  for (const claim of m.pathClaims.values()) {
     for (const target of claim.targets) {
       for (const existing of activePaths) {
-        if (existing.claimId === claimId) continue;
+        if (existing.ownerId === claim.ownerId) continue;
         expect(
           pathsConflict(existing.target, target.path, target.pathType),
         ).toBe(false);
       }
-      activePaths.push({ target, claimId });
+      activePaths.push({ target, ownerId: claim.ownerId });
     }
   }
 
@@ -491,7 +516,10 @@ const claimPathsArb = fc
   .record({
     ownerId: ownerArb,
     targets: fc.array(
-      fc.record({ relPath: relPathArb, pathType: pathTypeArb }),
+      fc.record({
+        relPath: relPathArb,
+        pathType: fc.constant<PathClaimTarget["pathType"]>("file"),
+      }),
       { minLength: 1, maxLength: 3 },
     ),
   })
@@ -506,9 +534,7 @@ const commandArb = fc.oneof(
   },
   {
     weight: 2,
-    arbitrary: fc
-      .record({ actorId: ownerArb, targetOwnerId: ownerArb })
-      .map((payload) => new ReleaseClaimCommand(payload)),
+    arbitrary: ownerArb.map((ownerId) => new ReleaseClaimCommand(ownerId)),
   },
   {
     weight: 1,

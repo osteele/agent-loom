@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type ClaimOwner, ClaimStore } from "./claims.ts";
 import { projectSlug } from "./paths.ts";
 import {
   WorkConflictError,
@@ -363,4 +364,103 @@ test("invalid reported position cannot change a lease or displace its owner", ()
     ).toThrow();
     expect(store.list(project)).toEqual([lease]);
   }
+});
+
+test("plan claims require the current lease executor and follow lease outcomes", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-plan-claims-"));
+  temporaryDirectories.push(root);
+  const project = join(root, "project");
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const claimStore = new ClaimStore(join(root, "claims"));
+  const store = new WorkStore(join(root, "work"), claimStore);
+  const lease = store.acquire(
+    project,
+    { type: "research-plan", key: "pilot" },
+    ownerA,
+  );
+  const planOwner: ClaimOwner = {
+    id: `plan:${canonical}:pilot`,
+    label: "plan pilot",
+    kind: "plan",
+    plan: { project: canonical, stem: "pilot" },
+  };
+
+  expect(() =>
+    claimStore.claimPath(
+      project,
+      join(project, "future.ts"),
+      undefined,
+      planOwner,
+      {
+        actor: ownerB,
+        planExecutor: () => ownerA,
+      },
+    ),
+  ).toThrow("only the current executor may acquire claims");
+  const claim = claimStore.claimPath(
+    project,
+    join(project, "future.ts"),
+    undefined,
+    planOwner,
+    {
+      actor: ownerA,
+      planExecutor: () => ownerA,
+    },
+  ).claim;
+
+  store.release(project, lease.id, ownerA, "completed");
+  expect(claimStore.list(project)).toEqual([]);
+  expect(claimStore.listReleased(project)[0]).toMatchObject({
+    id: claim.id,
+    releaseReason: "plan-completed",
+  });
+});
+
+test("plan lease transfer preserves claims and changes release authority", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-plan-transfer-"));
+  temporaryDirectories.push(root);
+  const project = join(root, "project");
+  mkdirSync(project);
+  const canonical = realpathSync(project);
+  const claimStore = new ClaimStore(join(root, "claims"));
+  const store = new WorkStore(join(root, "work"), claimStore);
+  const lease = store.acquire(
+    project,
+    { type: "research-plan", key: "pilot" },
+    ownerA,
+  );
+  const planOwner: ClaimOwner = {
+    id: `plan:${canonical}:pilot`,
+    label: "plan pilot",
+    kind: "plan",
+    plan: { project: canonical, stem: "pilot" },
+  };
+  const claim = claimStore.claimPath(
+    project,
+    join(project, "future.ts"),
+    undefined,
+    planOwner,
+    {
+      actor: ownerA,
+      planExecutor: () => ownerA,
+    },
+  ).claim;
+
+  store.transfer(project, lease.id, ownerA, lease.revision, ownerB);
+  expect(claimStore.list(project).map((item) => item.id)).toEqual([claim.id]);
+  expect(() =>
+    claimStore.release({
+      claimId: claim.id,
+      actor: ownerA,
+      planExecutor: () => ownerB,
+    }),
+  ).toThrow("release requires its token or proven owner identity");
+  expect(
+    claimStore.release({
+      claimId: claim.id,
+      actor: ownerB,
+      planExecutor: () => ownerB,
+    }).disposition,
+  ).toBe("released");
 });

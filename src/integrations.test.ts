@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 import {
   addNativeAuditHook,
+  addReminderHookAgy,
   addReminderHookCodex,
   addReminderHookGemini,
   addReminderHookKimi,
+  agyReminderHookEvents,
+  classifyCodexRegistrationProbe,
   claudeRegistrationMatches,
   codexEntrySubTables,
   codexRegistrationMatches,
@@ -13,10 +16,12 @@ import {
   kimiReminderHookEvents,
   removeNativeAuditHook,
   removeOpenCodeMcpRegistration,
+  removeReminderHookAgy,
   removeReminderHookCodex,
   removeReminderHookGemini,
   removeReminderHookKimi,
   removeStdioMcpRegistration,
+  replaceCodexRegistrationTransaction,
   restoreCodexEntrySubTables,
   stdioRegistrationMatches,
   upsertOpenCodeMcpRegistration,
@@ -79,6 +84,76 @@ test("Codex registration matching requires the exact stdio command", () => {
   expect(codexRegistrationMatches(registration, bun, "/other/channel.ts")).toBe(
     false,
   );
+});
+
+test("Codex probe distinguishes a missing entry from command failure", () => {
+  expect(
+    classifyCodexRegistrationProbe(
+      {
+        status: 1,
+        stdout: "",
+        stderr: "Error: No MCP server named 'agent-mail' found.\n",
+      },
+      "agent-mail",
+    ),
+  ).toEqual({ status: "absent" });
+  expect(
+    classifyCodexRegistrationProbe(
+      {
+        status: 1,
+        stdout: "",
+        stderr: "Error: failed to parse ~/.codex/config.toml\n",
+      },
+      "agent-mail",
+    ),
+  ).toEqual({
+    status: "failed",
+    detail: "Error: failed to parse ~/.codex/config.toml",
+  });
+});
+
+test("Codex probe rejects malformed successful JSON", () => {
+  expect(
+    classifyCodexRegistrationProbe(
+      { status: 0, stdout: "{", stderr: "" },
+      "agent-mail",
+    ),
+  ).toEqual(
+    expect.objectContaining({
+      status: "invalid",
+    }),
+  );
+});
+
+test("failed Codex replacement restores the exact prior config", () => {
+  const before = `[mcp_servers.agent-mail]
+command = "/old/bun"
+args = ["/old/channel.ts"]
+
+[mcp_servers.agent-mail.tools.send_mail]
+approval_mode = "approve"
+`;
+  let config = before;
+  const calls: string[] = [];
+  const status = replaceCodexRegistrationTransaction(
+    before,
+    () => {
+      calls.push("remove");
+      config = "";
+      return true;
+    },
+    () => {
+      calls.push("add");
+      return false;
+    },
+    (snapshot) => {
+      calls.push("restore");
+      config = snapshot;
+    },
+  );
+  expect(status).toBe("add-failed-restored");
+  expect(calls).toEqual(["remove", "add", "restore"]);
+  expect(config).toBe(before);
 });
 
 test("Claude registration matching requires the exact stdio command", () => {
@@ -272,6 +347,58 @@ test("OpenCode registration rejects malformed schema containers", () => {
 });
 
 // --- reminder hooks (pull-only harnesses) -------------------------------------
+test("agy reminder hook adds PreInvocation and Stop handlers", () => {
+  const result = addReminderHookAgy({}, `${remindBase} agy`);
+  expect(result.changed).toBe(true);
+  expect(result.document).toEqual({
+    "agent-mail-reminder": {
+      PreInvocation: [
+        {
+          type: "command",
+          command: `${remindBase} agy --event PreInvocation`,
+          timeout: 5,
+        },
+      ],
+      Stop: [
+        {
+          type: "command",
+          command: `${remindBase} agy --event Stop`,
+          timeout: 5,
+        },
+      ],
+    },
+  });
+});
+
+test("agy reminder hook re-add is a no-op", () => {
+  const first = addReminderHookAgy({}, `${remindBase} agy`);
+  const second = addReminderHookAgy(first.document, `${remindBase} agy`);
+  expect(second.changed).toBe(false);
+  expect(second.document).toEqual(first.document);
+});
+
+test("agy reminder removal preserves neighboring hook configuration", () => {
+  const initial = {
+    "agent-mail-reminder": {
+      enabled: true,
+      PostInvocation: [{ type: "command", command: "other-tool" }],
+    },
+    "user-hook": {
+      PreInvocation: [{ type: "command", command: "neighbor" }],
+    },
+  };
+  const installed = addReminderHookAgy(initial, `${remindBase} agy`);
+  const removed = removeReminderHookAgy(
+    installed.document,
+    `${remindBase} agy`,
+  );
+  expect(removed.changed).toBe(true);
+  expect(removed.document).toEqual(initial);
+  expect(
+    agyReminderHookEvents(installed.document, `${remindBase} agy`),
+  ).toEqual(["PreInvocation", "Stop"]);
+  expect(agyReminderHookEvents(initial, `${remindBase} agy`)).toEqual([]);
+});
 
 test("codex reminder hook adds activity and Stop event groups", () => {
   const result = addReminderHookCodex({}, `${remindBase} codex`);

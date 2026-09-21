@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   classifyFallback,
   decideHeldSettlements,
+  decideNewMessageDelivery,
   pendingHeldIds,
   withAttemptKey,
 } from "./delivery.ts";
@@ -121,4 +122,46 @@ test("a held message still settles once the session can receive it", () => {
       NOW,
     ),
   ).toEqual([{ type: "push", messageId: "msg-1" }]);
+});
+
+test("known channel failure terminates a new push attempt honestly", () => {
+  expect(
+    decideNewMessageDelivery(
+      { ...BASE, id: "msg-1" },
+      "session-1",
+      "accept",
+      false,
+      true,
+      10,
+      [],
+      NOW,
+      "channel:identity-unauthorized",
+    ),
+  ).toEqual({
+    action: {
+      type: "push-unreachable",
+      detail: "channel:identity-unauthorized",
+    },
+  });
+});
+
+test("known channel failure terminates release of held mail honestly", () => {
+  expect(
+    decideHeldSettlements(
+      "session-1",
+      "accept",
+      false,
+      true,
+      ARCHIVE,
+      [receipt("held")],
+      NOW,
+      "channel:host-not-loaded",
+    ),
+  ).toEqual([
+    {
+      type: "push-unreachable",
+      messageId: "msg-1",
+      detail: "channel:host-not-loaded",
+    },
+  ]);
 });

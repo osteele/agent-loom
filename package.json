@@ -1,7 +1,7 @@
 {
   "name": "agent-mail",
   "version": "0.1.0",
-  "description": "Durable local messaging and coordination for Claude Code and Codex agents",
+  "description": "Durable local messaging and coordination between coding-agent sessions",
   "license": "MIT",
   "type": "module",
   "bin": {

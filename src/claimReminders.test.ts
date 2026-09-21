@@ -8,7 +8,6 @@ import {
   FIRST_AGE_REMINDER_MS,
   MATERIALIZED_REMINDER_MS,
   SECOND_AGE_REMINDER_MS,
-  TARGET_ABSENT_REMINDER_MS,
   claimReminderStillCurrent,
   prepareClaimReminderSweep,
   readClaimReminderState,
@@ -43,7 +42,7 @@ const registration: Registration = {
 };
 
 function emptyState(): ClaimReminderState {
-  return { version: 1, claims: {} };
+  return { version: 2, claims: {} };
 }
 
 function entry(options: {
@@ -84,20 +83,6 @@ function remindersFor(
 }
 
 test("claim reminders start at condition and age milestones", () => {
-  expect(
-    remindersFor([
-      entry({
-        age: TARGET_ABSENT_REMINDER_MS - 1,
-        condition: "target-absent",
-      }),
-    ]).reminders,
-  ).toHaveLength(0);
-  expect(
-    remindersFor([
-      entry({ age: TARGET_ABSENT_REMINDER_MS, condition: "target-absent" }),
-    ]).reminders,
-  ).toHaveLength(1);
-
   expect(
     remindersFor([
       entry({
@@ -157,7 +142,6 @@ test("one fixed-text reminder aggregates a live owner's claims", () => {
     entry({
       id: "path-a",
       age: 60 * 60_000,
-      condition: "target-absent",
       project: "/other-project",
     }),
     entry({
@@ -173,7 +157,6 @@ test("one fixed-text reminder aggregates a live owner's claims", () => {
   expect(reminder.project).toBe(registration.cwd);
   expect(reminder.sessionId).toBe("session-a");
   expect(reminder.message).toContain("you still hold 2 claims; oldest 1h");
-  expect(reminder.message).toContain("1 claimed target is absent");
   expect(reminder.message).toContain(
     "1 experiment reservation is materialized and redundant",
   );
@@ -304,7 +287,7 @@ test("claim reminder state round-trips and ignores malformed entries", () => {
     writeFileSync(
       path,
       JSON.stringify({
-        version: 1,
+        version: 2,
         claims: {
           valid: state.claims["claim-a"],
           invalid: { ownerKey: 4 },

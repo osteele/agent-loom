@@ -21,7 +21,7 @@
 import type { AnnouncedState } from "./announced.ts";
 import type { UnreadSummaryEntry } from "./unreadSummary.ts";
 
-export type ReminderFormat = "codex" | "kimi" | "gemini" | "pi";
+export type ReminderFormat = "agy" | "codex" | "kimi" | "gemini" | "pi";
 export type ReminderDecision = "silent" | "remind" | "stale";
 
 export interface ReminderHookResponse {
@@ -98,18 +98,22 @@ export function reminderText(unread: number, newestTs: string): string {
 
 /** Wrap the reminder text for one harness's hook protocol.
  *
- * Codex and Gemini read a JSON envelope off stdout; Kimi and the Pi extension
- * take the bare line. Gemini's event is fixed at BeforeAgent regardless of
- * what fired the hook — the output schema keys on the event the harness is
- * injecting into, not the one that happened to run the command. Any non-JSON
- * stdout breaks a JSON harness's parsing, which is why the caller prints
- * nothing at all on "silent". */
+ * Agy, Codex, and Gemini read JSON from stdout; Kimi and the Pi extension take
+ * the bare line. Agy accepts injected trajectory steps during PreInvocation
+ * and a continue decision at Stop. Gemini's event is fixed at BeforeAgent
+ * regardless of what fired the hook. */
 export function formatReminder(
   format: ReminderFormat,
   text: string,
   event = "UserPromptSubmit",
 ): string {
   switch (format) {
+    case "agy":
+      return JSON.stringify(
+        event === "Stop"
+          ? { decision: "continue", reason: text }
+          : { injectSteps: [{ ephemeralMessage: text }] },
+      );
     case "kimi":
     case "pi":
       return text;
@@ -132,11 +136,10 @@ export function formatReminder(
 
 /** Map a reminder edge to the harness process contract.
  *
- * Codex and Kimi both reserve exit 2 plus stderr for a blocking Stop result.
- * The Pi example extension treats the same result as its signal to enqueue a
- * follow-up turn. Ordinary reminder events retain each harness's stdout
- * protocol. The caller must persist the announced edge before emitting this
- * response so a re-entered Stop hook cannot repeat the same continuation. */
+ * Codex and Kimi reserve exit 2 plus stderr for a blocking Stop result. Agy
+ * returns a JSON continue decision. The Pi extension treats exit 2 as its
+ * signal to enqueue a follow-up turn. The caller persists the announced edge
+ * first so a re-entered Stop hook cannot repeat the same continuation. */
 export function reminderHookResponse(
   format: ReminderFormat,
   text: string,

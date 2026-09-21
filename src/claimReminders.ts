@@ -15,21 +15,19 @@ import type { Registration } from "./registry.ts";
 
 export const CLAIM_REMINDER_SWEEP_MS = 5 * 60_000;
 export const MATERIALIZED_REMINDER_MS = 15 * 60_000;
-export const TARGET_ABSENT_REMINDER_MS = 30 * 60_000;
 export const FIRST_AGE_REMINDER_MS = 2 * 60 * 60_000;
 export const SECOND_AGE_REMINDER_MS = 8 * 60 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 
 export interface ClaimReminderProgress {
   ownerKey: string;
   ageStage: number;
-  targetAbsent: boolean;
   materialized: boolean;
 }
 
 export interface ClaimReminderState {
-  version: 1;
+  version: 2;
   claims: Record<string, ClaimReminderProgress>;
 }
 
@@ -87,7 +85,6 @@ export function readClaimReminderState(
       typeof progress.ageStage !== "number" ||
       !Number.isInteger(progress.ageStage) ||
       progress.ageStage < 0 ||
-      typeof progress.targetAbsent !== "boolean" ||
       typeof progress.materialized !== "boolean"
     ) {
       continue;
@@ -95,7 +92,6 @@ export function readClaimReminderState(
     claims[claimId] = {
       ownerKey: progress.ownerKey,
       ageStage: progress.ageStage,
-      targetAbsent: progress.targetAbsent,
       materialized: progress.materialized,
     };
   }
@@ -151,10 +147,6 @@ function desiredProgress(
   return {
     ownerKey: key,
     ageStage: ageStage(age),
-    targetAbsent:
-      entry.kind === "path-claim" &&
-      entry.condition === "target-absent" &&
-      age >= TARGET_ABSENT_REMINDER_MS,
     materialized:
       entry.kind === "experiment-claim" &&
       entry.condition === "materialized" &&
@@ -170,10 +162,6 @@ function formatAge(age: number): string {
 
 function reminderMessage(entries: CoordinationEntry[], nowMs: number): string {
   const oldest = Math.max(...entries.map((entry) => ageMs(entry, nowMs)));
-  const absent = entries.filter(
-    (entry) =>
-      entry.kind === "path-claim" && entry.condition === "target-absent",
-  ).length;
   const materialized = entries.filter(
     (entry) =>
       entry.kind === "experiment-claim" && entry.condition === "materialized",
@@ -182,11 +170,6 @@ function reminderMessage(entries: CoordinationEntry[], nowMs: number): string {
   const sentences = [
     `Agent-mail coordination reminder: you still hold ${count} ${count === 1 ? "claim" : "claims"}; oldest ${formatAge(oldest)}.`,
   ];
-  if (absent > 0) {
-    sentences.push(
-      `${absent} claimed ${absent === 1 ? "target is" : "targets are"} absent.`,
-    );
-  }
   if (materialized > 0) {
     sentences.push(
       `${materialized} experiment ${materialized === 1 ? "reservation is" : "reservations are"} materialized and redundant.`,
@@ -211,7 +194,7 @@ function idempotencyKey(
   const signature = updates
     .map(
       ({ claimId, progress }) =>
-        `${claimId}:${progress.ageStage}:${Number(progress.targetAbsent)}:${Number(progress.materialized)}`,
+        `${claimId}:${progress.ageStage}:${Number(progress.materialized)}`,
     )
     .sort()
     .join("|");
@@ -284,12 +267,9 @@ export function prepareClaimReminderSweep(
       group.claims.some(({ entry, desired }) => {
         const previous = state.claims[entry.id];
         if (!previous || previous.ownerKey !== desired.ownerKey) {
-          return desired.targetAbsent || desired.materialized;
+          return desired.materialized;
         }
-        return (
-          (desired.targetAbsent && !previous.targetAbsent) ||
-          (desired.materialized && !previous.materialized)
-        );
+        return desired.materialized && !previous.materialized;
       });
 
     for (const { entry, desired } of group.claims) {
@@ -298,8 +278,6 @@ export function prepareClaimReminderSweep(
       prunedState.claims[entry.id] = {
         ownerKey: desired.ownerKey,
         ageStage: sameOwner ? previous.ageStage : 0,
-        targetAbsent:
-          Boolean(sameOwner && previous.targetAbsent) && desired.targetAbsent,
         materialized:
           Boolean(sameOwner && previous.materialized) && desired.materialized,
       };

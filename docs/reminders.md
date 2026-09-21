@@ -6,12 +6,12 @@ from the authoritative spool, is capped at `99+` in injected text, and the
 block is omitted when the inbox is empty. It contains no sender or message
 content.
 
-Codex, Kimi Code, and Gemini CLI receive no channel push after startup.
-Reminder hooks close that later-arrival gap: a hook registered with the
-harness runs `agent-mail remind` on turn events, and whatever it prints enters
-the model's context. Codex and Kimi also run one check at Stop, where a newly
-unannounced mail edge requests one follow-up turn. There is no timer or
-background polling loop.
+Antigravity CLI (`agy`), Codex, Kimi Code, and Gemini CLI receive no channel
+push after startup. Reminder hooks close that later-arrival gap: a hook
+registered with the harness runs `agent-mail remind` on turn events, and
+whatever it prints enters the model's context. Agy, Codex, and Kimi also run
+one check at Stop, where a newly unannounced mail edge requests one follow-up
+turn. There is no timer or background polling loop.
 
 Four parts make this work:
 
@@ -23,11 +23,12 @@ Four parts make this work:
   10-second presence tick: a per-session unread count with the newest visible
   message id and timestamp. Muted sessions are omitted. The snapshot has a
   30-second TTL and is a presentation cache, never a routing input.
-- `agent-mail remind --format codex|kimi|gemini|pi` reads that snapshot and
-  prints a harness-formatted reminder, or nothing. It edge-triggers on a new
-  newest-message id and re-reminds after 15 minutes while the same mail stays
-  unread during activity. At Codex/Kimi Stop, only a different newest-message
-  id can request one continuation; time-based re-reminders are disabled.
+- `agent-mail remind --format agy|codex|kimi|gemini|pi` reads that snapshot
+  and prints a harness-formatted reminder or no-op response. It edge-triggers
+  on a new newest-message id and re-reminds after 15 minutes while the same
+  mail stays unread during activity. At Agy, Codex, or Kimi Stop, only a
+  different newest-message id can request one continuation. Time-based
+  re-reminders are disabled.
 - `agent-mail hooks install` registers the hook command with each harness.
 
 The reminder text carries only facts the daemon computed:
@@ -46,11 +47,11 @@ These rules are what make reminders safe to install; they are tested in
 `src/remind.test.ts` and should not regress.
 
 1. **Event-driven, not periodic.** Hooks fire on harness events
-   (`UserPromptSubmit` or `BeforeAgent` per turn, plus `PostToolUse` or
-   `AfterTool` where cheap, and Stop where bounded continuation is supported).
-   Nothing polls on a timer.
-2. **One Stop continuation per new mail edge.** Codex and Kimi persist the
-   newest announced message id before requesting continuation. Re-entering
+   (`PreInvocation`, `UserPromptSubmit`, or `BeforeAgent` per turn, plus
+   `PostToolUse` or `AfterTool` where cheap, and Stop where bounded
+   continuation is supported). Nothing polls on a timer.
+2. **One Stop continuation per new mail edge.** Agy, Codex, and Kimi persist
+   the newest announced message id before requesting continuation. Re-entering
    Stop with the same newest id is silent, and the 15-minute re-reminder does
    not apply at Stop. A peer can still force another continuation by sending
    another message; that bounded risk is recorded in
@@ -75,18 +76,23 @@ These rules are what make reminders safe to install; they are tested in
 ## Setup
 
 ```bash
-agent-mail hooks install [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+agent-mail hooks install [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
 agent-mail hooks status
 agent-mail hooks uninstall [same flags]
 ```
 
 With no harness flag, install and uninstall apply to every harness whose
-config directory exists (`~/.codex`, `~/.kimi-code`, `~/.gemini`). The
-transforms are additive, idempotent, and keyed on the agent-mail command
-string, so they preserve neighboring hooks and can be re-run safely.
-`status` reports, per harness, whether the hooks are installed and on which
-events.
+config directory exists (`~/.gemini/config`, `~/.codex`, `~/.kimi-code`,
+`~/.gemini`). The transforms are additive, idempotent, and keyed on the
+agent-mail command string, so they preserve neighboring hooks and can be
+re-run safely. `status` reports, per harness, whether the hooks are installed
+and on which events.
 
+- **Agy**: `~/.gemini/config/hooks.json` gains direct `PreInvocation` and
+  `Stop` command handlers. `PreInvocation` injects an ephemeral message before
+  the next model call. Stop returns Agy's JSON continue decision for one
+  newly announced mail edge. `agent-mail install` registers the MCP server in
+  `~/.gemini/config/mcp_config.json`.
 - **Codex**: `~/.codex/hooks.json` gains synchronous `UserPromptSubmit` and
   `Stop` hooks plus an asynchronous `PostToolUse` hook. The async hook delivers
   its context at the next safe point without blocking the tool call. A Stop
@@ -99,11 +105,12 @@ events.
   synchronous: the CLI waits for each one, so a per-tool-call spawn taxes the
   hot path.
 
-Restart the harness session after installing; hooks are read at launch.
-Reminders need the daemon, which writes the unread summary. After an
-agent-mail upgrade that touches daemon code, restart the daemon
-(`agent-mail restart`; in a development checkout, `bun src/cli.ts restart`),
-since `agent-mail graceful` reloads configuration only.
+Agy reads the global hook file between invocations. Restart Codex, Kimi, and
+Gemini sessions after installing. Reminders need the daemon, which writes the
+unread summary. After an agent-mail upgrade that touches daemon code, restart
+the daemon (`agent-mail restart`; in a development checkout,
+`bun src/cli.ts restart`), since `agent-mail graceful` reloads configuration
+only.
 
 ## Verifying a harness adapter with a sentinel
 
@@ -114,6 +121,35 @@ correctly confirms the whole path: hook fired, output parsed, context
 injected.
 
 Pick a string the model cannot guess, such as `SENTINEL-7f3a9c-quokka`.
+
+**Agy.** An injected `PreInvocation` step triggers another invocation, so a
+sentinel must emit only once. Create `/tmp/agy-sentinel.sh`:
+
+```sh
+#!/bin/sh
+if mkdir /tmp/agy-sentinel-once 2>/dev/null; then
+  printf '%s\n' '{"injectSteps":[{"ephemeralMessage":"SENTINEL-7f3a9c-quokka"}]}'
+else
+  printf '%s\n' '{}'
+fi
+```
+
+Make it executable, then add this named hook to
+`~/.gemini/config/hooks.json`:
+
+```json
+{
+  "sentinel": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "/tmp/agy-sentinel.sh",
+        "timeout": 5
+      }
+    ]
+  }
+}
+```
 
 **Codex.** Add to `~/.codex/hooks.json`, under `hooks.UserPromptSubmit`:
 
@@ -139,8 +175,8 @@ Then, in the running session, send any prompt and ask: "What does the
 sentinel say?" If the model answers with the string, the adapter works. If
 the string appears in the terminal but the model cannot report it, the hook
 ran but its output never entered the context; that adapter is not done.
-Remove the sentinel hook afterward; `agent-mail hooks uninstall` removes only
-the agent-mail entries.
+Remove the sentinel hook and its `/tmp/agy-sentinel-once` directory afterward;
+`agent-mail hooks uninstall` removes only the agent-mail entries.
 
 ## Troubleshooting
 
@@ -165,8 +201,9 @@ them.
 - **The hook printed nothing on a manual run.** Run
   `agent-mail remind --format codex --session <id> --project <dir>` by hand.
   Empty stdout with exit 0 covers both "nothing to say" and "something
-  failed"; the diagnostics log separates the two. A manual `--event Stop`
-  run exits 2 only for a newly unannounced edge, so it also advances the edge.
+  failed" for the existing adapters. Agy emits `{}` for the same no-op.
+  The diagnostics log separates a stale snapshot from ordinary silence. A
+  manual `--event Stop` run advances a newly unannounced edge.
 
 ## OpenCode
 

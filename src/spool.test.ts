@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withFileLock } from "./lock.ts";
 import { ensureDirs, projectSlug, receiptPath, spoolPath } from "./paths.ts";
+import { processInfo, register, unregister } from "./registry.ts";
 import { sleepSync } from "./runtime.ts";
 import {
   type AdmissionOptions,
@@ -21,9 +22,11 @@ import {
   type appendMessageGuarded,
   appendReceipt,
   emptyReceiptTail,
+  intendedDeliveryReceipts,
   isExpired,
   messageVisibleToSession,
   readReceiptTail,
+  readReceipts,
   shouldEchoMessageToSlack,
 } from "./spool.ts";
 
@@ -50,6 +53,106 @@ test("messageVisibleToSession shows mail from other sessions", () => {
       "recipient",
     ),
   ).toBe(true);
+});
+
+const PUSH_CAPABLE = {
+  tools: true,
+  inboxPoll: true,
+  channelPush: true,
+  claims: true,
+  workLeases: true,
+  receipts: true,
+  nativePeerMessaging: false,
+};
+
+test("spooling records each intended live recipient before its transport polls", () => {
+  const receipts = intendedDeliveryReceipts(
+    {
+      ...base,
+      id: "mail-1",
+      meta: { sessionId: "sender", toSession: "target" },
+    },
+    [
+      { sessionId: "sender", capabilities: PUSH_CAPABLE },
+      { sessionId: "target", capabilities: PUSH_CAPABLE },
+      { sessionId: "other", capabilities: PUSH_CAPABLE },
+    ],
+    Date.parse(base.ts),
+  );
+  expect(receipts).toEqual([
+    {
+      messageId: "mail-1",
+      project: base.project,
+      ts: base.ts,
+      status: "pending",
+      sessionId: "target",
+      detail: "intended live recipient",
+    },
+  ]);
+});
+
+test("known broken channel setup records an unreachable attempt, not a push", () => {
+  const receipts = intendedDeliveryReceipts(
+    { ...base, id: "mail-2" },
+    [
+      {
+        sessionId: "target",
+        capabilities: {
+          ...PUSH_CAPABLE,
+          channelPushStatus: "host-not-loaded",
+        },
+      },
+    ],
+    Date.parse(base.ts),
+  );
+  expect(receipts).toEqual([
+    {
+      messageId: "mail-2",
+      project: base.project,
+      ts: base.ts,
+      status: "push-unreachable",
+      sessionId: "target",
+      detail: "channel:host-not-loaded",
+    },
+  ]);
+});
+
+test("appendMessage persists intended-recipient evidence without a receiver poll", () => {
+  const project = mkdtempSync(join(tmpdir(), "agent-mail-intent-"));
+  const instanceId = "intent-test-instance";
+  const procStart = processInfo([process.pid]).get(process.pid)?.start;
+  if (!procStart) throw new Error("test process liveness unavailable");
+  try {
+    register(
+      project,
+      process.pid,
+      "intent-recipient",
+      undefined,
+      "claude-code",
+      PUSH_CAPABLE,
+      "accept",
+      procStart,
+      instanceId,
+    );
+    appendMessage({
+      ...base,
+      id: "mail-3",
+      project,
+    });
+    expect(readReceipts(project, "mail-3")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          messageId: "mail-3",
+          status: "pending",
+          sessionId: "intent-recipient",
+          detail: "intended live recipient",
+        }),
+      ]),
+    );
+  } finally {
+    unregister(project, process.pid, instanceId);
+    rmSync(project, { recursive: true, force: true });
+  }
 });
 
 test("messageVisibleToSession honors direct session targets", () => {

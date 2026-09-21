@@ -37,6 +37,7 @@ import {
   recordClaimReminder,
   writeClaimReminderState,
 } from "./claimReminders.ts";
+import { claims } from "./claims.ts";
 import { type Config, loadConfig } from "./config.ts";
 import { listCoordination } from "./coordination.ts";
 import { dashboardResponse } from "./dashboard.ts";
@@ -367,6 +368,13 @@ function tickPresence(): void {
   try {
     const snapshot = writePresenceSnapshot();
     writeProcessSnapshot();
+    claims.observeSessions(
+      new Set(
+        snapshot.sessions
+          .map((registration) => registration.sessionId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
     // Status and reminders share one project-grouped unread collection.
     // Muted sessions still get status counts, but no reminder entry.
     const status = sessionStatus.refresh(snapshot.sessions);

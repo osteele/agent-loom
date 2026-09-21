@@ -1,0 +1,965 @@
+-- allium: 3
+-- path-claims.allium
+--
+-- Authority: the intended path-claim contract exposed through MCP and CLI.
+-- Scope:
+--   - selecting one target project, including a project other than the caller's
+--   - atomically acquiring file and directory targets, existing or not
+--   - conflict detection against other owners
+--   - session, manual, and plan owner lifecycles
+--   - owner release, expiry, and forced recovery
+--   - project-scoped and cross-project inspection
+-- Excludes:
+--   - experiment-number reservations
+--   - logical work leases, except as the liveness of a plan owner
+--   - execution-plan lifecycle semantics beyond the events consumed here
+--   - path-claim transfer between owners
+--   - filesystem locking and persistence format
+--
+-- Elicited with Oliver on 2026-09-22 and revised the same day after a design
+-- review. Decisions 0019, 0020, and 0021 in docs/decisions/ and the
+-- 2026-09-22 entries in docs/decisions/log.md record the alternatives that
+-- were rejected. This is a normative future contract.
+--
+-- Prior art the contract follows: WebDAV locking (RFC 4918) for the opaque
+-- release token, informational owner label, timeout with refresh, depth as
+-- file versus directory, and reserving an unmapped name; ZooKeeper session
+-- timeouts for the restart grace; multigranularity locking for hierarchical
+-- overlap.
+
+------------------------------------------------------------
+-- Configuration
+------------------------------------------------------------
+
+config {
+    session_restart_grace: Duration = 15.minutes
+    manual_inactivity_limit: Duration = 24.hours
+    released_claim_retention: Duration = 30.days
+}
+
+------------------------------------------------------------
+-- Identity records observed by the claim system
+------------------------------------------------------------
+
+entity Project {
+    canonical_root: String
+}
+
+-- A logical session, identified across projects by its id. live_process_count
+-- is the most recent observation of the process table for that id.
+entity Session {
+    id: String
+    live_process_count: Integer
+    observed_at: Timestamp
+}
+
+-- An execution plan whose current executor holds its logical work lease.
+-- The lease itself is specified elsewhere; this spec consumes only whether
+-- the plan is held, by whom, and whether it has reached a terminal state.
+entity ExecutionPlan {
+    project: Project
+    stem: String
+    state: pending | active | completed | abandoned
+    executor: String?
+    is_held: executor != null
+}
+
+------------------------------------------------------------
+-- Domain model
+------------------------------------------------------------
+
+enum InterfaceKind { mcp | cli }
+enum OwnerKind { session | manual | plan }
+enum TargetKind { file | directory }
+enum ReleaseReason {
+    owner_request | forced_recovery | session_absence |
+    manual_expiry | plan_completed | plan_abandoned | plan_lease_lost
+}
+enum AcquisitionDisposition { acquired | existing | invalid | conflict }
+enum ReleaseDisposition { released | already_released | unknown | forbidden | invalid }
+enum OwnerCondition {
+    session_live | session_restart_grace | manual_fresh | plan_held | released
+}
+enum RecoveryAction {
+    ask_owner_to_release | wait_for_grace | declare_user_authority | none
+}
+
+-- identity is the session id, the manual label, or "<plan project>/<stem>".
+-- A manual label is informational: it names the owner for display, expiry
+-- accounting, and same-owner matching, and is never release authority.
+value ClaimOwner {
+    kind: OwnerKind
+    identity: String
+    session: Session?
+    plan: ExecutionPlan?
+}
+
+value RequestedTarget {
+    supplied_path: String
+    declared_kind: TargetKind?
+    canonical_path: String?
+    observed_kind: TargetKind?
+    exists: Boolean
+    within_selected_project: Boolean
+}
+
+-- id is public: listings, conflict reports, and forced recovery name it.
+-- release_token is returned once, to the acquirer, and never listed.
+entity PathClaim {
+    id: String
+    release_token: String
+    project: Project
+    owner: ClaimOwner
+    state: active | restart_grace | released
+    created_at: Timestamp
+    last_activity_at: Timestamp
+    grace_deadline: Timestamp when state = restart_grace
+    released_at: Timestamp when state = released
+    release_reason: ReleaseReason when state = released
+    retained_until: Timestamp when state = released
+
+    targets: ClaimTarget with claim = this
+
+    transitions state {
+        active -> restart_grace
+        restart_grace -> active
+        active -> released
+        restart_grace -> released
+        terminal: released
+    }
+
+    -- A deadline that has passed releases the claim logically before any
+    -- transaction records it. Blocking is read from this predicate, never
+    -- from state alone.
+    overdue:
+        (state = restart_grace and grace_deadline <= now) or
+        (state = active and owner.kind = manual and
+            last_activity_at + config.manual_inactivity_limit <= now)
+    is_blocking: state in {active, restart_grace} and not overdue
+}
+
+entity ClaimTarget {
+    claim: PathClaim
+    canonical_path: String
+    kind: TargetKind
+}
+
+entity RecoveryAudit {
+    claim: PathClaim
+    actor: String
+    authority: String
+    prior_owner: String
+    reason: String
+    recovered_at: Timestamp
+}
+
+value AcquisitionRequest {
+    interface: InterfaceKind
+    caller_project: Project
+    selected_project: Project
+    owner: ClaimOwner
+    requested_targets: List<RequestedTarget>
+    requested_at: Timestamp
+}
+
+entity AcquisitionDecision {
+    request: AcquisitionRequest
+    disposition: AcquisitionDisposition
+    claim: PathClaim?
+    release_token: String?
+    canonical_project: Project?
+    canonical_targets: List<ClaimTarget>
+    blocking_claim: PathClaim?
+    blocking_owner_condition: OwnerCondition?
+    recovery_action: RecoveryAction?
+    error: String?
+}
+
+-- Exactly one of claim_id and release_token identifies the claim. actor is
+-- the caller's own identity when the interface can prove one, else null.
+value ReleaseRequest {
+    interface: InterfaceKind
+    claim_id: String?
+    release_token: String?
+    project_filter: Project?
+    actor: ClaimOwner?
+    user_authority: String?
+    reason: String?
+    requested_at: Timestamp
+}
+
+entity ReleaseDecision {
+    request: ReleaseRequest
+    disposition: ReleaseDisposition
+    claim: PathClaim?
+    canonical_project: Project?
+    released_at: Timestamp?
+    error: String?
+}
+
+value ClaimListRequest {
+    interface: InterfaceKind
+    caller_project: Project
+    project_filter: Project?
+    all_projects: Boolean
+    include_history: Boolean
+}
+
+value SessionPresenceObservation {
+    session: Session
+    live_process_count: Integer
+    observed_at: Timestamp
+}
+
+value PlanLeaseObservation {
+    plan: ExecutionPlan
+    executor: String?
+    occurred_at: Timestamp
+}
+
+value PlanStateObservation {
+    plan: ExecutionPlan
+    state: pending | active | completed | abandoned
+    occurred_at: Timestamp
+}
+
+surface SessionPresenceInputs {
+    context observation: SessionPresenceObservation
+    provides: SessionPresenceObserved(observation)
+}
+
+surface PlanLeaseInputs {
+    context observation: PlanLeaseObservation
+    provides: PlanLeaseObserved(observation)
+}
+
+surface PlanStateInputs {
+    context observation: PlanStateObservation
+    provides: PlanStateObserved(observation)
+}
+
+------------------------------------------------------------
+-- Predicates
+--
+-- Black-box predicates used by the rules below, with their meaning. Each is
+-- evaluated inside the serialized transaction that uses it.
+------------------------------------------------------------
+
+-- ValidAcquisitionRequest(request): selected_project resolves to one existing
+--   canonical project; every target canonicalizes inside it; every target's
+--   kind resolves per TargetKindResolution; the owner shape satisfies
+--   OwnerShapeMatchesKind; a plan owner satisfies PlanOwnerIsCurrentExecutor.
+-- NormalizedTargets(request): the requested targets after canonicalization,
+--   duplicate removal, and removal of descendants of a requested directory.
+-- BlockingForeignOverlap(request): some claim with is_blocking, a different
+--   owner, and a target overlapping a normalized target, after overdue claims
+--   among the candidates have been settled in this transaction.
+-- BlockingClaim(request): one such claim, chosen deterministically.
+-- ConditionOf(claim): the OwnerCondition of a claim after settlement.
+-- RecoveryFor(claim): the single RecoveryAction for ConditionOf(claim):
+--   session_live and plan_held -> ask_owner_to_release;
+--   session_restart_grace -> wait_for_grace;
+--   manual_fresh -> declare_user_authority.
+-- ExistingClaim(request): the one blocking claim with the same owner whose
+--   target set equals NormalizedTargets(request), if any.
+-- ExistingClaimExactlyCovers(request): ExistingClaim(request) != null.
+-- LiveClaimById(id), LiveClaimByToken(token): the blocking claim so named.
+-- RetainedClaimById(id), RetainedClaimByToken(token): a released claim so
+--   named whose retained_until has not passed.
+-- TokenAuthorizes(request): request.release_token names a live claim.
+-- IdentityAuthorizes(request): request.claim_id names a live claim and
+--   request.actor proves its owner: same session id for a session owner, or
+--   the plan's current executor for a plan owner. A manual label never
+--   authorizes.
+-- ReleaseClaim(claim, reason, at): state = released, released_at = at,
+--   release_reason = reason, retained_until = at + released_claim_retention.
+-- SettleOverdueClaims(request): every candidate claim with overdue = true is
+--   released with the reason its deadline implies (session_absence at
+--   grace_deadline; manual_expiry at last_activity_at + limit).
+
+------------------------------------------------------------
+-- Target and project validity
+------------------------------------------------------------
+
+invariant OneProjectPerClaim {
+    for claim in PathClaims:
+        for target in claim.targets:
+            target.canonical_path is within claim.project.canonical_root
+}
+
+invariant TargetKindResolution {
+    -- A claim reserves a name, so the target need not exist. An existing
+    -- regular file or directory takes its observed kind, and a declared kind
+    -- that contradicts the observed kind is invalid. A nonexistent target
+    -- takes declared_kind, defaulting to file. Any other filesystem object
+    -- type is invalid.
+}
+
+invariant SymbolicLinksResolveBeforeValidation {
+    -- canonical_path is the fully resolved target. A symbolic link whose
+    -- target lies outside selected_project is invalid even when the supplied
+    -- link itself lies inside the project. The link's own path is not
+    -- reserved; the resolved path is.
+}
+
+invariant CanonicalProjectSelection {
+    -- MCP defaults an omitted project to the calling session's current project.
+    -- An MCP request naming another project supplies its exact canonical
+    -- absolute root. CLI accepts its established project forms, resolves them
+    -- to one existing project, and rejects ambiguous names. One acquisition
+    -- request never spans selected projects.
+}
+
+invariant MinimalTargetCoverage {
+    for claim in PathClaims where claim.state != released:
+        for a in claim.targets:
+            for b in claim.targets:
+                a != b implies a.canonical_path != b.canonical_path
+                a != b and a.kind = directory implies
+                    b.canonical_path is not beneath a.canonical_path
+}
+
+------------------------------------------------------------
+-- Ownership and conflicts
+------------------------------------------------------------
+
+invariant OwnerShapeMatchesKind {
+    for claim in PathClaims:
+        claim.owner.kind = session implies
+            claim.owner.session != null and claim.owner.plan = null
+        claim.owner.kind = manual implies
+            claim.owner.session = null and claim.owner.plan = null
+        claim.owner.kind = plan implies
+            claim.owner.plan != null and claim.owner.session = null
+}
+
+invariant PlanOwnerIsCurrentExecutor {
+    for claim in PathClaims where claim.owner.kind = plan and claim.state != released:
+        claim.owner.plan.is_held
+
+    -- A plan-owned claim is acquired only by the plan's current executor,
+    -- while the plan is held and not terminal. Its identity is the plan, so
+    -- a lease transfer moves release authority to the new executor without
+    -- moving the claim.
+}
+
+invariant SessionIdentityIsGlobal {
+    -- Liveness follows the logical session identity across projects. A session
+    -- claiming paths in another project is not treated as absent merely because
+    -- it has no process registered in the target project.
+}
+
+invariant DifferentOwnersNeverBlockTheSamePath {
+    for a in PathClaims where a.is_blocking:
+        for b in PathClaims where b.is_blocking:
+            a != b and a.owner != b.owner implies
+                not TargetSetsOverlap(a.targets, b.targets)
+}
+
+invariant PathOverlapIsHierarchicalAndSymmetric {
+    -- Two targets overlap when their canonical paths are equal, or when
+    -- either is a directory and the other lies beneath it. Overlap is
+    -- symmetric: a file beneath a claimed directory conflicts with it exactly
+    -- as the directory conflicts with the file. Non-overlapping sibling paths
+    -- do not conflict.
+}
+
+invariant SameOwnerOverlapIsNotAConflict {
+    -- One owner may hold several claims whose targets overlap. Each is its
+    -- own claim with its own id and token and is released on its own.
+    -- Conflict detection considers only claims held by other owners.
+}
+
+invariant FilesystemMutationDoesNotChangeCoverage {
+    -- A claim keeps each canonical path and its original file or directory
+    -- scope until release. Creation, deletion, replacement, type change, and
+    -- rename do not move or narrow the reservation.
+}
+
+invariant NoClaimTransfer {
+    -- A claim's owner never changes. A different owner acquires the paths only
+    -- after release, expiry, or forced recovery. A plan-owned claim's owner is
+    -- the plan, so a change of executor is not a transfer.
+}
+
+------------------------------------------------------------
+-- Acquisition
+------------------------------------------------------------
+
+rule RejectInvalidAcquisition {
+    when: AcquirePathClaim(request)
+    requires: not ValidAcquisitionRequest(request)
+
+    ensures: AcquisitionDecision.created(
+        request: request,
+        disposition: invalid,
+        claim: null,
+        release_token: null,
+        canonical_project: null,
+        canonical_targets: [],
+        blocking_claim: null,
+        blocking_owner_condition: null,
+        recovery_action: null,
+        error: AcquisitionValidationError(request)
+    )
+    ensures: NoClaimMutationFor(request)
+}
+
+rule RejectForeignConflictAtomically {
+    when: AcquirePathClaim(request)
+    requires: ValidAcquisitionRequest(request)
+    requires: BlockingForeignOverlap(request)
+
+    ensures: SettleOverdueClaims(request)
+    ensures: AcquisitionDecision.created(
+        request: request,
+        disposition: conflict,
+        claim: null,
+        release_token: null,
+        canonical_project: request.selected_project,
+        canonical_targets: [],
+        blocking_claim: BlockingClaim(request),
+        blocking_owner_condition: ConditionOf(BlockingClaim(request)),
+        recovery_action: RecoveryFor(BlockingClaim(request)),
+        error: ConflictDescription(request)
+    )
+}
+
+rule ReturnExistingSameOwnerClaim {
+    when: AcquirePathClaim(request)
+    requires: ValidAcquisitionRequest(request)
+    requires: ExistingClaimExactlyCovers(request)
+
+    ensures: SettleOverdueClaims(request)
+    ensures: ExistingClaim(request).owner.kind = manual implies
+        ExistingClaim(request).last_activity_at = request.requested_at
+    ensures: AcquisitionDecision.created(
+        request: request,
+        disposition: existing,
+        claim: ExistingClaim(request),
+        release_token: null,
+        canonical_project: ExistingClaim(request).project,
+        canonical_targets: ExistingClaim(request).targets,
+        blocking_claim: null,
+        blocking_owner_condition: null,
+        recovery_action: null,
+        error: null
+    )
+}
+
+rule AcquireNewClaim {
+    when: AcquirePathClaim(request)
+    requires: ValidAcquisitionRequest(request)
+    requires: not BlockingForeignOverlap(request)
+    requires: not ExistingClaimExactlyCovers(request)
+
+    ensures: SettleOverdueClaims(request)
+    ensures:
+        let claim = PathClaim.created(
+            id: GloballyUniqueClaimID(),
+            release_token: UnguessableToken(),
+            project: request.selected_project,
+            owner: request.owner,
+            state: active,
+            created_at: request.requested_at,
+            last_activity_at: request.requested_at
+        )
+        CreateNormalizedTargets(claim, request)
+        AcquisitionDecision.created(
+            request: request,
+            disposition: acquired,
+            claim: claim,
+            release_token: claim.release_token,
+            canonical_project: claim.project,
+            canonical_targets: claim.targets,
+            blocking_claim: null,
+            blocking_owner_condition: null,
+            recovery_action: null,
+            error: null
+        )
+}
+
+invariant OneClaimPerAcquisition {
+    -- Every acquisition that is not an exact repeat creates one claim with one
+    -- public id and one release token. Claims are never merged, expanded, or
+    -- split; release granularity is the acquisition.
+}
+
+invariant MultiTargetAcquisitionIsAtomic {
+    -- Validation, overdue settlement, conflict detection, and creation have
+    -- one serialized outcome. A failed request changes no requested target,
+    -- preexisting claim, or activity timestamp. Settling an overdue claim is
+    -- not a change: the claim was already logically released.
+}
+
+invariant TokenIsIssuedOnce {
+    -- release_token is returned only in the decision that created the claim.
+    -- An existing disposition, a listing, and a conflict report never carry
+    -- it. A caller that loses the token waits for the claim's own expiry or
+    -- supplies user authority.
+}
+
+invariant ManualRenewalIsReacquisition {
+    -- Repeating an acquisition that an existing same-owner claim exactly
+    -- covers is the manual owner's renewal: it refreshes last_activity_at and
+    -- mints nothing. There is no separate renew operation.
+}
+
+------------------------------------------------------------
+-- Release
+------------------------------------------------------------
+
+rule ReleaseByToken {
+    when: ReleasePathClaim(request)
+    requires: TokenAuthorizes(request)
+
+    ensures: ReleaseClaim(
+        LiveClaimByToken(request.release_token),
+        owner_request,
+        request.requested_at
+    )
+    ensures: ReleaseDecision.created(
+        request: request,
+        disposition: released,
+        claim: LiveClaimByToken(request.release_token),
+        canonical_project: LiveClaimByToken(request.release_token).project,
+        released_at: request.requested_at,
+        error: null
+    )
+}
+
+rule ReleaseByProvenIdentity {
+    when: ReleasePathClaim(request)
+    requires: not TokenAuthorizes(request)
+    requires: IdentityAuthorizes(request)
+
+    ensures: ReleaseClaim(
+        LiveClaimById(request.claim_id),
+        owner_request,
+        request.requested_at
+    )
+    ensures: ReleaseDecision.created(
+        request: request,
+        disposition: released,
+        claim: LiveClaimById(request.claim_id),
+        canonical_project: LiveClaimById(request.claim_id).project,
+        released_at: request.requested_at,
+        error: null
+    )
+}
+
+rule ForceRecoverWithDeclaredUserAuthority {
+    when: ReleasePathClaim(request)
+    requires: not TokenAuthorizes(request)
+    requires: not IdentityAuthorizes(request)
+    requires: LiveClaimById(request.claim_id) != null
+    requires: UserSuppliedAuthority(request.user_authority)
+    requires: request.reason != null
+
+    ensures: RecoveryAudit.created(
+        claim: LiveClaimById(request.claim_id),
+        actor: RecoveryActor(request),
+        authority: request.user_authority,
+        prior_owner: LiveClaimById(request.claim_id).owner.identity,
+        reason: request.reason,
+        recovered_at: request.requested_at
+    )
+    ensures: ReleaseClaim(
+        LiveClaimById(request.claim_id),
+        forced_recovery,
+        request.requested_at
+    )
+    ensures: ReleaseDecision.created(
+        request: request,
+        disposition: released,
+        claim: LiveClaimById(request.claim_id),
+        canonical_project: LiveClaimById(request.claim_id).project,
+        released_at: request.requested_at,
+        error: null
+    )
+}
+
+rule RejectAuthorityWithoutReason {
+    when: ReleasePathClaim(request)
+    requires: not TokenAuthorizes(request)
+    requires: not IdentityAuthorizes(request)
+    requires: LiveClaimById(request.claim_id) != null
+    requires: UserSuppliedAuthority(request.user_authority)
+    requires: request.reason = null
+
+    ensures: ReleaseDecision.created(
+        request: request,
+        disposition: invalid,
+        claim: LiveClaimById(request.claim_id),
+        canonical_project: LiveClaimById(request.claim_id).project,
+        released_at: null,
+        error: "forced recovery requires a reason"
+    )
+}
+
+rule RejectUnauthorizedRelease {
+    when: ReleasePathClaim(request)
+    requires: not TokenAuthorizes(request)
+    requires: not IdentityAuthorizes(request)
+    requires: LiveClaimById(request.claim_id) != null
+    requires: not UserSuppliedAuthority(request.user_authority)
+
+    -- Covers a null actor, a manual label match, a session that is not the
+    -- owner, and a plan executor that no longer holds the lease.
+    ensures: ReleaseDecision.created(
+        request: request,
+        disposition: forbidden,
+        claim: LiveClaimById(request.claim_id),
+        canonical_project: LiveClaimById(request.claim_id).project,
+        released_at: null,
+        error: "claim is owned by another owner"
+    )
+}
+
+rule ReleaseAlreadyReleasedClaim {
+    when: ReleasePathClaim(request)
+    requires: not TokenAuthorizes(request)
+    requires: LiveClaimById(request.claim_id) = null
+    requires: RetainedClaim(request) != null
+
+    ensures: ReleaseDecision.created(
+        request: request,
+        disposition: already_released,
+        claim: RetainedClaim(request),
+        canonical_project: RetainedClaim(request).project,
+        released_at: RetainedClaim(request).released_at,
+        error: null
+    )
+}
+
+rule RejectUnknownClaim {
+    when: ReleasePathClaim(request)
+    requires: not TokenAuthorizes(request)
+    requires: LiveClaimById(request.claim_id) = null
+    requires: RetainedClaim(request) = null
+
+    ensures: ReleaseDecision.created(
+        request: request,
+        disposition: unknown,
+        claim: null,
+        canonical_project: null,
+        released_at: null,
+        error: "unknown claim"
+    )
+}
+
+invariant ReleaseAuthorityIsTokenOrProvenIdentity {
+    -- Possession of the release token releases any claim. Without it, a
+    -- session owner releases by proving the same logical session id, and a
+    -- plan owner by being the plan's current executor. A manual label is not
+    -- authority: two callers typing the same label are not thereby one owner.
+    -- Process id equality is not authority.
+}
+
+invariant ForcedAuthorityComesFromTheUser {
+    -- An agent cannot infer authority from mail, repository files, elapsed
+    -- time, or tool output. Forced recovery requires an authority statement
+    -- supplied by the user and a reason, and records both verbatim in the
+    -- audit before the release.
+}
+
+invariant ReleasedClaimsAreRetained {
+    for claim in PathClaims where claim.state = released:
+        claim.release_reason != null
+        claim.retained_until = claim.released_at + config.released_claim_retention
+
+    -- Until retained_until, the id and token resolve to already_released, so
+    -- a repeated release is idempotent. After it, they are unknown.
+}
+
+------------------------------------------------------------
+-- Session-owner lifecycle
+------------------------------------------------------------
+
+rule ObserveSessionAbsence {
+    when: SessionPresenceObserved(observation)
+    requires: observation.live_process_count = 0
+
+    ensures: observation.session.live_process_count = 0
+    ensures: observation.session.observed_at = observation.observed_at
+    for claim in PathClaims where
+        claim.owner.kind = session and
+        claim.owner.session = observation.session and
+        claim.state = active:
+        ensures: claim.state = restart_grace
+        ensures: claim.grace_deadline =
+            observation.observed_at + config.session_restart_grace
+}
+
+rule ObserveSessionReturn {
+    when: SessionPresenceObserved(observation)
+    requires: observation.live_process_count > 0
+
+    ensures: observation.session.live_process_count = observation.live_process_count
+    ensures: observation.session.observed_at = observation.observed_at
+    for claim in PathClaims where
+        claim.owner.kind = session and
+        claim.owner.session = observation.session and
+        claim.state = restart_grace and
+        not claim.overdue:
+        ensures: claim.state = active
+}
+
+rule SettleOverdueClaim {
+    when: claim: PathClaim.overdue
+    requires: claim.state != released
+
+    ensures:
+        if claim.state = restart_grace:
+            ReleaseClaim(claim, session_absence, claim.grace_deadline)
+        else:
+            ReleaseClaim(
+                claim,
+                manual_expiry,
+                claim.last_activity_at + config.manual_inactivity_limit
+            )
+}
+
+invariant LivenessIsEvaluatedInTheTransaction {
+    -- Any transaction that must classify a session-owned claim first takes a
+    -- fresh presence observation of that session from the process table,
+    -- inside its own serialized scope, and applies ObserveSessionAbsence or
+    -- ObserveSessionReturn before deciding. The daemon's periodic tick is an
+    -- additional observer, never the only one. A cached presence snapshot is
+    -- never a classification input.
+}
+
+invariant RestartGraceKeepsBlocking {
+    for claim in PathClaims where claim.state = restart_grace and not claim.overdue:
+        claim.is_blocking
+}
+
+invariant SessionAbsenceStartsWhenObserved {
+    -- The grace deadline is measured from the first observation that no
+    -- process remains for the logical session, whichever transaction takes
+    -- it. An inferred earlier process-exit time does not shorten the grace
+    -- period.
+}
+
+invariant ReleaseReasonIsFixedByTheDeadline {
+    -- An overdue claim is released with the reason its deadline implies, and
+    -- at the deadline, whichever transaction records it. The recorded reason
+    -- and time do not depend on which observer noticed first.
+}
+
+------------------------------------------------------------
+-- Plan-owner lifecycle
+------------------------------------------------------------
+
+rule ReleasePlanClaimsWhenLeaseLost {
+    when: PlanLeaseObserved(observation)
+    requires: observation.executor = null
+
+    ensures: observation.plan.executor = null
+    for claim in PathClaims where
+        claim.owner.kind = plan and
+        claim.owner.plan = observation.plan and
+        claim.state = active:
+        ensures: ReleaseClaim(claim, plan_lease_lost, observation.occurred_at)
+}
+
+rule RecordPlanExecutor {
+    when: PlanLeaseObserved(observation)
+    requires: observation.executor != null
+
+    ensures: observation.plan.executor = observation.executor
+}
+
+rule ReleasePlanClaimsOnCompletion {
+    when: PlanStateObserved(observation)
+    requires: observation.state = completed
+
+    ensures: observation.plan.state = completed
+    for claim in PathClaims where
+        claim.owner.kind = plan and
+        claim.owner.plan = observation.plan and
+        claim.state = active:
+        ensures: ReleaseClaim(claim, plan_completed, observation.occurred_at)
+}
+
+rule ReleasePlanClaimsOnAbandonment {
+    when: PlanStateObserved(observation)
+    requires: observation.state = abandoned
+
+    ensures: observation.plan.state = abandoned
+    for claim in PathClaims where
+        claim.owner.kind = plan and
+        claim.owner.plan = observation.plan and
+        claim.state = active:
+        ensures: ReleaseClaim(claim, plan_abandoned, observation.occurred_at)
+}
+
+invariant PlanClaimLivenessIsTheLease {
+    -- A plan-owned claim has no clock of its own. It lives exactly while some
+    -- executor holds the plan's lease and the plan is not terminal. A lease
+    -- released, displaced, or expired under the work-lease rules releases the
+    -- claim; a transfer keeps it. Terminal plan events release it regardless
+    -- of who caused them.
+}
+
+invariant PlanIdentityIsProjectPlusStem {
+    -- The plan project is independent of the claimed target project. Directory
+    -- moves within the plan project preserve the stable filename stem. Moving
+    -- a plan to another project creates a different plan identity.
+}
+
+------------------------------------------------------------
+-- Manual-owner lifecycle
+------------------------------------------------------------
+
+invariant ManualInspectionIsNotActivity {
+    -- Listing, exact-id inspection, conflict reporting, and status display do
+    -- not change last_activity_at. Only an exact re-acquisition does.
+}
+
+invariant ExpiredClaimsStopBlockingImmediately {
+    -- At a manual inactivity deadline or session grace deadline the claim is
+    -- logically released, whether or not any transaction has yet recorded it.
+    -- A concurrent acquisition settles the overdue claim and proceeds in the
+    -- same serialized transaction.
+}
+
+invariant UnprovenStalenessDoesNotDisplace {
+    -- A blocking claim whose deadline has not passed keeps blocking until its
+    -- owner releases it or the user supplies forced-recovery authority.
+    -- Elapsed time is proof only where this contract names a deadline.
+}
+
+invariant ConflictDiagnosticsAreActionable {
+    -- A conflict reports the blocking claim's public id, owner kind and label,
+    -- owner condition, overlapping targets, and exactly one valid next action:
+    -- ask the owner to release, wait for restart grace, or provide declared
+    -- user authority for forced recovery. It never reports a release token.
+}
+
+------------------------------------------------------------
+-- Inspection surfaces
+------------------------------------------------------------
+
+surface MCPPathClaims {
+    context query: ClaimListRequest
+
+    exposes:
+        VisibleClaims(
+            query.caller_project,
+            query.project_filter,
+            query.all_projects,
+            query.include_history
+        )
+
+    provides:
+        AcquirePathClaim(request)
+        ReleasePathClaim(request)
+        ListPathClaims(query)
+
+    @guarantee CrossProjectAcquisitionIsExplicit
+        -- An omitted project selects query.caller_project. A different project
+        -- must be supplied as an exact canonical absolute root.
+}
+
+surface CLIPathClaims {
+    context query: ClaimListRequest
+
+    exposes:
+        VisibleClaims(
+            query.caller_project,
+            query.project_filter,
+            query.all_projects,
+            query.include_history
+        )
+
+    provides:
+        AcquirePathClaim(request)
+        ReleasePathClaim(request)
+        ListPathClaims(query)
+
+    @guarantee ProjectFormsResolveBeforeMutation
+        -- CLI project paths and names resolve to one canonical project before
+        -- validation or mutation. Ambiguous and nonexistent projects fail.
+}
+
+invariant ListingScopeIsExplicit {
+    -- A listing defaults to caller_project. project_filter selects one
+    -- canonical project. all_projects selects every known project. Supplying a
+    -- filter together with all_projects is invalid.
+}
+
+invariant ListingHistoryIsExplicit {
+    -- Normal listings show blocking claims. include_history also shows
+    -- released claims whose retained_until has not passed. Older releases are
+    -- absent.
+}
+
+invariant ClaimStatusCarriesProvenance {
+    -- Every listed claim includes its public id, canonical project, owner
+    -- kind and label, owner condition, canonical typed targets, creation and
+    -- activity times, applicable deadline, state, and release reason and time
+    -- when history is requested. It never includes the release token.
+}
+
+invariant ReleaseLookupIsGlobal {
+    -- MCP and CLI resolve a claim id or token across all known projects. An
+    -- optional project_filter narrows or verifies the result; it is not needed
+    -- for uniqueness.
+}
+
+invariant ReadsAreProportionalToLiveClaims {
+    -- Conflict detection and normal listings read only claims that are not
+    -- released. Retained history is read only when include_history or a
+    -- release lookup asks for it, so a long-lived store does not slow
+    -- acquisition.
+}
+
+------------------------------------------------------------
+-- Transactional invariants
+------------------------------------------------------------
+
+invariant ClaimOperationsAreSerializedPerAffectedProject {
+    -- Concurrent acquisition, release, settlement, and recovery operations
+    -- have a single serial order. Exactly one conflicting acquisition can win.
+    -- A cross-project session absence or plan-terminal event applies each
+    -- claim's state change atomically within its target project.
+}
+
+invariant FailedOperationsLeaveClaimsUnchanged {
+    -- Invalid requests, conflicts, unknown claims, and unauthorized releases
+    -- do not alter claims, targets, owner activity, deadlines, or retention.
+    -- Settling an overdue claim during a valid request is excluded: it records
+    -- a release that had already taken effect.
+}
+
+invariant OneDecisionPerRequest {
+    for request in AcquisitionRequests:
+        count(AcquisitionDecisions where request = request) = 1
+    for request in ReleaseRequests:
+        count(ReleaseDecisions where request = request) = 1
+}
+
+------------------------------------------------------------
+-- Implementation gaps observed on 2026-09-22
+------------------------------------------------------------
+
+-- These notes are non-normative. They identify deployed behavior that must
+-- change before the implementation conforms to this contract.
+--
+--   - Same-owner overlap currently conflicts in some paths and remains
+--     separate in others. This contract never treats it as a conflict.
+--   - A session-owned claim can be released when its channel process exits.
+--     This contract waits for absence of every process under the logical
+--     session, then applies the configurable restart grace, observed by the
+--     acquiring transaction as well as by the daemon.
+--   - Claims carry no release token; release authority is ownership match,
+--     and a manual label matches by string equality.
+--   - Released claim ids are not retained, so a repeated release is not
+--     idempotent.
+--   - There is no plan owner kind. Manual claims made on a plan's behalf have
+--     no linkage to the plan's lease or terminal state.
+--   - CLI release lookup is project-scoped. This contract makes lookup global
+--     and uses a project argument only as a filter.
+--   - Normal listings do not expose the owner condition, lifecycle deadline,
+--     or retained history required here.

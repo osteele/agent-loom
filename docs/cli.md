@@ -87,16 +87,19 @@ variables, an indirect or ambiguous host leaves the send unattributed.
 ### `inbox`
 
 ```
-agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek]
+agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek] [--json]
 ```
 
-Prints a project's spool, newest messages last, one line each with id, read
-state, timestamp, sender, and any reply marker. `--limit` defaults to 20;
-`--unread` shows only unread messages. Unless `--peek` is set, a verified agent
-session registered in the selected project records delivery receipts for the
-returned messages and marks them read. Reading another project's inbox is
-unattributed and leaves its read state unchanged. Sending can carry a return
-address across projects; inspecting another mailbox does not claim its mail.
+Prints a project's spool, newest messages last. Text rows include the id, read
+state, timestamp, sender project and name, and any reply marker. `--json`
+returns a versioned object with structured sender project, name, and session
+fields. `--limit` defaults to 20; `--unread` shows only unread messages.
+
+Unless `--peek` is set, a verified agent session registered in the selected
+project records delivery receipts and marks only its visible returned messages
+read. Direct mail addressed to a sibling session stays unread even though the
+project-wide listing displays it. Reading another project's inbox is
+unattributed and leaves its read state unchanged.
 
 ### `triage-candidates`
 
@@ -146,13 +149,16 @@ agent-mail receipts [--project <dir>] [--id <message-id>] [--limit N]
 ```
 
 Shows the append-only delivery receipts for a project, or for one message with
-`--id`. A `pushed` receipt means push transport acceptance or emission, or an
-inbox pull; it does not prove context delivery. A `read` receipt means
-`check_inbox` returned the message, an explicit mark-read recorded it, or a
-protocol-v3 OMP steering acknowledgement attested exact-session context
-insertion. None proves the recipient completed the requested work.
-[automation.md](automation.md#what-presence-and-receipts-prove) covers what
-each status does and does not establish.
+`--id`. `pending` records that the session was a live intended recipient when
+the message entered the spool, before its transport reports an attempt.
+`push-unreachable` records a channel setup that is known to reject the push;
+the message remains available through inbox pull. A `pushed` receipt means push
+transport acceptance or emission, or an inbox pull; it does not prove context
+delivery. A `read` receipt means `check_inbox` returned the message, an explicit
+mark-read recorded it, or a protocol-v3 OMP steering acknowledgement attested
+exact-session context insertion. None proves the recipient completed the
+requested work. [automation.md](automation.md#what-presence-and-receipts-prove)
+covers what each status does and does not establish.
 
 ### `listeners`
 
@@ -262,22 +268,25 @@ and Kimi Code adapters.
 ### `remind`
 
 ```
-agent-mail remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
+agent-mail remind --format agy|codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
 ```
 
-Prints an unread-mail reminder for a harness hook, or nothing. Harnesses
-without channel push run this command from their hooks and inject its output
-into the model's context. The answer comes from the daemon's unread-summary
-snapshot: the command edge-triggers on a new newest message and re-reminds
-after 15 minutes while the same mail stays unread. At Codex or Kimi `Stop`, a
-new edge is persisted and then exits 2 with fixed reminder text on stderr to
-request one continuation; the same edge cannot continue twice. The `pi`
-format exposes that signal to the example Pi extension. All failures fail open
-with exit 0; a stale or missing snapshot prints nothing and appends a
+Prints an unread-mail reminder for a harness hook or a harness-specific no-op.
+Harnesses without channel push run this command from their hooks and inject its
+output into the model's context. The answer comes from the daemon's
+unread-summary snapshot. The command edge-triggers on a new newest message and
+re-reminds after 15 minutes while the same mail stays unread. At Agy, Codex, or
+Kimi `Stop`, a new edge is persisted before one continuation is requested.
+Codex and Kimi use exit 2 with fixed reminder text on stderr; Agy uses its JSON
+continue response. The `pi` format exposes the exit-2 signal to the example Pi
+extension. All failures fail open with exit 0. Agy receives `{}` on no-op
+paths; other formats print nothing. A stale or missing snapshot also appends a
 rate-limited line to
 `~/.claude/agent-mail/remind-diagnostics.log`. The session id resolves from
 `--session`, then the stdin hook payload's `session_id`, then
-`GEMINI_SESSION_ID`, then the session identity environment variables.
+`GEMINI_SESSION_ID`, then the session identity environment variables. Agy's
+documented `workspacePaths` supplies the project when the hook process runs
+from its global config directory.
 [reminders.md](reminders.md) covers the mechanism and the invariants.
 
 ## Coordination claims
@@ -304,32 +313,39 @@ experiment file before releasing the reservation or the number can be reissued.
 ```
 agent-mail claim-path --path <path> [--path <path> ...] [--directory]
   [--project <dir>] [--owner <label>]
+  [--plan <stem> [--plan-project <dir>]]
 ```
 
-Atomically claims one or more files under a single claim id, so a multi-file
-edit set either succeeds together or fails without partial claims. Paths
-resolve against the project. `--directory` marks every target as a directory;
-a directory claim conflicts with claims on its ancestors and descendants,
-while non-overlapping siblings may proceed. A conflict fails with advice on
-how to recover the blocking claim.
+Claims one or more names atomically. Existing targets use their observed kind.
+Missing targets default to files; `--directory` declares them as directories.
+Duplicate targets and descendants covered by a directory are removed. Other
+owners conflict hierarchically, while the same owner may hold separate
+overlapping claims. An exact repeat prints the existing claim without a token.
+A new claim prints its ID and one-time release token on the first line.
+
+CLI paths resolve against `--project`. The MCP `claim_path` tool requires a
+canonical absolute `project` for cross-project claims. `--plan` makes the
+research plan the owner and requires the caller to hold that plan's work lease.
 
 ### `claims`
 
 ```
-agent-mail claims [--project <dir>]
+agent-mail claims [--project <dir> | --all] [--history]
 ```
 
-Lists the project's active experiment and path claims with owner and creation
-time.
+Lists active experiment and path claims. `--history` adds path claims released
+within the 30-day retention window. Release tokens are never listed.
 
 ### `release-claim`
 
 ```
-agent-mail release-claim --id <claim-id> [--project <dir>]
+agent-mail release-claim (--id <claim-id> | --token <release-token>)
+  [--project <dir>]
 ```
 
-Releases a claim by id, as printed by `claim-experiment`, `claim-path`, or
-`claims`.
+Releases a claim. A path claim accepts its one-time token, its logical session
+identity, or the current executor of its owning plan. Manual labels are not
+release credentials. Repeated release remains idempotent during retention.
 
 ## Project owner
 
@@ -495,9 +511,12 @@ completion. Ownership, transfer, recovery, and delivery rules are unchanged.
 
 ```
 agent-mail work release --id <work-id> [--project <dir>]
+  [--outcome completed|abandoned]
 ```
 
-Releases responsibility for a lease. The resource itself is untouched.
+Releases responsibility for a lease. Releasing a research-plan lease also
+releases that plan's path claims and records the selected outcome. Omitting the
+outcome records lease loss.
 
 ## Unified coordination
 
@@ -513,25 +532,23 @@ agent-mail coordination list [--project <dir> | --all] [--kind <kind>]
 ```
 
 Lists every active coordination record with its owner status and recovery
-condition: `healthy`, `owner-offline`, `owner-expired`, `owner-unverifiable`,
-`source-missing`, `target-absent`, `awaiting-materialization`, or
-`materialized`. `--kind`
-filters to `work`, `path-claim`, or `experiment-claim`; `--owner` and
-`--condition` filter further. `--json` prints a versioned object.
+condition: `healthy`, `restart-grace`, `owner-offline`, `owner-expired`,
+`owner-unverifiable`, `source-missing`, `awaiting-materialization`, or
+`materialized`. `--kind` filters to `work`, `path-claim`, or
+`experiment-claim`; `--owner` and `--condition` filter further. `--json` prints
+a versioned object.
 
 ### `coordination recover`
 
 ```
-agent-mail coordination recover --id <coordination-id> [--authority <text>]
+agent-mail coordination recover --id <coordination-id>
+  [--authority <text> --reason <text>]
 ```
 
-Releases a stale work lease or claim after revalidating that the owning process
-is definitively dead, or that a manual owner has gone 24 hours without renewal.
-A live owner, an unverifiable one, or a manual owner still inside that window is
-left in place. `--authority <text>` skips the liveness proof and force-releases; the
-text is recorded verbatim in an append-only audit log at
-`~/.claude/agent-mail/forced-recoveries.jsonl` and never verified, so pass it
-only on explicit operator instruction.
+Releases a record after revalidating its lifecycle. A forced recovery requires
+both `--authority` and `--reason`. Agent-mail records both values verbatim in
+`~/.claude/agent-mail/forced-recoveries.jsonl` and does not verify them. Only
+explicit operator instruction can supply the authority.
 
 ### `coordination request-transfer`
 
@@ -679,18 +696,19 @@ session identity, native status, and delivery behavior.
 
 ```
 agent-mail install [--dry-run] [--native-audit] [--no-codex]
-                   [--replace-claude] [--replace-codex]
+                   [--replace-claude] [--replace-agy] [--replace-codex]
                    [--replace-kimi] [--replace-gemini] [--replace-opencode]
 ```
 
 On macOS, writes the config template if missing, installs the LaunchAgent and
 bootstraps the daemon to start at boot, and registers agent-mail with Claude
-Code and Codex. It also registers Kimi Code, Gemini CLI, and OpenCode when their
-user config directories exist. Existing registrations that match this install are
-preserved; ones that point elsewhere are left unchanged unless the matching
-`--replace-claude`, `--replace-codex`, `--replace-kimi`, `--replace-gemini`, or
-`--replace-opencode` flag is passed. `--no-codex` skips Codex registration, and `--native-audit`
-adds a Claude hook that audits native SendMessage traffic.
+Code and Codex. It also registers Antigravity CLI, Kimi Code, Gemini CLI, and
+OpenCode when their user config directories exist. Existing registrations
+that match this install are preserved; ones that point elsewhere are left
+unchanged unless the matching `--replace-claude`, `--replace-agy`,
+`--replace-codex`, `--replace-kimi`, `--replace-gemini`, or
+`--replace-opencode` flag is passed. `--no-codex` skips Codex registration,
+and `--native-audit` adds a Claude hook that audits native SendMessage traffic.
 
 `--dry-run` is available on every platform and makes no changes. It prints a
 versioned JSON object containing the runtime and entry points that an install
@@ -700,21 +718,22 @@ plugin registration conflict that silently disables channel push.
 ### `hooks`
 
 ```
-agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+agent-mail hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
 ```
 
-Installs, removes, or reports the unread-mail reminder hooks for pull-only
+Installs, removes, or reports unread-mail reminder hooks for pull-only
 harnesses. With no harness flag, install and uninstall apply to every harness
-whose config directory exists (`~/.codex`, `~/.kimi-code`, `~/.gemini`). Codex
-gains synchronous `UserPromptSubmit` and `Stop` hooks plus an asynchronous
-`PostToolUse` hook in `~/.codex/hooks.json`; Kimi gains marker-delimited
-`[[hooks]]` entries for `UserPromptSubmit` and `Stop` in
-`~/.kimi-code/config.toml`; Gemini gains a `BeforeAgent` hook in
-`~/.gemini/settings.json`. `--gemini-after-tool`
+whose config directory exists (`~/.gemini/config`, `~/.codex`,
+`~/.kimi-code`, `~/.gemini`). Agy gains direct `PreInvocation` and `Stop`
+handlers in `~/.gemini/config/hooks.json`. Codex gains synchronous
+`UserPromptSubmit` and `Stop` hooks plus an asynchronous `PostToolUse` hook in
+`~/.codex/hooks.json`. Kimi gains marker-delimited `[[hooks]]` entries for
+`UserPromptSubmit` and `Stop` in `~/.kimi-code/config.toml`. Gemini gains a
+`BeforeAgent` hook in `~/.gemini/settings.json`; `--gemini-after-tool`
 additionally installs Gemini's `AfterTool` hook, which is opt-in because
-Gemini waits for each hook to finish. `status` prints, per harness, whether
-the hooks are installed and on which events. The transforms are additive and
-idempotent, preserve neighboring hooks, and are fully removed by `uninstall`.
+Gemini waits for each hook to finish. `status` prints the installed events for
+each harness. The transforms are additive, idempotent, preserve neighboring
+hooks, and are fully removed by `uninstall`.
 [reminders.md](reminders.md) covers setup and verification.
 
 ### `uninstall`

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve the previous Codex MCP registration when replacement fails, and
+  stop treating every failed `codex mcp get` probe as proof that the entry is
+  absent.
+- Record each live intended recipient when mail enters the spool. Known channel
+  setup failures now report `push-unreachable` instead of `pushed`; attached
+  recipients that never poll remain visible as `pending`.
+- Keep `agent-mail inbox` from acknowledging direct mail addressed to another
+  session in the same project.
 - Stop giving an OMP session a second mail identity. Its push transport joins
   the session registered under its verified host pid; when no session is
   registered there yet — the ordinary startup order — or several are, the
@@ -19,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Accept cross-project MCP path claims when `claim_path` receives the
+  destination project's canonical absolute path.
+- Add versioned `agent-mail inbox --json` output with structured sender
+  project, name, and session fields.
+- Include the process ID that establishes liveness in `list_sessions` output.
 - Resolve advisory session identity with
   `session-address --project ABS --session RAW --json`, using only the fresh
   listener snapshot and failing closed without registry scans or state writes.
@@ -43,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Format agent-mail status information for Kimi Code status lines.
 
 ### Changed
+
+- Make path claims one-record-per-acquisition with exact-repeat idempotence,
+  observed target kinds, future-name reservation, one-time release tokens,
+  retained release history, session restart grace, and plan ownership tied to
+  research-plan work leases.
+- Require both declared authority and a reason for forced coordination
+  recovery, and record both in the recovery audit log.
 
 - Collect OMP mail status in the daemon and serve it through the versioned
   session-status API instead of launching a status CLI in each session.

@@ -75,11 +75,11 @@ export function removeNativeAuditHook(
 
 // --- reminder hooks (pull-only harnesses) -------------------------------------
 //
-// Codex, Kimi, and Gemini never learn about unread mail unless they ask, so
-// `agent-mail hooks install` registers harness hooks that run `agent-mail
-// remind` on turn activity and, where supported, Stop. Every transform keys on the command string (the hook's
-// routing identity), preserves neighbor hooks, and returns {document, changed}
-// like the native-audit transforms above.
+// Agy, Codex, Kimi, and Gemini never learn about unread mail unless they ask,
+// so `agent-mail hooks install` registers harness hooks that run `agent-mail
+// remind` on turn activity and, where supported, Stop. Every transform keys on
+// the command string (the hook's routing identity), preserves neighbor hooks,
+// and returns {document, changed} like the native-audit transforms above.
 
 /** Match a hook handler installed by `agent-mail hooks install`. */
 function isReminderHookHandler(value: unknown, command: string): boolean {
@@ -146,6 +146,88 @@ function removeReminderHandlers(
     output.hooks[event] = kept;
   }
   return changed;
+}
+/** Agy stores named hook definitions at the document root. */
+function agyEventHasReminderHook(
+  document: Record<string, unknown>,
+  event: string,
+  command: string,
+): boolean {
+  for (const hook of Object.values(document)) {
+    if (!isObject(hook)) continue;
+    const handlers = hook[event];
+    if (
+      Array.isArray(handlers) &&
+      handlers.some((handler) => isReminderHookHandler(handler, command))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export const AGY_REMINDER_HOOK = "agent-mail-reminder";
+export const AGY_REMINDER_EVENTS = ["PreInvocation", "Stop"] as const;
+
+/** Add Agy's direct PreInvocation and Stop command handlers. */
+export function addReminderHookAgy(
+  document: Record<string, unknown>,
+  command: string,
+): { document: Record<string, unknown>; changed: boolean } {
+  const output = structuredClone(document);
+  const existing = output[AGY_REMINDER_HOOK];
+  const hook = isObject(existing) ? existing : {};
+  let changed = false;
+  for (const event of AGY_REMINDER_EVENTS) {
+    if (agyEventHasReminderHook(output, event, command)) continue;
+    const handlers = Array.isArray(hook[event]) ? hook[event] : [];
+    handlers.push({
+      type: "command",
+      command: `${command} --event ${event}`,
+      timeout: 5,
+    });
+    hook[event] = handlers;
+    changed = true;
+  }
+  if (changed) output[AGY_REMINDER_HOOK] = hook;
+  return { document: output, changed };
+}
+
+/** Remove Agy reminder handlers while preserving every neighboring hook. */
+export function removeReminderHookAgy(
+  document: Record<string, unknown>,
+  command: string,
+): { document: Record<string, unknown>; changed: boolean } {
+  const output = structuredClone(document);
+  let changed = false;
+  for (const [name, hook] of Object.entries(output)) {
+    if (!isObject(hook)) continue;
+    let removedFromHook = false;
+    for (const event of AGY_REMINDER_EVENTS) {
+      const handlers = hook[event];
+      if (!Array.isArray(handlers)) continue;
+      const kept = handlers.filter(
+        (handler) => !isReminderHookHandler(handler, command),
+      );
+      if (kept.length === handlers.length) continue;
+      changed = true;
+      removedFromHook = true;
+      if (kept.length > 0) hook[event] = kept;
+      else delete hook[event];
+    }
+    if (removedFromHook && Object.keys(hook).length === 0) delete output[name];
+  }
+  return { document: output, changed };
+}
+
+/** Agy events with an installed reminder handler. */
+export function agyReminderHookEvents(
+  document: Record<string, unknown>,
+  command: string,
+): string[] {
+  return AGY_REMINDER_EVENTS.filter((event) =>
+    agyEventHasReminderHook(document, event, command),
+  );
 }
 
 /** Codex events the reminder hook is installed under, in install order. */
@@ -378,6 +460,68 @@ export function codexRegistrationMatches(
     transport.args.length === 1 &&
     transport.args[0] === channelPath
   );
+}
+
+export type CodexRegistrationProbe =
+  | { status: "unavailable"; detail: string }
+  | { status: "absent" }
+  | { status: "failed"; detail: string }
+  | { status: "invalid"; detail: string }
+  | { status: "present"; value: unknown };
+
+/** Interpret `codex mcp get --json` without treating every command failure as
+ * proof that the requested entry is absent. */
+export function classifyCodexRegistrationProbe(
+  result: {
+    status: number | null;
+    stdout: string;
+    stderr: string;
+    error?: Error;
+  },
+  serverName: string,
+): CodexRegistrationProbe {
+  if (result.error) {
+    return { status: "unavailable", detail: result.error.message };
+  }
+  if (result.status !== 0) {
+    const output = (result.stderr || result.stdout).trim();
+    const missing = `No MCP server named '${serverName}' found.`;
+    return result.status === 1 && output === `Error: ${missing}`
+      ? { status: "absent" }
+      : {
+          status: "failed",
+          detail:
+            output ||
+            `codex mcp get exited with status ${result.status ?? "unknown"}`,
+        };
+  }
+  try {
+    return {
+      status: "present",
+      value: JSON.parse(result.stdout) as unknown,
+    };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return { status: "invalid", detail: error.message };
+  }
+}
+
+export type CodexReplacementStatus =
+  | "replaced"
+  | "remove-failed"
+  | "add-failed-restored";
+
+/** Replace a Codex MCP entry as a transaction over its config snapshot. */
+export function replaceCodexRegistrationTransaction(
+  configSnapshot: string,
+  remove: () => boolean,
+  add: () => boolean,
+  restore: (snapshot: string) => void,
+): CodexReplacementStatus {
+  if (!remove()) return "remove-failed";
+  if (add()) return "replaced";
+  restore(configSnapshot);
+  return "add-failed-restored";
 }
 
 /** Whether a standard JSON `mcpServers` stdio entry belongs to this checkout.

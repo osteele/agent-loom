@@ -54,6 +54,12 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
   const project = join(root, "project");
   mkdirSync(home);
   mkdirSync(project);
+  const sibling = join(root, "sibling");
+  mkdirSync(sibling);
+  const canonicalSibling = realpathSync(sibling);
+  const siblingAlias = join(root, "sibling-alias");
+  symlinkSync(canonicalSibling, siblingAlias);
+  const claimsDirectory = join(home, ".claude", "agent-mail", "claims");
   const environment = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] => entry[1] !== undefined,
@@ -77,6 +83,7 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     const tools = await client.listTools();
     const claimTool = tools.tools.find((tool) => tool.name === "claim_path");
     expect(claimTool?.inputSchema.properties).toHaveProperty("paths");
+    expect(claimTool?.inputSchema.properties).toHaveProperty("project");
     const inboxTool = tools.tools.find((tool) => tool.name === "check_inbox");
     expect(inboxTool?.description).toContain(
       "asks to check or read mail or an unqualified inbox",
@@ -91,6 +98,8 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     expect(
       tools.tools.some((tool) => tool.name === "respond_coordination_transfer"),
     ).toBe(true);
+    const sessions = await client.callTool({ name: "list_sessions" });
+    expect(textContent(sessions)).toContain("[live pid:");
 
     await client.callTool({ name: "check_inbox" });
     const registry = join(home, ".claude", "agent-mail", "registry");
@@ -108,9 +117,26 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
       arguments: { paths: ["Sources/Schedule.swift", "Checks/main.swift"] },
     });
     const claimedText = textContent(claimed);
-    expect(claimedText).toContain("2 files claimed");
+    expect(claimedText).toContain("2 targets claimed");
+    const releaseToken = /release token ([A-Za-z0-9_-]+)/.exec(claimedText)?.[1];
+    expect(releaseToken).toBeDefined();
     const claimId = /claim ([0-9a-f-]+)/.exec(claimedText)?.[1];
     expect(claimId).toBeDefined();
+    await expect(
+      client.callTool({
+        name: "recover_coordination",
+        arguments: {
+          coordination_id: claimId,
+          authority: "operator",
+        },
+      }),
+    ).rejects.toThrow("forced recovery requires a reason");
+    const repeated = await client.callTool({
+      name: "claim_path",
+      arguments: { paths: ["Checks/main.swift", "Sources/Schedule.swift"] },
+    });
+    expect(textContent(repeated)).toContain("existing claim");
+    expect(textContent(repeated)).not.toContain("release token");
 
     const active = await client.callTool({ name: "list_claims" });
     expect(textContent(active).split("\n")).toHaveLength(1);
@@ -119,13 +145,65 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
 
     await client.callTool({
       name: "release_claim",
-      arguments: { claim_id: claimId },
+      arguments: { release_token: releaseToken },
     });
     const empty = await client.callTool({ name: "list_claims" });
     expect(textContent(empty)).toBe("no active claims");
+
+    await expect(
+      client.callTool({
+        name: "claim_path",
+        arguments: {
+          project: siblingAlias,
+          path: "Sources/CrossProject.swift",
+        },
+      }),
+    ).rejects.toThrow("must be canonical");
+
+    const crossProject = await client.callTool({
+      name: "claim_path",
+      arguments: {
+        project: canonicalSibling,
+        path: "Sources/CrossProject.swift",
+      },
+    });
+    const crossProjectText = textContent(crossProject);
+    const crossProjectToken = /release token ([A-Za-z0-9_-]+)/.exec(
+      crossProjectText,
+    )?.[1];
+    expect(crossProjectToken).toBeDefined();
+    expect(textContent(crossProject)).toContain(
+      join(canonicalSibling, "Sources", "CrossProject.swift"),
+    );
+    const released = await client.callTool({
+      name: "release_claim",
+      arguments: { release_token: crossProjectToken },
+    });
+    expect(textContent(released)).toContain("CrossProject.swift");
+
+    // Leave one cross-project claim active. Closing a channel starts the
+    // session-absence lifecycle; it does not discard the claim.
+    await client.callTool({
+      name: "claim_path",
+      arguments: {
+        project: canonicalSibling,
+        path: "Sources/ReleasedAtShutdown.swift",
+      },
+    });
   } finally {
     await client.close();
   }
+  const claimFiles = existsSync(claimsDirectory)
+    ? readdirSync(claimsDirectory, { recursive: true })
+        .map(String)
+        .filter((name) => name.endsWith(".json"))
+    : [];
+  expect(claimFiles.filter((name) => !name.includes("/released/"))).toHaveLength(
+    1,
+  );
+  expect(claimFiles.filter((name) => name.includes("/released/"))).toHaveLength(
+    2,
+  );
 });
 
 test("a live channel restores a missing registry entry without another tool call", async () => {
@@ -417,7 +495,7 @@ test("logical work can be acquired, updated, listed, and released over MCP", asy
   }
 });
 
-test("coordination tools expose and recover only dead-session records", async () => {
+test("coordination recovery starts grace for an offline session claim", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-recovery-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
@@ -428,6 +506,7 @@ test("coordination tools expose and recover only dead-session records", async ()
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
   const claimDirectory = join(home, ".claude", "agent-mail", "claims", slug);
   mkdirSync(claimDirectory, { recursive: true });
+  const now = new Date().toISOString();
   writeFileSync(
     join(claimDirectory, "stale-claim.json"),
     JSON.stringify({
@@ -436,13 +515,18 @@ test("coordination tools expose and recover only dead-session records", async ()
       project: canonical,
       path: join(canonical, "notes.md"),
       pathType: "file",
+      paths: [{ path: join(canonical, "notes.md"), pathType: "file" }],
+      releaseToken: "retained-test-token",
+      state: "active",
       owner: {
         id: "dead-session",
         label: "Offline Agent",
+        kind: "session",
         sessionId: "dead-session",
         pid: 999_999,
       },
-      createdAt: "2026-08-12T00:00:00.000Z",
+      createdAt: now,
+      lastActivityAt: now,
     }),
   );
   const environment = Object.fromEntries(
@@ -461,23 +545,23 @@ test("coordination tools expose and recover only dead-session records", async ()
 
   try {
     await client.connect(transport);
-    const tools = await client.listTools();
-    expect(tools.tools.map((tool) => tool.name)).toContain("list_coordination");
-    expect(tools.tools.map((tool) => tool.name)).toContain(
-      "recover_coordination",
+    const listed = textContent(
+      await client.callTool({ name: "list_coordination" }),
     );
-    const listed = await client.callTool({ name: "list_coordination" });
-    expect(textContent(listed)).toContain("stale-claim");
-    expect(textContent(listed)).toContain("[owner-offline]");
+    expect(listed).toContain("stale-claim");
+    expect(listed).toContain("[owner-offline]");
 
-    const recovered = await client.callTool({
-      name: "recover_coordination",
-      arguments: { coordination_id: "stale-claim" },
-    });
-    expect(textContent(recovered)).toContain("Offline Agent");
-    expect(
-      textContent(await client.callTool({ name: "list_coordination" })),
-    ).toBe("no active coordination");
+    await expect(
+      client.callTool({
+        name: "recover_coordination",
+        arguments: { coordination_id: "stale-claim" },
+      }),
+    ).rejects.toThrow("is in restart grace");
+    const inGrace = textContent(
+      await client.callTool({ name: "list_coordination" }),
+    );
+    expect(inGrace).toContain("stale-claim");
+    expect(inGrace).toContain("[restart-grace]");
   } finally {
     await client.close();
   }

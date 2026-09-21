@@ -76,3 +76,41 @@ Q, accepting D.*
   now keeps one name across resumes. The grouping is the enforcement: a new
   native source appended to a flat chain would have sorted below the launcher
   id and silently done nothing, which is how this arose.
+
+- **2026-09-22** — In the context of acquiring a path claim, facing targets
+  that do not exist yet, we decided to accept a nonexistent target with a
+  declared kind defaulting to file, and neglected requiring the target to
+  exist, to let an agent reserve a name before creating the file, accepting
+  that a declared kind can disagree with what is later created. WebDAV's
+  locked-empty resources are the precedent.
+
+- **2026-09-22** — In the context of a session-owned claim whose session has
+  no process, facing a resumed session that returns under the same logical
+  id, we decided to hold the claim for a fifteen-minute restart grace measured
+  from the first observed absence, and neglected releasing at once as
+  [0007](0007-manual-owner-expiry.md)'s asymmetry argument would, to let a
+  resume continue behind its own claims, accepting that every crashed session
+  blocks peers for up to the grace plus observation latency, and that
+  harnesses which mint a new id on resume gain nothing from it.
+
+- **2026-09-22** — In the context of releasing a claim, facing manual owners
+  identified only by a typed label that two agents can share, we decided to
+  issue an unguessable release token at acquisition and to make the token, a
+  proven session id, or a plan's current executor the only release authority,
+  and neglected label equality, to stop one label's holders releasing each
+  other's claims, accepting that a caller which loses its token waits for
+  expiry or supplies user authority.
+
+- **2026-09-22** — In the context of a claim whose deadline has passed, facing
+  either the daemon or an acquiring transaction noticing first, we decided to
+  record the reason and time the deadline implies, and neglected a separate
+  `stale_reclamation` reason for acquisition-time settlement, so provenance
+  does not depend on which observer ran, accepting that the two paths share
+  one release routine.
+
+- **2026-09-22** — In the context of releasing a claim twice, facing ids that
+  vanish on release, we decided to retain released claims for thirty days so
+  a repeated release answers `already_released`, and neglected retaining them
+  forever, to keep release idempotent for as long as a caller plausibly
+  retries, accepting that an older id answers `unknown` and that history reads
+  are excluded from the hot path.

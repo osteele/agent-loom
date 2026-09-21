@@ -72,7 +72,16 @@ function deliveryState(
   receipts: DeliveryReceipt[],
   messageId: string,
   sessionId: string,
-): "spooled" | "held" | "pushed" | "read" | "refused" | "expired" | undefined {
+):
+  | "spooled"
+  | "pending"
+  | "held"
+  | "pushed"
+  | "push-unreachable"
+  | "read"
+  | "refused"
+  | "expired"
+  | undefined {
   const r = latestReceiptFor(receipts, messageId, sessionId);
   return r?.status;
 }
@@ -352,7 +361,12 @@ function assertInvariants(state: DeliveryModel | DeliveryReal): void {
         expect(prior).toBe(true);
       }
 
-      if (status && ["pushed", "read", "refused", "expired"].includes(status)) {
+      if (
+        status &&
+        ["pushed", "push-unreachable", "read", "refused", "expired"].includes(
+          status,
+        )
+      ) {
         const latest = latestReceiptFor(state.receipts, messageId, sessionId);
         expect(latest?.status).toBe(status);
       }

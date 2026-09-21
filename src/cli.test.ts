@@ -148,6 +148,102 @@ test("status-line accepts Kimi cwd payload and launcher session id", async () =>
     rmSync(root, { recursive: true });
   }
 });
+test("agy reminder uses workspacePaths and stops after one injected edge", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-agy-remind-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const hookCwd = join(home, ".gemini", "config");
+  const stateRoot = join(home, ".claude", "agent-mail");
+  const sessionId = "agy-session";
+  const cli = join(import.meta.dir, "cli.ts");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(hookCwd, { recursive: true });
+  mkdirSync(stateRoot, { recursive: true });
+  const canonical = realpathSync(project);
+  writeFileSync(
+    join(stateRoot, "unread-summary.json"),
+    JSON.stringify({
+      version: 1,
+      generatedAt: Date.now(),
+      generatedBy: process.pid,
+      bySession: {
+        [sessionId]: {
+          project: canonical,
+          unread: 1,
+          newestId: "message-1",
+          newestTs: new Date().toISOString(),
+        },
+      },
+    }),
+  );
+  const env = {
+    ...process.env,
+    HOME: home,
+    AGENT_SESSION_ID: sessionId,
+    CLAUDE_CODE_SESSION_ID: undefined,
+    CODEX_THREAD_ID: undefined,
+    GEMINI_SESSION_ID: undefined,
+  };
+  const outputs: string[] = [];
+
+  try {
+    for (let invocationNum = 0; invocationNum < 2; invocationNum += 1) {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          cli,
+          "remind",
+          "--format",
+          "agy",
+          "--event",
+          "PreInvocation",
+        ],
+        {
+          cwd: hookCwd,
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+          env,
+        },
+      );
+      child.stdin.write(
+        JSON.stringify({
+          conversationId: "agy-native-conversation",
+          invocationNum,
+          workspacePaths: [project],
+        }),
+      );
+      child.stdin.end();
+      expect(await child.exited).toBe(0);
+      outputs.push((await new Response(child.stdout).text()).trim());
+    }
+
+    expect(JSON.parse(outputs[0])).toEqual({
+      injectSteps: [
+        {
+          ephemeralMessage: expect.stringContaining(
+            "Agent-mail: 1 unread message(s)",
+          ),
+        },
+      ],
+    });
+    expect(outputs[1]).toBe("{}");
+    const announced = JSON.parse(
+      readFileSync(
+        join(
+          stateRoot,
+          "announced",
+          `${projectSlug(canonical)}-${sessionId}.json`,
+        ),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(announced.project).toBe(canonical);
+    expect(announced.lastNewestId).toBe("message-1");
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
 
 test("status-line exposes this session's work through an opt-in versioned field", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-statusline-work-"));
@@ -722,8 +818,9 @@ test("claim-path groups repeated path flags under one claim id", async () => {
     );
     expect(await claim.exited).toBe(0);
     const output = await new Response(claim.stdout).text();
-    const claimId = output.split("\n")[0];
+    const [claimId, releaseToken] = output.split("\n")[0].split(" ");
     expect(claimId).toMatch(/^[0-9a-f-]+$/);
+    expect(releaseToken).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(output).toContain("file ");
     expect(output).toContain("one.swift");
     expect(output).toContain("two.swift");
@@ -743,10 +840,8 @@ test("claim-path groups repeated path flags under one claim id", async () => {
         process.execPath,
         cli,
         "release-claim",
-        "--project",
-        project,
-        "--id",
-        claimId,
+        "--token",
+        releaseToken,
       ],
       { env, stdout: "pipe", stderr: "pipe" },
     );
@@ -1479,6 +1574,10 @@ function seedInbox(
       from: "peer",
       project: canonical,
       message: "broadcast body",
+      meta: {
+        fromName: "Quiet Peer",
+        sessionId: "peer-session",
+      },
     },
     {
       id: "note-b",
@@ -1486,6 +1585,10 @@ function seedInbox(
       from: "peer",
       project: canonical,
       message: "direct body",
+      meta: {
+        fromName: "Quiet Peer",
+        sessionId: "peer-session",
+      },
     },
   ];
   writeFileSync(
@@ -1804,6 +1907,125 @@ test("inbox read with a session id records the pull and marks messages read", as
     );
     expect(await again.exited).toBe(0);
     expect(await new Response(again.stdout).text()).toStartWith("inbox empty");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("inbox text and JSON preserve sender identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-json-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    const { home, project } = seedInbox(root);
+    const text = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project, "--peek"],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await text.exited).toBe(0);
+    expect(await new Response(text.stdout).text()).toContain(
+      "from peer (Quiet Peer)",
+    );
+
+    const json = Bun.spawn(
+      [
+        process.execPath,
+        cli,
+        "inbox",
+        "--project",
+        project,
+        "--peek",
+        "--json",
+      ],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await json.exited).toBe(0);
+    const result = JSON.parse(await new Response(json.stdout).text()) as {
+      schemaVersion: number;
+      scope: string;
+      counts: { returned: number; markedRead: number };
+      messages: {
+        sender: { project: string; name: string; sessionId: string };
+      }[];
+    };
+    expect(result.schemaVersion).toBe(1);
+    expect(result.scope).toBe("project");
+    expect(result.counts).toEqual(
+      expect.objectContaining({ returned: 2, markedRead: 0 }),
+    );
+    expect(result.messages[0]?.sender).toEqual({
+      project: "peer",
+      name: "Quiet Peer",
+      sessionId: "peer-session",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("inbox read cannot acknowledge mail directed to a sibling session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-sibling-"));
+  const cli = join(import.meta.dir, "cli.ts");
+  try {
+    const { home, project, slug } = seedInbox(root);
+    const inboxPath = join(
+      home,
+      ".claude",
+      "agent-mail",
+      "inbox",
+      `${slug}.jsonl`,
+    );
+    const sibling = {
+      id: "sibling-only",
+      ts: "2026-08-31T12:02:00.000Z",
+      from: "peer",
+      project: realpathSync(project),
+      message: "private sibling body",
+      meta: {
+        fromName: "Quiet Peer",
+        sessionId: "peer-session",
+        toSession: "sibling-session",
+      },
+    };
+    writeFileSync(
+      inboxPath,
+      `${readFileSync(inboxPath, "utf8")}${JSON.stringify(sibling)}\n`,
+    );
+
+    const child = Bun.spawn(
+      [process.execPath, cli, "inbox", "--project", project],
+      {
+        env: { ...process.env, HOME: home, ...INBOX_READER_ENV },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stdout).text()).toContain(
+      "marked 2 message(s) read",
+    );
+
+    const receiptsPath = join(
+      home,
+      ".claude",
+      "agent-mail",
+      "receipts",
+      `${slug}.jsonl`,
+    );
+    const receipts = readFileSync(receiptsPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { messageId: string });
+    expect(
+      receipts.some((receipt) => receipt.messageId === "sibling-only"),
+    ).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

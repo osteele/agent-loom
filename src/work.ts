@@ -14,6 +14,11 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { type LockOwner, withFileLock } from "./lock.ts";
 import { WORK_DIR, canonicalProject, projectSlug } from "./paths.ts";
+import {
+  type ClaimStore,
+  claims,
+  type PathClaimReleaseReason,
+} from "./claims.ts";
 
 export interface WorkOwner {
   id: string;
@@ -171,11 +176,37 @@ function ownerMatches(
     : sameWorkOwner(owner, credential);
 }
 
+export type WorkReleaseOutcome = "completed" | "abandoned";
+
+function planClaimReleaseReason(
+  outcome?: WorkReleaseOutcome,
+): Extract<
+  PathClaimReleaseReason,
+  "plan-completed" | "plan-abandoned" | "plan-lease-lost"
+> {
+  if (outcome === "completed") return "plan-completed";
+  if (outcome === "abandoned") return "plan-abandoned";
+  return "plan-lease-lost";
+}
+function releasePlanClaims(
+  claimStore: ClaimStore,
+  lease: WorkLease,
+  outcome?: WorkReleaseOutcome,
+): void {
+  if (lease.resource.type !== "research-plan") return;
+  claimStore.releasePlanOwner(
+    { project: lease.project, stem: lease.resource.key },
+    planClaimReleaseReason(outcome),
+  );
+}
+
 export class WorkStore {
   private readonly root: string;
+  private readonly claimStore: ClaimStore;
 
-  constructor(root = WORK_DIR) {
+  constructor(root = WORK_DIR, claimStore = claims) {
     this.root = root;
+    this.claimStore = claimStore;
   }
 
   private projectDir(project: string): string {
@@ -338,6 +369,7 @@ export class WorkStore {
           // interruption may over-block with two records but cannot create a
           // window where the resource has no owner.
           for (const stale of existing) {
+            releasePlanClaims(this.claimStore, stale);
             unlinkSync(join(this.projectDir(canonical), `${stale.id}.json`));
           }
         }
@@ -388,6 +420,7 @@ export class WorkStore {
     project: string,
     leaseId: string,
     owner?: string | WorkOwner,
+    outcome?: WorkReleaseOutcome,
   ): WorkLease {
     const canonical = canonicalProject(project);
     return this.withLock(
@@ -400,6 +433,7 @@ export class WorkStore {
             `work lease ${leaseId} belongs to ${lease.owner.label}; only its owner can release it`,
           );
         }
+        releasePlanClaims(this.claimStore, lease, outcome);
         unlinkSync(join(this.projectDir(canonical), `${lease.id}.json`));
         return lease;
       },
@@ -461,6 +495,7 @@ export class WorkStore {
           `work lease ${leaseId} belongs to ${lease.owner.label}; its owner is live or cannot be verified offline`,
         );
       }
+      releasePlanClaims(this.claimStore, lease);
       unlinkSync(join(this.projectDir(canonical), `${lease.id}.json`));
       return lease;
     });
@@ -475,6 +510,7 @@ export class WorkStore {
           (ownerPid === undefined || lease.owner.pid === ownerPid),
       );
       for (const lease of leases) {
+        releasePlanClaims(this.claimStore, lease);
         unlinkSync(join(this.projectDir(canonical), `${lease.id}.json`));
       }
       return leases.length;

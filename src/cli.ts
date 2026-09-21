@@ -10,15 +10,15 @@
  *   agent-mail session-address --project <absolute-dir> --session <raw-id> --json
  *   agent-mail mute|unmute (--session <name-or-id> | --project <dir>)
  *   agent-mail claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
- *   agent-mail claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>]
- *   agent-mail claims [--project <dir>]
- *   agent-mail release-claim --id <claim-id> [--project <dir>]
+ *   agent-mail claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>] [--plan <stem> [--plan-project <dir>]]
+ *   agent-mail claims [--project <dir> | --all] [--history]
+ *   agent-mail release-claim (--id <claim-id> | --token <release-token>) [--project <dir>]
  *   agent-mail work list [--project <dir> | --all]
  *   agent-mail work acquire --type <type> --key <key> [--project <dir>] [--owner <label>]
  *   agent-mail work update --id <work-id> [--state working|waiting]
- *   agent-mail work release --id <work-id> [--project <dir>]
+ *   agent-mail work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]
  *   agent-mail coordination list [--project <dir> | --all]
- *   agent-mail coordination recover --id <coordination-id> [--authority <text>]
+ *   agent-mail coordination recover --id <coordination-id> [--authority <text> --reason <text>]
  *
  * Dashboards:
  *   agent-mail dashboard [--port N] [--open] [--no-tui]
@@ -28,8 +28,8 @@
  *   agent-mail status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
  *
  * Reminders (hook-driven, for pull-only harnesses):
- *   agent-mail remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
- *   agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+ *   agent-mail remind --format agy|codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
+ *   agent-mail hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
  *
  * Daemon management (launchd-aware: uses launchctl when the LaunchAgent is
  * installed, bare pidfile mode otherwise):
@@ -67,6 +67,8 @@ import {
   type Claim,
   ClaimConflictError,
   type ClaimOwner,
+  type PlanClaimIdentity,
+  claimOwnerKind,
   claims,
   pathClaimTargets,
 } from "./claims.ts";
@@ -83,10 +85,14 @@ import { openBrowser, serveDashboard } from "./dashboard.ts";
 import { buildReadOnlyState } from "./dashboardData.ts";
 import { classifyFallback, settled, withAttemptKey } from "./delivery.ts";
 import {
+  type CodexRegistrationProbe,
   addNativeAuditHook,
+  addReminderHookAgy,
   addReminderHookCodex,
   addReminderHookGemini,
   addReminderHookKimi,
+  agyReminderHookEvents,
+  classifyCodexRegistrationProbe,
   claudeRegistrationMatches,
   codexEntrySubTables,
   codexRegistrationMatches,
@@ -96,10 +102,12 @@ import {
   kimiReminderHookEvents,
   removeNativeAuditHook,
   removeOpenCodeMcpRegistration,
+  removeReminderHookAgy,
   removeReminderHookCodex,
   removeReminderHookGemini,
   removeReminderHookKimi,
   removeStdioMcpRegistration,
+  replaceCodexRegistrationTransaction,
   restoreCodexEntrySubTables,
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
@@ -172,6 +180,7 @@ import {
   knownProjects,
   markAllMessagesRead,
   markMessagesRead,
+  messageVisibleToSession,
   readMessages,
   readReceipts,
 } from "./spool.ts";
@@ -187,11 +196,13 @@ import { weftJobsForSession } from "./weftJobs.ts";
 import {
   type WorkLease,
   type WorkProgress,
+  type WorkReleaseOutcome,
   type WorkState,
+  WorkConflictError,
+  sameWorkOwner,
   validateWorkProgress,
   work,
 } from "./work.ts";
-import { WorkConflictError } from "./work.ts";
 import { runWorkTui, terminalText, workTuiOptions } from "./workTui.ts";
 import {
   assertGenericWorkResource,
@@ -289,6 +300,8 @@ const CODEX_CONFIG_PATH = join(homedir(), ".codex", "config.toml");
 const KIMI_CONFIG_PATH = join(homedir(), ".kimi-code", "config.toml");
 const KIMI_MCP_PATH = join(homedir(), ".kimi-code", "mcp.json");
 const GEMINI_SETTINGS_PATH = join(homedir(), ".gemini", "settings.json");
+const AGY_HOOKS_PATH = join(homedir(), ".gemini", "config", "hooks.json");
+const AGY_MCP_PATH = join(homedir(), ".gemini", "config", "mcp_config.json");
 const OPENCODE_CONFIG_DIR = join(homedir(), ".config", "opencode");
 
 function openCodeConfigPath(): string {
@@ -919,6 +932,7 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
       : canonicalProject(process.cwd());
   const limit = typeof flags.limit === "string" ? Number(flags.limit) : 20;
   const peek = flags.peek === true;
+  const json = flags.json === true;
   // A CLI inbox read is an explicit inbox check, so it stamps the same signal
   // the MCP check_inbox tool does; without it a CLI-only session reads as idle
   // while it works. Attribution is what needs proving, not the read itself.
@@ -949,48 +963,97 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
         : "";
     return `[returned ${returned} of ${matched.length} matching in this project across all sessions; ${projectUnread} unread in this project${more}; not scoped to a session — status-line and check_inbox report one session's subset]`;
   };
-  if (messages.length === 0) {
-    console.log(`inbox empty ${scope(0)}`);
-    return;
-  }
-  for (const m of messages) {
-    const reply = m.replyTo ? ` ↩${m.replyTo.slice(0, 8)}` : "";
-    console.log(
-      `${m.id} ${m.read ? "read" : "unread"} [${m.ts}] from ${displayName(m.from)}${reply}: ${m.message}`,
-    );
-  }
-  console.log(scope(messages.length));
-  if (!sessionId) {
-    console.error(
-      "note: no verified agent session for this process; this read is unattributed and leaves the messages spooled",
-    );
-    return;
-  }
-  // The returned messages entered the caller's context with this output — the
-  // one delivery this read can verify — so the pull records itself the same way
-  // the check_inbox tool does, unless the caller peeks. See
-  // docs/decisions/0013. Receipts are append-only: settled ids are never
-  // re-stamped.
-  if (!peek) {
+
+  const acknowledged =
+    sessionId === undefined
+      ? []
+      : messages.filter((message) =>
+          messageVisibleToSession(message, sessionId),
+        );
+  let marked = 0;
+  if (sessionId && !peek) {
     const receipts = readReceipts(project);
-    for (const m of messages) {
-      if (settled(receipts, m.id, sessionId)) continue;
+    for (const message of acknowledged) {
+      if (settled(receipts, message.id, sessionId)) continue;
       appendReceipt(project, {
-        messageId: m.id,
+        messageId: message.id,
         ts: new Date().toISOString(),
         status: "pushed",
         sessionId,
         detail: "cli inbox",
       });
     }
-    const marked = markMessagesRead(
+    marked = markMessagesRead(
       project,
-      messages.filter((m) => !m.read).map((m) => m.id),
+      acknowledged
+        .filter((message) => !message.read)
+        .map((message) => message.id),
       sessionId,
     );
+  }
+
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          project,
+          scope: "project",
+          generatedAt: new Date().toISOString(),
+          readerSessionId: sessionId ?? null,
+          peek,
+          counts: {
+            matching: matched.length,
+            returned: messages.length,
+            omitted: matched.length - messages.length,
+            projectUnread,
+            readerVisible: acknowledged.length,
+            markedRead: marked,
+          },
+          messages: messages.map((message) => ({
+            id: message.id,
+            ts: message.ts,
+            read: message.read,
+            message: message.message,
+            sender: {
+              project: message.from,
+              name: message.meta?.fromName ?? null,
+              sessionId: message.meta?.sessionId ?? null,
+            },
+            toSession: message.meta?.toSession ?? null,
+            replyTo: message.replyTo ?? null,
+            threadId: message.threadId ?? null,
+            origin: message.origin ?? null,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (messages.length === 0) {
+    console.log(`inbox empty ${scope(0)}`);
+  } else {
+    for (const message of messages) {
+      const reply = message.replyTo ? ` ↩${message.replyTo.slice(0, 8)}` : "";
+      const senderName =
+        message.meta?.fromName ?? message.meta?.sessionId?.slice(0, 8);
+      const sender = senderName
+        ? `${displayName(message.from)} (${senderName})`
+        : displayName(message.from);
+      console.log(
+        `${message.id} ${message.read ? "read" : "unread"} [${message.ts}] from ${sender}${reply}: ${message.message}`,
+      );
+    }
+    console.log(scope(messages.length));
     if (marked > 0) {
       console.log(`marked ${marked} message(s) read`);
     }
+  }
+
+  if (!sessionId && messages.length > 0) {
+    console.error(
+      "note: no verified agent session for this process; this read is unattributed and leaves the messages spooled",
+    );
   }
 }
 
@@ -1220,15 +1283,17 @@ function cmdListeners(flags: Record<string, string | boolean>): void {
 
 // --- status line -------------------------------------------------------------
 
-/** Status-line payload fields this command consumes.
+/** Status-line and hook payload fields this command consumes.
  *
  * Claude Code supplies session_id plus workspace paths. Kimi supplies cwd;
  * its agent-mail identity comes from the launcher-minted AGENT_SESSION_ID,
- * because Kimi's payload sessionId belongs to a different namespace. */
+ * because Kimi's payload sessionId belongs to a different namespace. Agy
+ * supplies workspacePaths and inherits the launcher identity in hook commands. */
 interface StatusLinePayload {
   session_id?: string;
   cwd?: string;
   workspace?: { current_dir?: string; project_dir?: string };
+  workspacePaths?: string[];
 }
 
 /** Read a client status-line payload from stdin when there is one.
@@ -1392,24 +1457,24 @@ async function cmdStatusLine(
 
 // --- reminders (hook-driven, pull-only harnesses) ----------------------------
 
-/** Print an unread-mail reminder for a harness hook, or nothing at all.
+/** Print an unread-mail reminder for a harness hook, or a no-op response.
  *
- * Pull-only harnesses never learn about unread mail unless they ask, so
- * their hooks run this command on harness events and inject whatever it
- * prints into the model's context. The answer comes from the daemon's
- * unread-summary snapshot — a hook fires per turn and cannot afford a spool
- * scan per event.
+ * Pull-only harnesses never learn about unread mail unless they ask, so their
+ * hooks run this command on harness events and inject whatever it prints into
+ * the model's context. The answer comes from the daemon's unread-summary
+ * snapshot; a hook fires per turn and cannot afford a spool scan per event.
  *
- * Ordinary events and every failure exit 0 with machine-clean stdout. A new
- * reminder edge at Codex/Kimi Stop exits 2 with fixed text on stderr, asking
- * the harness for one more turn. The announced edge is written first, so the
- * same unread state cannot create a Stop loop. */
+ * Ordinary events and every failure exit 0. Agy receives JSON on every path.
+ * A new Codex/Kimi Stop edge exits 2 with fixed text on stderr. Agy requests
+ * the same follow-up through its JSON Stop response. The announced edge is
+ * written first so the same unread state cannot create a Stop loop. */
 async function cmdRemind(
   flags: Record<string, string | boolean>,
 ): Promise<void> {
   try {
     const format = flags.format;
     if (
+      format !== "agy" &&
       format !== "codex" &&
       format !== "kimi" &&
       format !== "gemini" &&
@@ -1417,7 +1482,7 @@ async function cmdRemind(
     ) {
       // Operator error, not a hook event: stderr is safe, stdout stays clean.
       console.error(
-        "agent-mail remind: --format codex|kimi|gemini|pi required",
+        "agent-mail remind: --format agy|codex|kimi|gemini|pi required",
       );
       return;
     }
@@ -1428,10 +1493,15 @@ async function cmdRemind(
         : (payload?.workspace?.project_dir ??
             payload?.workspace?.current_dir ??
             payload?.cwd ??
+            (Array.isArray(payload?.workspacePaths) &&
+            typeof payload.workspacePaths[0] === "string"
+              ? payload.workspacePaths[0]
+              : undefined) ??
             process.cwd()),
     );
     // Session id resolution order: explicit flag, the hook payload, Gemini's
-    // exported env var, then the usual chain (AGENT_SESSION_ID covers Kimi).
+    // exported env var, then the usual chain (AGENT_SESSION_ID covers Agy and
+    // Kimi).
     const sessionId =
       typeof flags.session === "string"
         ? flags.session
@@ -1486,20 +1556,21 @@ async function cmdRemind(
         );
       }
     }
-    // "silent": nothing on stdout, nothing stamped.
+    if (decision !== "remind" && format === "agy") console.log("{}");
   } catch {
-    // Fail open: any failure leaves stdout empty and exits 0, same as
-    // "nothing to say". Only a fully computed, persisted reminder edge may
-    // request continuation.
+    // Fail open. Agy still needs valid no-op JSON; other harnesses need clean
+    // stdout. Only a fully computed, persisted edge may request continuation.
+    if (flags.format === "agy") console.log("{}");
     process.exitCode = 0;
   }
 }
 
 // --- harness hook installation (agent-mail hooks) ------------------------------
 
-type HookHarness = "codex" | "kimi" | "gemini";
+type HookHarness = "agy" | "codex" | "kimi" | "gemini";
 
 const HOOK_CONFIG_PATHS: Record<HookHarness, string> = {
+  agy: AGY_HOOKS_PATH,
   codex: CODEX_HOOKS_PATH,
   kimi: KIMI_CONFIG_PATH,
   gemini: GEMINI_SETTINGS_PATH,
@@ -1526,7 +1597,7 @@ function readJsonDocument(path: string): Record<string, unknown> {
  * harness is in use; a config file is only ever created inside an existing
  * directory, never a directory itself. */
 function hookTargets(flags: Record<string, string | boolean>): HookHarness[] {
-  const all: HookHarness[] = ["codex", "kimi", "gemini"];
+  const all: HookHarness[] = ["agy", "codex", "kimi", "gemini"];
   const flagged = all.filter((harness) => flags[harness] === true);
   if (flagged.length > 0) return flagged;
   return all.filter((harness) =>
@@ -1540,9 +1611,13 @@ function hookEventsInstalled(harness: HookHarness, path: string): string[] {
     return kimiReminderHookEvents(readFileSync(path, "utf8"));
   }
   const document = readJsonDocument(path);
-  return harness === "codex"
-    ? codexReminderHookEvents(document, remindCommandBase("codex"))
-    : geminiReminderHookEvents(document, remindCommandBase("gemini"));
+  if (harness === "agy") {
+    return agyReminderHookEvents(document, remindCommandBase("agy"));
+  }
+  if (harness === "codex") {
+    return codexReminderHookEvents(document, remindCommandBase("codex"));
+  }
+  return geminiReminderHookEvents(document, remindCommandBase("gemini"));
 }
 
 function installHooks(harness: HookHarness, geminiAfterTool: boolean): void {
@@ -1563,6 +1638,16 @@ function installHooks(harness: HookHarness, geminiAfterTool: boolean): void {
     return;
   }
   const document = readJsonDocument(path);
+  if (harness === "agy") {
+    const result = addReminderHookAgy(document, remindCommandBase("agy"));
+    if (!result.changed) {
+      console.log("agy: reminder hooks already installed");
+      return;
+    }
+    writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
+    console.log(`agy: installed PreInvocation + Stop hooks in ${path}`);
+    return;
+  }
   if (harness === "codex") {
     const result = addReminderHookCodex(document, remindCommandBase("codex"));
     if (!result.changed) {
@@ -1605,10 +1690,14 @@ function uninstallHooks(harness: HookHarness): void {
     return;
   }
   const document = readJsonDocument(path);
-  const result =
-    harness === "codex"
-      ? removeReminderHookCodex(document, remindCommandBase("codex"))
-      : removeReminderHookGemini(document, remindCommandBase("gemini"));
+  let result: { document: Record<string, unknown>; changed: boolean };
+  if (harness === "agy") {
+    result = removeReminderHookAgy(document, remindCommandBase("agy"));
+  } else if (harness === "codex") {
+    result = removeReminderHookCodex(document, remindCommandBase("codex"));
+  } else {
+    result = removeReminderHookGemini(document, remindCommandBase("gemini"));
+  }
   if (!result.changed) {
     console.log(`${harness}: no reminder hook installed`);
     return;
@@ -1642,7 +1731,7 @@ function cmdHooks(
   if (subcommand === "install" || subcommand === "uninstall") {
     if (targets.length === 0) {
       console.log(
-        "no harness config directories found (~/.codex, ~/.kimi-code, ~/.gemini)",
+        "no harness config directories found (~/.gemini/config, ~/.codex, ~/.kimi-code, ~/.gemini)",
       );
       return;
     }
@@ -1656,7 +1745,7 @@ function cmdHooks(
     return;
   }
   throw new Error(
-    "usage: agent-mail hooks install|uninstall|status [--codex] [--kimi] [--gemini] [--gemini-after-tool]",
+    "usage: agent-mail hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]",
   );
 }
 
@@ -1668,31 +1757,25 @@ function claimProject(flags: Record<string, string | boolean>): string {
     : canonicalProject(process.cwd());
 }
 
-function cliOwner(
+function resolvedCliOwner(
   flags: Record<string, string | boolean>,
   project: string,
-): ClaimOwner {
+  required: boolean,
+): ClaimOwner | undefined {
   const label = typeof flags.owner === "string" ? flags.owner : undefined;
   const live = listLive();
-  // Only an id minted for this process is trusted: a dispatched executor
-  // launches with its launcher's AGENT_SESSION_ID, and filing under it
-  // attributes the work to the wrong session — a specific wrong answer,
-  // which is worse than having none.
   const sessionId = sessionIdFromEnv(process.env, process.pid);
   const registration =
     (sessionId
-      ? (live.find(
-          (entry) =>
-            entry.sessionId === sessionId &&
-            canonicalProject(entry.cwd) === canonicalProject(project),
-        ) as (Registration & { sessionId: string }) | undefined)
+      ? (live.find((entry) => entry.sessionId === sessionId) as
+          | (Registration & { sessionId: string })
+          | undefined)
       : undefined) ??
-    // Nothing in the environment names this shell's own session, so resolve
-    // it from the process tree. A registered pid in the caller's parent
-    // chain names the session the shell belongs to, which keeps work
-    // session-scoped across quit-and-resume instead of degrading to manual
-    // label ownership.
-    registrationForCallingProcess(live, project, parentPidViaPs);
+    registrationForCallingProcess(
+      live,
+      canonicalProject(process.cwd()),
+      parentPidViaPs,
+    );
   if (registration) {
     const { sessionId: boundSessionId } = registration;
     const identity = sessionNames(
@@ -1703,6 +1786,7 @@ function cliOwner(
     return {
       id: boundSessionId,
       label: label ?? identity.displayName,
+      kind: "session",
       sessionId: boundSessionId,
       pid: registration.pid,
       ...(registration.procStart ? { procStart: registration.procStart } : {}),
@@ -1712,6 +1796,7 @@ function cliOwner(
     };
   }
   if (!label) {
+    if (!required) return undefined;
     throw new Error(
       "coordination acquisition outside a registered agent session requires --owner <label>",
     );
@@ -1719,6 +1804,63 @@ function cliOwner(
   return {
     id: `cli:${label}`,
     label,
+    kind: "manual",
+  };
+}
+
+function cliOwner(
+  flags: Record<string, string | boolean>,
+  project: string,
+): ClaimOwner {
+  return resolvedCliOwner(flags, project, true) as ClaimOwner;
+}
+
+function currentCliPlanExecutor(
+  plan: PlanClaimIdentity,
+): ClaimOwner | undefined {
+  return work
+    .list(plan.project)
+    .find(
+      (lease) =>
+        lease.resource.type === "research-plan" &&
+        lease.resource.key === plan.stem,
+    )?.owner;
+}
+
+function cliPathClaimOwner(
+  flags: Record<string, string | boolean>,
+  project: string,
+): ClaimOwner {
+  const planStem = typeof flags.plan === "string" ? flags.plan : undefined;
+  const planProjectFlag =
+    typeof flags["plan-project"] === "string"
+      ? flags["plan-project"]
+      : undefined;
+  if (planProjectFlag && !planStem) {
+    throw new Error("--plan-project requires --plan <stem>");
+  }
+  const caller = cliOwner(flags, project);
+  if (!planStem) return caller;
+  const planProject = planProjectFlag
+    ? resolveProjectArg(planProjectFlag)
+    : canonicalProject(process.cwd());
+  const plan = { project: planProject, stem: planStem };
+  const executor = currentCliPlanExecutor(plan);
+  if (!executor) {
+    throw new Error(
+      `research plan is not currently held: ${planProject}/${planStem}`,
+    );
+  }
+  if (!sameWorkOwner(executor, caller)) {
+    throw new Error(
+      `only the current executor may acquire a claim for ${planProject}/${planStem}`,
+    );
+  }
+  return {
+    id: `plan:${planProject}:${planStem}`,
+    label: `plan ${planStem}`,
+    kind: "plan",
+    plan,
   };
 }
 
@@ -1736,22 +1878,32 @@ function describeClaim(claim: Claim): string {
       : pathClaimTargets(claim)
           .map((target) => `${target.pathType} ${target.path}`)
           .join(", ");
-  return `${claim.id} ${resource} — ${claim.owner.label} [${claim.createdAt}]`;
+  const kind =
+    claim.type === "path" ? ` [owner ${claimOwnerKind(claim.owner)}]` : "";
+  const lifecycle =
+    claim.type === "path" && "state" in claim && claim.state
+      ? claim.state === "released"
+        ? ` [released ${claim.releaseReason} at ${claim.releasedAt}]`
+        : claim.state === "restart-grace"
+          ? ` [restart grace until ${claim.graceDeadline}]`
+          : ""
+      : "";
+  return `${claim.id} ${resource} — ${claim.owner.label} [${claim.createdAt}]${kind}${lifecycle}`;
 }
 
 function withConflictGuidance<T>(project: string, operation: () => T): T {
   try {
     return operation();
   } catch (error) {
-    const record =
+    const recordId =
       error instanceof WorkConflictError
-        ? error.lease
+        ? error.lease.id
         : error instanceof ClaimConflictError
-          ? error.claim
+          ? error.claimId
           : undefined;
-    if (!record) throw error;
+    if (!recordId) throw error;
     const entry = listCoordination({ project }).find(
-      (candidate) => candidate.id === record.id,
+      (candidate) => candidate.id === recordId,
     );
     if (!entry) throw error;
     const message = error instanceof Error ? error.message : String(error);
@@ -1782,48 +1934,86 @@ function cmdClaimPath(
   const paths = repeatedFlagValues(args, "path");
   if (paths.length === 0) {
     console.error(
-      "usage: agent-mail claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>]",
+      "usage: agent-mail claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>] [--plan <stem> [--plan-project <dir>]]",
     );
     process.exit(1);
   }
   const project = claimProject(flags);
-  const pathType = flags.directory === true ? "directory" : "file";
-  const claim = withConflictGuidance(project, () =>
+  const pathType = flags.directory === true ? "directory" : undefined;
+  const acquisition = withConflictGuidance(project, () =>
     claims.claimPaths(
       project,
       paths.map((path) => ({ path: resolve(project, path), pathType })),
-      cliOwner(flags, project),
+      cliPathClaimOwner(flags, project),
       {
-        ownerIsLive: (owner, claim) =>
-          coordinationOwnerStatus(owner, listLive(), claim.createdAt) !==
-          "offline",
+        sessionIsLive: (id) =>
+          listLive().some((registration) => registration.sessionId === id),
+        planExecutor: currentCliPlanExecutor,
+        actor: resolvedCliOwner(flags, project, false),
       },
     ),
   );
-  console.log(`${claim.id}`);
-  for (const target of pathClaimTargets(claim)) {
+  console.log(
+    acquisition.disposition === "acquired"
+      ? `${acquisition.claim.id} ${acquisition.releaseToken}`
+      : `${acquisition.claim.id} existing`,
+  );
+  for (const target of pathClaimTargets(acquisition.claim)) {
     console.log(`  ${target.pathType} ${target.path}`);
   }
 }
 
 function cmdClaims(flags: Record<string, string | boolean>): void {
-  const active = claims.list(claimProject(flags));
-  if (active.length === 0) {
-    console.log("no active claims");
+  if (flags.all && typeof flags.project === "string") {
+    throw new Error("claims accepts --project or --all, not both");
+  }
+  const project = flags.all ? undefined : claimProject(flags);
+  const active = project ? claims.list(project) : claims.listAll();
+  const history =
+    flags.history === true
+      ? project
+        ? claims.listReleased(project)
+        : claims.listAllReleased()
+      : [];
+  const visible = [...active, ...history];
+  if (visible.length === 0) {
+    console.log(flags.history === true ? "no claims" : "no active claims");
     return;
   }
-  for (const claim of active) console.log(describeClaim(claim));
+  for (const claim of visible) console.log(describeClaim(claim));
 }
 
 function cmdReleaseClaim(flags: Record<string, string | boolean>): void {
-  if (typeof flags.id !== "string") {
+  const claimId = typeof flags.id === "string" ? flags.id : undefined;
+  const releaseToken =
+    typeof flags.token === "string" ? flags.token : undefined;
+  if ((claimId === undefined) === (releaseToken === undefined)) {
     console.error(
-      "usage: agent-mail release-claim --id <claim-id> [--project <dir>]",
+      "usage: agent-mail release-claim (--id <claim-id> | --token <release-token>) [--project <dir>]",
     );
     process.exit(1);
   }
-  const claim = claims.release(claimProject(flags), flags.id);
-  console.log(`released ${describeClaim(claim)}`);
+  const project =
+    typeof flags.project === "string"
+      ? resolveProjectArg(flags.project)
+      : undefined;
+  const actor = releaseToken
+    ? undefined
+    : resolvedCliOwner(
+        flags,
+        project ?? canonicalProject(process.cwd()),
+        false,
+      );
+  const result = claims.release({
+    claimId,
+    releaseToken,
+    project,
+    actor,
+    planExecutor: currentCliPlanExecutor,
+  });
+  const prefix =
+    result.disposition === "released" ? "released" : "already released";
+  console.log(`${prefix} ${describeClaim(result.claim)}`);
 }
 
 function cmdCoordination(
@@ -1867,13 +2057,15 @@ function cmdCoordination(
   if (subcommand === "recover") {
     if (typeof flags.id !== "string") {
       throw new Error(
-        "usage: agent-mail coordination recover --id <coordination-id> [--authority <text>]",
+        "usage: agent-mail coordination recover --id <coordination-id> [--authority <text> --reason <text>]",
       );
     }
     const authority =
       typeof flags.authority === "string" ? flags.authority : undefined;
+    const reason = typeof flags.reason === "string" ? flags.reason : undefined;
     const entry = recoverCoordination(flags.id, undefined, {
       authority,
+      reason,
       recoveredBy: typeof flags.owner === "string" ? flags.owner : "cli",
     });
     console.log(
@@ -2188,14 +2380,23 @@ function cmdWork(
   if (subcommand === "release") {
     if (typeof flags.id !== "string") {
       throw new Error(
-        "usage: agent-mail work release --id <work-id> [--project <dir>]",
+        "usage: agent-mail work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]",
       );
+    }
+    const outcome =
+      typeof flags.outcome === "string"
+        ? (flags.outcome as WorkReleaseOutcome)
+        : undefined;
+    if (outcome !== undefined && !["completed", "abandoned"].includes(outcome)) {
+      throw new Error("--outcome must be completed or abandoned");
     }
     const project = claimProject(flags);
     const lease = work.list(project).find((item) => item.id === flags.id);
     if (!lease) throw new Error(`work lease not found: ${flags.id}`);
     assertGenericWorkResource(lease.resource);
-    console.log(`released ${describeWork(work.release(project, flags.id))}`);
+    console.log(
+      `released ${describeWork(work.release(project, flags.id, undefined, outcome))}`,
+    );
     return;
   }
 
@@ -2364,24 +2565,19 @@ function registerMcpServer(replace: boolean): void {
   console.log(`registered agent-mail in ${CLAUDE_JSON} mcpServers`);
 }
 
-type CodexRegistration =
-  | { status: "unavailable" }
-  | { status: "absent" }
-  | { status: "invalid"; detail: string }
-  | { status: "present"; value: unknown };
-
-function codexRegistration(): CodexRegistration {
+function codexRegistration(): CodexRegistrationProbe {
   const result = spawnSync("codex", ["mcp", "get", "agent-mail", "--json"], {
     encoding: "utf8",
   });
-  if (result.error) return { status: "unavailable" };
-  if (result.status !== 0) return { status: "absent" };
-  try {
-    return { status: "present", value: JSON.parse(result.stdout) as unknown };
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error;
-    return { status: "invalid", detail: error.message };
-  }
+  return classifyCodexRegistrationProbe(
+    {
+      status: result.status,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      ...(result.error ? { error: result.error } : {}),
+    },
+    "agent-mail",
+  );
 }
 
 function runCodexMcp(args: string[]): boolean {
@@ -2404,10 +2600,12 @@ function registerCodex(replace: boolean): void {
   let preserved: string[] = [];
   const registration = codexRegistration();
   if (registration.status === "unavailable") {
-    console.error("codex not found; skipping Codex MCP registration");
+    console.error(
+      `codex not found; skipping Codex MCP registration: ${registration.detail}`,
+    );
     return;
   }
-  if (registration.status === "invalid") {
+  if (registration.status === "invalid" || registration.status === "failed") {
     console.error(
       `could not inspect the Codex agent-mail entry: ${registration.detail}`,
     );
@@ -2427,13 +2625,36 @@ function registerCodex(replace: boolean): void {
       );
       return;
     }
-    preserved = readCodexEntrySubTables();
-    if (!runCodexMcp(["remove", "agent-mail"])) return;
+    if (!existsSync(CODEX_CONFIG_PATH)) {
+      console.error(
+        `cannot safely replace the Codex agent-mail entry: ${CODEX_CONFIG_PATH} is unavailable for rollback`,
+      );
+      return;
+    }
+    const configSnapshot = readFileSync(CODEX_CONFIG_PATH, "utf8");
+    preserved = codexEntrySubTables(configSnapshot);
+    const replacement = replaceCodexRegistrationTransaction(
+      configSnapshot,
+      () => runCodexMcp(["remove", "agent-mail"]),
+      () =>
+        runCodexMcp(["add", "agent-mail", "--", runtimePath(), CHANNEL_ENTRY]),
+      (snapshot) => writeFileSync(CODEX_CONFIG_PATH, snapshot),
+    );
+    if (replacement !== "replaced") {
+      if (replacement === "add-failed-restored") {
+        console.error(
+          "Codex MCP replacement failed; restored the previous agent-mail registration",
+        );
+      }
+      return;
+    }
+  } else if (
+    !runCodexMcp(["add", "agent-mail", "--", runtimePath(), CHANNEL_ENTRY])
+  ) {
+    return;
   }
-  if (runCodexMcp(["add", "agent-mail", "--", runtimePath(), CHANNEL_ENTRY])) {
-    console.log("registered agent-mail with Codex");
-    restoreCodexSubTables(preserved);
-  }
+  console.log("registered agent-mail with Codex");
+  restoreCodexSubTables(preserved);
 }
 
 /** Codex's agent-mail sub-tables as they stand on disk, or none. */
@@ -2460,6 +2681,12 @@ function restoreCodexSubTables(blocks: string[]): void {
 function unregisterCodex(): void {
   const registration = codexRegistration();
   if (registration.status === "unavailable") return;
+  if (registration.status === "invalid" || registration.status === "failed") {
+    console.error(
+      `could not inspect the Codex agent-mail entry: ${registration.detail}`,
+    );
+    return;
+  }
   if (registration.status !== "present") return;
   if (
     !codexRegistrationMatches(registration.value, runtimePath(), CHANNEL_ENTRY)
@@ -2474,7 +2701,7 @@ function unregisterCodex(): void {
   }
 }
 
-type JsonMcpClient = "Kimi" | "Gemini";
+type JsonMcpClient = "Agy" | "Kimi" | "Gemini";
 
 /** Warn when Gemini's global MCP policy would hide a successfully registered
  * server. Registration does not broaden an explicit user allowlist or override
@@ -2764,6 +2991,7 @@ function cmdInstall(flags: Record<string, string | boolean>): void {
   if (flags["no-codex"] !== true) {
     registerCodex(flags["replace-codex"] === true);
   }
+  registerJsonMcpClient("Agy", AGY_MCP_PATH, flags["replace-agy"] === true);
   registerJsonMcpClient("Kimi", KIMI_MCP_PATH, flags["replace-kimi"] === true);
   registerJsonMcpClient(
     "Gemini",
@@ -2817,6 +3045,7 @@ function cmdUninstall(): void {
     }
   }
   unregisterCodex();
+  unregisterJsonMcpClient("Agy", AGY_MCP_PATH);
   unregisterJsonMcpClient("Kimi", KIMI_MCP_PATH);
   unregisterJsonMcpClient("Gemini", GEMINI_SETTINGS_PATH);
   unregisterOpenCode();
@@ -3017,11 +3246,13 @@ Coordination:
                         Atomically reserve the next EXP-NNN number
   claim-path --path <path> [--path <path> ...] [--directory]
              [--project <dir>] [--owner <label>]
-                        Atomically claim files or directories under one id
-  claims [--project <dir>]
-                        List active claims
-  release-claim --id <claim-id> [--project <dir>]
-                        Release a claim
+             [--plan <stem> [--plan-project <dir>]]
+                        Claim an edit set; prints a one-time release token
+  claims [--project <dir> | --all] [--history]
+                        List active claims, optionally retained history
+  release-claim (--id <claim-id> | --token <release-token>)
+                [--project <dir>]
+                        Release by token, session identity, or plan executor
   work list [--project <dir> | --all] [--type <type>] [--owner <owner>]
                         List exclusive logical-work leases
   work tui --session <id> --project <absolute-dir> [--once]
@@ -3035,15 +3266,16 @@ Coordination:
               [--step <n> [--steps <n>] [--step-label <text>] | --clear-progress]
                         Update a work lease
   work release --id <work-id> [--project <dir>]
-                        Release responsibility for logical work
+               [--outcome completed|abandoned]
+                        Release work and any plan-owned claims
   coordination list [--project <dir> | --all] [--kind <kind>]
                     [--owner <owner>] [--condition <condition>] [--json]
                         List work and claims with recovery conditions
-  coordination recover --id <coordination-id> [--authority <text>]
+  coordination recover --id <coordination-id>
+                       [--authority <text> --reason <text>]
                         Release a record only when its owner is proven offline.
-                        --authority <text> force-releases regardless of owner
-                        liveness; the text is recorded in an append-only log at
-                        ~/.claude/agent-mail/forced-recoveries.jsonl, never verified
+                        Forced recovery requires authority and reason; both are
+                        recorded in the append-only forced-recoveries log
   coordination request-transfer --id <work-id> [--reason <text>]
                     [--timeout <seconds>] [--owner <label>]
                         Request an auditable asynchronous work handoff
@@ -3072,22 +3304,22 @@ Status line:
                         --work appends versioned logical-work JSON to --fields.
 
 Reminders (hook-driven, for pull-only harnesses):
-  remind --format codex|kimi|gemini|pi [--event <name>] [--session <id>]
+  remind --format agy|codex|kimi|gemini|pi [--event <name>] [--session <id>]
          [--project <dir>]
                         Print an unread-mail reminder for a harness hook, or
-                        nothing when there is nothing new to say. Reads the
-                        daemon's unread summary. A new Codex/Kimi Stop edge
-                        exits 2 with fixed reminder text on stderr; failures
-                        exit 0 and keep stdout machine-clean.
-  hooks install [--codex] [--kimi] [--gemini] [--gemini-after-tool]
-  hooks uninstall [--codex] [--kimi] [--gemini]
-  hooks status [--codex] [--kimi] [--gemini]
+                        a no-op response when there is nothing new to say.
+                        Reads the daemon's unread summary. A new Codex/Kimi
+                        Stop edge exits 2 on stderr; Agy continues through its
+                        JSON Stop response. Failures exit 0.
+  hooks install [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+  hooks uninstall [--agy] [--codex] [--kimi] [--gemini]
+  hooks status [--agy] [--codex] [--kimi] [--gemini]
                         Register, remove, or inspect the harness hooks that
                         run "agent-mail remind". With no harness flag, targets
                         every harness whose config directory exists
-                        (~/.codex, ~/.kimi-code, ~/.gemini). Gemini's
-                        AfterTool hook is synchronous, so it installs only
-                        with --gemini-after-tool.
+                        (~/.gemini/config, ~/.codex, ~/.kimi-code, ~/.gemini).
+                        Gemini's AfterTool hook is synchronous, so it installs
+                        only with --gemini-after-tool.
 
 Daemon (launchd-aware):
   start | stop | restart   Manage the daemon process
@@ -3102,11 +3334,12 @@ Setup:
   oh-my-pi-plugin-path  Print the bundled OMP push plugin directory for
                         "omp plugin link".
   install [--dry-run] [--native-audit] [--no-codex]
-          [--replace-claude] [--replace-codex] [--replace-kimi]
-          [--replace-gemini] [--replace-opencode]
-                        Install daemon and MCP entries for Claude, Codex, and
-                        installed Kimi, Gemini, and OpenCode clients; optionally
-                        audit native Claude SendMessage traffic. macOS only;
+          [--replace-claude] [--replace-agy] [--replace-codex]
+          [--replace-kimi] [--replace-gemini] [--replace-opencode]
+                        Install daemon and MCP entries for Claude, Agy, Codex,
+                        and installed Kimi, Gemini, and OpenCode clients;
+                        optionally audit native Claude SendMessage traffic.
+                        macOS only;
                         --dry-run prints the versioned install plan anywhere.
   uninstall             Remove integrations owned by this checkout
 

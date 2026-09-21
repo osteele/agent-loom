@@ -37,3 +37,6 @@ decided. A record that states something untrue is corrected in place instead.
 | [0016](0016-an-acknowledged-push-marks-read.md) | Host acceptance records push, not read — OMP steering exception superseded by [0017](0017-omp-steering-injection-marks-read.md) | 2026-09-08 |
 | [0017](0017-omp-steering-injection-marks-read.md) | OMP steering injection marks read | 2026-09-10 |
 | [0018](0018-a-transport-attaches-to-an-identity.md) | A transport attaches to a session's identity; it never creates one | 2026-09-20 |
+| [0019](0019-a-plan-is-a-claim-owner.md) | An execution plan is a claim owner, not a link on a manual claim | 2026-09-22 |
+| [0020](0020-one-claim-per-acquisition.md) | One claim per acquisition; same-owner claims are never merged | 2026-09-22 |
+| [0021](0021-liveness-is-evaluated-in-the-transaction.md) | A transaction observes session liveness itself; it never waits for an observer | 2026-09-22 |

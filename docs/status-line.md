@@ -100,10 +100,10 @@ activity, never an inferred step. Existing widget formats are unchanged.
 The fourth field is `push` when channel push is expected to land, `pull` when it
 is not, `unknown` when the session is registered but carries no diagnosis, and
 empty when no session is registered to ask about. There are two unrelated ways
-to be pulling. A client other than Claude Code has no channel, so Codex, Kimi,
-and OpenCode sessions are pull-only. A Claude Code session can also hold a
-channel it cannot use because its host was launched without the channel or
-under an identity the host will not authorize.
+to be pulling. A client other than Claude Code has no channel, so Antigravity,
+Codex, Kimi, Gemini, and OpenCode sessions are pull-only. A Claude Code session
+can also hold a channel it cannot use because its host was launched without the
+channel or under an identity the host will not authorize.
 
 `agent-mail status` distinguishes those causes. Both require the reader to
 check mail instead of waiting for a push. A session cannot diagnose this from

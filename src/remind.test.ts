@@ -158,6 +158,18 @@ test("an unparseable timestamp degrades the time, not the message", () => {
 });
 
 // --- formatReminder ------------------------------------------------------------
+test("agy injects reminders and continues once at Stop", () => {
+  expect(formatReminder("agy", "TEXT", "PreInvocation")).toBe(
+    JSON.stringify({
+      injectSteps: [{ ephemeralMessage: "TEXT" }],
+    }),
+  );
+  expect(reminderHookResponse("agy", "TEXT", "Stop")).toEqual({
+    stdout: JSON.stringify({ decision: "continue", reason: "TEXT" }),
+    stderr: "",
+    exitCode: 0,
+  });
+});
 
 test("codex output is the hook envelope with the caller's event", () => {
   expect(formatReminder("codex", "TEXT", "UserPromptSubmit")).toBe(

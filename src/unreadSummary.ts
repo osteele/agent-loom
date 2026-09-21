@@ -1,7 +1,7 @@
 /** Per-session unread-mail counts, cached for hook-driven reminders.
  *
- * Pull-only harnesses (Codex, Kimi, Gemini) never learn about unread mail
- * unless they ask, so their hooks run `agent-mail remind` on harness events
+ * Pull-only harnesses (Agy, Codex, Kimi, Gemini) never learn about unread
+ * mail unless they ask, so their hooks run `agent-mail remind` on harness events
  * and that command must answer from a file: a hook fires per turn, sometimes
  * per tool call, and a spool scan per event is work the harness pays for
  * synchronously. The daemon already enumerates the live sessions on its 10s

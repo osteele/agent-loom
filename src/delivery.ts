@@ -71,6 +71,7 @@ export function classifyFallback(result: AdmissionResult): FallbackOutcome {
 
 export const TERMINAL_RECEIPTS: readonly ReceiptStatus[] = [
   "pushed",
+  "push-unreachable",
   "read",
   "refused",
   "expired",
@@ -108,6 +109,7 @@ export function pendingHeldIds(
 
 export type DeliverAction =
   | { type: "push" }
+  | { type: "push-unreachable"; detail: string }
   | { type: "hold" }
   | { type: "refuse"; detail: string }
   | { type: "expired" }
@@ -126,18 +128,19 @@ export type ReceiptEvent =
   | { type: "settle"; action: SettleAction };
 
 /** Pure transition table for a delivery receipt. Terminal states are absorbing:
- *  once a receipt reaches `pushed`, `read`, `refused`, or `expired` it never
- *  changes again. */
+ * once a receipt reaches `pushed`, `push-unreachable`, `read`, `refused`, or
+ * `expired` it never changes again. */
 export function receiptTransition(
   currentStatus: ReceiptStatus,
   event: ReceiptEvent,
 ): ReceiptStatus {
   switch (currentStatus) {
+    case "pending":
     case "spooled":
       if (event.type === "deliver") {
         switch (event.action.type) {
           case "skip":
-            return "spooled";
+            return currentStatus;
           case "expired":
             return "expired";
           case "refuse":
@@ -146,6 +149,8 @@ export function receiptTransition(
             return "held";
           case "push":
             return "pushed";
+          case "push-unreachable":
+            return "push-unreachable";
         }
       }
       break;
@@ -154,6 +159,8 @@ export function receiptTransition(
         switch (event.action.type) {
           case "push":
             return "pushed";
+          case "push-unreachable":
+            return "push-unreachable";
           case "expired":
             return "expired";
           case "refuse":
@@ -161,7 +168,8 @@ export function receiptTransition(
         }
       }
       break;
-    // `pushed`, `read`, `refused`, and `expired` are terminal.
+    // `pushed`, `push-unreachable`, `read`, `refused`, and `expired` are
+    // terminal.
   }
   return currentStatus;
 }
@@ -177,6 +185,7 @@ export function decideNewMessageDelivery(
   heldLimit: number,
   receipts: DeliveryReceipt[],
   nowMs: number,
+  channelUnreachableDetail?: string,
 ): DeliverDecision {
   if (settled(receipts, msg.id, sessionId)) {
     return { action: { type: "skip", reason: "already settled" } };
@@ -201,6 +210,14 @@ export function decideNewMessageDelivery(
   // policy === "accept"
   if (muted || !channelPush) {
     return { action: { type: "hold" } };
+  }
+  if (channelUnreachableDetail) {
+    return {
+      action: {
+        type: "push-unreachable",
+        detail: channelUnreachableDetail,
+      },
+    };
   }
   return { action: { type: "push" } };
 }
@@ -228,6 +245,7 @@ export function deliverNewMessage(
   heldLimit: number,
   receipts: DeliveryReceipt[],
   nowMs: number,
+  channelUnreachableDetail?: string,
 ): DeliveryReceipt[] {
   const { action, overflowHeldId } = decideNewMessageDelivery(
     msg,
@@ -238,6 +256,7 @@ export function deliverNewMessage(
     heldLimit,
     receipts,
     nowMs,
+    channelUnreachableDetail,
   );
   let next = receipts;
   if (overflowHeldId) {
@@ -265,12 +284,15 @@ export function deliverNewMessage(
     ts: receiptTs(nowMs),
     status: nextStatus,
     sessionId,
-    ...(action.type === "refuse" ? { detail: action.detail } : {}),
+    ...(action.type === "refuse" || action.type === "push-unreachable"
+      ? { detail: action.detail }
+      : {}),
   });
 }
 
 export type SettleAction =
   | { type: "push"; messageId: string }
+  | { type: "push-unreachable"; messageId: string; detail: string }
   | { type: "expired"; messageId: string }
   | { type: "refuse"; messageId: string; detail: string };
 
@@ -285,6 +307,7 @@ export function decideHeldSettlements(
   messages: Map<string, Message>,
   receipts: DeliveryReceipt[],
   nowMs: number,
+  channelUnreachableDetail?: string,
 ): SettleAction[] {
   const ids = pendingHeldIds(receipts, sessionId);
   if (ids.length === 0 || policy === "hold") return [];
@@ -304,7 +327,15 @@ export function decideHeldSettlements(
     if (isExpired(msg, nowMs)) {
       actions.push({ type: "expired", messageId });
     } else if (messageVisibleToSession(msg, sessionId)) {
-      actions.push({ type: "push", messageId });
+      actions.push(
+        channelUnreachableDetail
+          ? {
+              type: "push-unreachable",
+              messageId,
+              detail: channelUnreachableDetail,
+            }
+          : { type: "push", messageId },
+      );
     }
   }
   return actions;
@@ -320,6 +351,7 @@ export function settleHeldMessages(
   messages: Map<string, Message>,
   receipts: DeliveryReceipt[],
   nowMs: number,
+  channelUnreachableDetail?: string,
 ): DeliveryReceipt[] {
   const actions = decideHeldSettlements(
     sessionId,
@@ -329,6 +361,7 @@ export function settleHeldMessages(
     messages,
     receipts,
     nowMs,
+    channelUnreachableDetail,
   );
   let next = receipts;
   for (const action of actions) {
@@ -339,7 +372,9 @@ export function settleHeldMessages(
       ts: receiptTs(nowMs),
       status: nextStatus,
       sessionId,
-      ...(action.type === "refuse" ? { detail: action.detail } : {}),
+      ...(action.type === "refuse" || action.type === "push-unreachable"
+        ? { detail: action.detail }
+        : {}),
     });
   }
   return next;

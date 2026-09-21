@@ -18,6 +18,12 @@ import {
   receiptPath,
   spoolPath,
 } from "./paths.ts";
+import {
+  type Registration,
+  coalesceRegistrations,
+  listLiveInProject,
+  pushIsKnownUnreachable,
+} from "./registry.ts";
 import { readFileSliceSync } from "./runtime.ts";
 
 export type MessageOriginKind = "agent" | "automation" | "human";
@@ -70,8 +76,10 @@ export interface ReadMessagesOptions {
 
 export type ReceiptStatus =
   | "spooled"
+  | "pending"
   | "held"
   | "pushed"
+  | "push-unreachable"
   | "read"
   | "refused"
   | "expired";
@@ -215,6 +223,42 @@ export function messageVisibleToSession(
   if (msg.meta?.toSession && msg.meta.toSession !== sessionId) return false;
   return msg.meta?.sessionId !== sessionId || msg.meta?.toSession === sessionId;
 }
+/** Per-session evidence captured when a message enters the spool.
+ *
+ * A pending receipt proves that the session was an intended live recipient,
+ * even if its transport never polls. A known-broken channel records the
+ * stronger failure instead of later claiming a push that cannot land. */
+export function intendedDeliveryReceipts(
+  msg: Message & { id: string },
+  registrations: readonly Pick<Registration, "sessionId" | "capabilities">[],
+  nowMs = Date.now(),
+): DeliveryReceipt[] {
+  const receipts: DeliveryReceipt[] = [];
+  const seen = new Set<string>();
+  for (const registration of registrations) {
+    const { sessionId } = registration;
+    if (
+      !sessionId ||
+      seen.has(sessionId) ||
+      !messageVisibleToSession(msg, sessionId)
+    ) {
+      continue;
+    }
+    seen.add(sessionId);
+    const unreachable = pushIsKnownUnreachable(registration.capabilities);
+    receipts.push({
+      messageId: msg.id,
+      project: msg.project,
+      ts: new Date(nowMs).toISOString(),
+      status: unreachable ? "push-unreachable" : "pending",
+      sessionId,
+      detail: unreachable
+        ? `channel:${registration.capabilities?.channelPushStatus}`
+        : "intended live recipient",
+    });
+  }
+  return receipts;
+}
 
 /** The messages one session may see, from a project's spool.
  *
@@ -252,6 +296,20 @@ export function appendMessage(msg: Message): string {
     ts: new Date().toISOString(),
     status: "spooled",
   });
+  try {
+    const registrations = coalesceRegistrations(listLiveInProject(msg.project));
+    for (const receipt of intendedDeliveryReceipts(withId, registrations)) {
+      appendReceipt(msg.project, receipt);
+    }
+  } catch (error) {
+    appendReceipt(msg.project, {
+      messageId: id,
+      project: msg.project,
+      ts: new Date().toISOString(),
+      status: "spooled",
+      detail: `recipient intent scan failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
   return path;
 }
 

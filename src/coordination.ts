@@ -3,10 +3,14 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  type AnyPathClaim,
   type Claim,
   type ClaimOwner,
   type ClaimStore,
+  PATH_CLAIM_MANUAL_TTL_MS,
+  claimOwnerKind,
   claims,
+  pathClaimIsOverdue,
   pathClaimTargets,
 } from "./claims.ts";
 import { FORCED_RECOVERY_LOG_PATH, displayName } from "./paths.ts";
@@ -30,6 +34,7 @@ export type OwnerStatus =
   | "live"
   | "offline"
   | "manual"
+  | "plan"
   | "expired"
   | "unverifiable";
 
@@ -48,7 +53,7 @@ export type OwnerStatus =
  * is deliberately long: 24h is far past any interactive edit set, so expiry
  * means abandoned rather than slow. An owner that is genuinely still working
  * renews by updating the record. */
-export const MANUAL_OWNER_TTL_MS = 24 * 60 * 60 * 1000;
+export const MANUAL_OWNER_TTL_MS = PATH_CLAIM_MANUAL_TTL_MS;
 
 /** Whether an acquisition may take this resource from its current owner
  * without operator authority.
@@ -60,11 +65,11 @@ export function isDisplaceable(status: OwnerStatus): boolean {
 }
 export type CoordinationCondition =
   | "healthy"
+  | "restart-grace"
   | "owner-offline"
   | "owner-expired"
   | "owner-unverifiable"
   | "source-missing"
-  | "target-absent"
   | "awaiting-materialization"
   | "materialized";
 
@@ -191,14 +196,34 @@ function claimEntry(
   registrations: Registration[],
   processes: ProcessScan,
   registrationsReliable: boolean,
+  workLeases: WorkLease[],
 ): CoordinationEntry {
-  const status = ownerStatus(
+  let status = ownerStatus(
     claim.owner,
     registrations,
     claim.createdAt,
     processes,
     registrationsReliable,
+    claim.type === "path" && "lastActivityAt" in claim
+      ? claim.lastActivityAt
+      : undefined,
   );
+  if (claim.type === "path") {
+    const kind = claimOwnerKind(claim.owner);
+    if (kind === "manual" && pathClaimIsOverdue(claim)) status = "expired";
+    if (kind === "session" && claim.state === "restart-grace") {
+      status = "offline";
+    }
+    if (kind === "plan") {
+      const held = workLeases.some(
+        (lease) =>
+          lease.project === claim.owner.plan?.project &&
+          lease.resource.type === "research-plan" &&
+          lease.resource.key === claim.owner.plan.stem,
+      );
+      status = held ? "plan" : "offline";
+    }
+  }
   const registration = isDisplaceable(status)
     ? undefined
     : ownerRegistration(claim.owner, registrations);
@@ -235,32 +260,44 @@ function claimEntry(
     };
   }
 
-  const paths = pathClaimTargets(claim).map((target) => target.path);
+  const pathClaim = claim as AnyPathClaim;
+  const paths = pathClaimTargets(pathClaim).map((target) => target.path);
+  const overdue = pathClaimIsOverdue(pathClaim);
+  const inGrace =
+    "state" in pathClaim &&
+    pathClaim.state === "restart-grace" &&
+    !overdue;
   return {
-    id: claim.id,
+    id: pathClaim.id,
     kind: "path-claim",
-    project: claim.project,
-    projectLabel: displayName(claim.project),
+    project: pathClaim.project,
+    projectLabel: displayName(pathClaim.project),
     resourceType: "edit-set",
     resourceKey: paths.join(","),
     resourceLabel:
       paths.length === 1 ? paths[0] : `${paths.length} claimed paths`,
     sourcePaths: paths,
-    owner: claim.owner,
+    owner: pathClaim.owner,
     ownerStatus: status,
     ...ownerActivity,
-    condition: isDisplaceable(status)
-      ? status === "expired"
-        ? "owner-expired"
-        : "owner-offline"
-      : status === "unverifiable"
-        ? "owner-unverifiable"
-        : paths.some((path) => !existsSync(path))
-          ? "target-absent"
+    condition: inGrace
+      ? "restart-grace"
+      : isDisplaceable(status) || overdue
+        ? status === "expired"
+          ? "owner-expired"
+          : "owner-offline"
+        : status === "unverifiable"
+          ? "owner-unverifiable"
           : "healthy",
-    recoverable: isDisplaceable(status),
-    createdAt: claim.createdAt,
-    updatedAt: claim.createdAt,
+    recoverable:
+      overdue ||
+      (status === "offline" && claimOwnerKind(pathClaim.owner) !== "session"),
+    state: "state" in pathClaim ? pathClaim.state : "active",
+    createdAt: pathClaim.createdAt,
+    updatedAt:
+      "lastActivityAt" in pathClaim && pathClaim.lastActivityAt
+        ? pathClaim.lastActivityAt
+        : pathClaim.createdAt,
   };
 }
 
@@ -362,6 +399,7 @@ export function listCoordination(
         registrations,
         processes,
         options.registrationsReliable ?? true,
+        workRecords,
       ),
     ),
   ].sort(
@@ -391,6 +429,9 @@ export function describeCoordination(entry: CoordinationEntry): string {
 
 /** Actionable conflict guidance without weakening ownership safeguards. */
 export function coordinationConflictAdvice(entry: CoordinationEntry): string {
+  if (entry.condition === "restart-grace") {
+    return "owner session is in restart grace; wait for the grace deadline or ask the operator to authorize forced recovery";
+  }
   if (entry.ownerStatus === "offline") {
     return `owner is offline; retry acquisition or run agent-mail coordination recover --id ${entry.id}`;
   }
@@ -403,19 +444,17 @@ export function coordinationConflictAdvice(entry: CoordinationEntry): string {
   if (entry.ownerStatus === "manual") {
     return "owner is deliberately manual; ask the operator to release it";
   }
-  // Only work leases are transferable; request_coordination_transfer answers
-  // "work lease not found" for claims, so name the mechanism that actually
-  // exists for each kind.
   if (entry.kind === "work") {
     return "owner is live; use request_coordination_transfer for an auditable handoff";
   }
-  return `owner is live; ${entry.kind === "path-claim" ? "path claims" : "experiment reservations"} are not transferable — send_mail to ${entry.owner.label} asking it to release ${entry.id}, or ask the operator to authorize agent-mail coordination recover --id ${entry.id} --authority <who>`;
+  return `owner is live; ${entry.kind === "path-claim" ? "path claims" : "experiment reservations"} are not transferable; ask ${entry.owner.label} to release ${entry.id}, or ask the operator to authorize agent-mail coordination recover --id ${entry.id} --authority <who> --reason <why>`;
 }
 
 /** Durable trace of a recovery that bypassed the liveness proof. */
 export interface ForcedRecoveryRecord {
   at: string;
   authority: string;
+  reason: string;
   coordinationId: string;
   kind: CoordinationKind;
   project: string;
@@ -426,9 +465,8 @@ export interface ForcedRecoveryRecord {
   recoveredBy?: string;
 }
 
-/** Append a forced-recovery record. Best effort: an unwritable audit log must
- * not strand a lock the operator has already decided to break, but the failure
- * is surfaced rather than swallowed. */
+/** Append a forced-recovery record. Recovery is refused when the audit record
+ * cannot be written. */
 export function recordForcedRecovery(
   record: ForcedRecoveryRecord,
   logPath = FORCED_RECOVERY_LOG_PATH,
@@ -443,19 +481,10 @@ export function recordForcedRecovery(
 }
 
 export interface RecoverOptions {
-  /** Operator-declared justification for breaking a lock that is live, manual,
-   * or unverifiable.
-   *
-   * This is an ATTESTATION, NOT A CREDENTIAL: agent-mail does not and cannot
-   * verify it. Claims here are advisory (see docs/decisions/0002), so the
-   * liveness check was never an enforcement boundary — it exists to stop an
-   * agent from casually stealing a peer's lock by reflex. Requiring a caller to
-   * name an authority preserves that friction and leaves a durable trace, while
-   * letting an operator who genuinely knows the owner is gone proceed without
-   * hand-deleting store files.
-   *
-   * Supplying it bypasses the liveness proof entirely. */
+  /** User-supplied authority for bypassing the lifecycle check. */
   authority?: string;
+  /** Required user-supplied justification when authority forces recovery. */
+  reason?: string;
   /** Optional label for who performed the recovery, recorded in the audit log. */
   recoveredBy?: string;
 }
@@ -477,10 +506,17 @@ export function recoverCoordination(
   const entry = matches[0];
   const authority = options.authority?.trim();
   const forced = authority !== undefined && authority.length > 0;
-
-  if (!forced && !entry.recoverable) {
+  const reason = options.reason?.trim();
+  if (forced && !reason) {
+    throw new Error("forced recovery requires a reason");
+  }
+  const sessionPathObservation =
+    entry.kind === "path-claim" &&
+    claimOwnerKind(entry.owner as ClaimOwner) === "session" &&
+    entry.ownerStatus === "offline";
+  if (!forced && !entry.recoverable && !sessionPathObservation) {
     throw new Error(
-      `${coordinationId} belongs to ${entry.owner.label}; its owner is live or cannot be verified offline. If you know the owner is gone, retry with an authority declaring who authorized breaking it (recorded, not verified).`,
+      `${coordinationId} belongs to ${entry.owner.label}; its lifecycle does not permit recovery. Forced recovery requires user-supplied authority and reason.`,
     );
   }
 
@@ -510,6 +546,7 @@ export function recoverCoordination(
     const audit = recordForcedRecovery({
       at: new Date().toISOString(),
       authority: authority as string,
+      reason: reason as string,
       coordinationId: entry.id,
       kind: entry.kind,
       project: entry.project,
@@ -529,7 +566,17 @@ export function recoverCoordination(
   if (entry.kind === "work") {
     work.recover(entry.project, entry.id, isLive);
   } else {
-    claims.recover(entry.project, entry.id, isLive);
+    const releaseReason =
+      forced
+        ? "forced-recovery"
+        : entry.ownerStatus === "expired"
+          ? "manual-expiry"
+          : claimOwnerKind(entry.owner as ClaimOwner) === "plan"
+            ? "plan-lease-lost"
+            : "session-absence";
+    claims.recover(entry.project, entry.id, isLive, {
+      reason: releaseReason,
+    });
   }
   return entry;
 }

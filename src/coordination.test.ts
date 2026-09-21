@@ -234,7 +234,7 @@ test("coordination conditions preserve the different resource lifecycles", () =>
     "awaiting-materialization",
   );
   expect(entries.find((entry) => entry.kind === "path-claim")?.condition).toBe(
-    "target-absent",
+    "healthy",
   );
   expect(entries.find((entry) => entry.kind === "work")?.condition).toBe(
     "source-missing",
@@ -325,13 +325,23 @@ test("recordForcedRecovery appends one JSON line per forced recovery", () => {
 
   expect(
     recordForcedRecovery(
-      { ...base, authority: "operator: session is gone", coordinationId: "c1" },
+      {
+        ...base,
+        authority: "operator: session is gone",
+        reason: "verified abandoned terminal",
+        coordinationId: "c1",
+      },
       logPath,
     ).logged,
   ).toBe(true);
   expect(
     recordForcedRecovery(
-      { ...base, authority: "operator: second", coordinationId: "c2" },
+      {
+        ...base,
+        authority: "operator: second",
+        reason: "second verified recovery",
+        coordinationId: "c2",
+      },
       logPath,
     ).logged,
   ).toBe(true);
@@ -340,6 +350,7 @@ test("recordForcedRecovery appends one JSON line per forced recovery", () => {
   expect(lines).toHaveLength(2);
   const first = JSON.parse(lines[0]);
   expect(first.authority).toBe("operator: session is gone");
+  expect(first.reason).toBe("verified abandoned terminal");
   expect(first.coordinationId).toBe("c1");
   expect(first.ownerStatus).toBe("manual");
   expect(JSON.parse(lines[1]).coordinationId).toBe("c2");
@@ -355,6 +366,7 @@ test("recordForcedRecovery reports failure instead of throwing", () => {
     {
       at: "2026-08-16T00:00:00.000Z",
       authority: "operator",
+      reason: "verified orphaned lease",
       coordinationId: "c1",
       kind: "work",
       project: "/project",
@@ -378,7 +390,7 @@ test("the store liveness gate is what a forced recovery stands down", () => {
   const owner = { id: "peer", label: "Peer" };
   const target = join(project, "held.md");
   writeFileSync(target, "");
-  const claim = claimStore.claimPath(project, target, "file", owner);
+  const claim = claimStore.claimPath(project, target, "file", owner).claim;
 
   // Default behavior: a live owner is never displaced.
   expect(() => claimStore.recover(project, claim.id, () => true)).toThrow(
