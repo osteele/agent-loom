@@ -5,10 +5,15 @@ import { join } from "node:path";
 import {
   WEFT_JOBS_SNAPSHOT_TTL_MS,
   orphansForProject,
+  parseRunningJobs,
   parseUnprocessedGroups,
+  readRunningJobsSnapshot,
   readWeftJobsSnapshot,
+  runningForProjectSession,
   startupOrphanText,
+  unprocessedForProjectSession,
   weftJobsForSession,
+  writeRunningJobsSnapshot,
   writeWeftJobsSnapshot,
 } from "./weftJobs.ts";
 
@@ -251,4 +256,130 @@ test("a submitter agent-mail has never seen is not reported as an orphan", () =>
   // all, so there is no id whose provenance could be in doubt.
   expect(stranger.dispositions).toEqual({ dead: 4 });
   expect(startupOrphanText(stranger)).toContain("4 dead");
+});
+
+test("running counts require a complete versioned producer projection and exact root plus submitter", () => {
+  const doc = {
+    kind: "job_list",
+    version: 1,
+    selection: { complete: true, order: "newest_first", constraints: [] },
+    jobs: [
+      {
+        id: 1,
+        status_code: "running",
+        project_root: "/projects/a",
+        submitter_session: "owner",
+      },
+      {
+        id: 2,
+        status_code: "running",
+        project_root: "/projects/b",
+        submitter_session: "owner",
+      },
+      {
+        id: 3,
+        status_code: "running",
+        project_root: "/projects/a",
+        submitter_session: "other",
+      },
+    ],
+  };
+  const groups = parseRunningJobs(doc);
+  if (!groups) throw new Error("Fixture failed to parse");
+  const snapshot = { version: 1 as const, generatedAt: 1000, groups };
+  expect(runningForProjectSession(snapshot, "/projects/a", "owner")).toBe(1);
+  expect(runningForProjectSession(snapshot, "/projects/a", "quiet")).toBe(0);
+  expect(
+    runningForProjectSession(undefined, "/projects/a", "owner"),
+  ).toBeNull();
+  expect(
+    parseRunningJobs({
+      ...doc,
+      selection: { ...doc.selection, complete: false },
+    }),
+  ).toBeUndefined();
+  expect(parseRunningJobs({ ...doc, version: 2 })).toBeUndefined();
+  expect(
+    parseRunningJobs({
+      ...doc,
+      jobs: [{ ...doc.jobs[0], project_root: undefined }],
+    }),
+  ).toBeUndefined();
+  expect(
+    parseRunningJobs({
+      ...doc,
+      jobs: [{ ...doc.jobs[0], status_code: "queued" }],
+    }),
+  ).toBeUndefined();
+  expect(
+    parseRunningJobs({ ...doc, jobs: [doc.jobs[0], doc.jobs[0]] }),
+  ).toBeUndefined();
+  const unknownRoot = parseRunningJobs({
+    ...doc,
+    jobs: [{ ...doc.jobs[0], project_root: null }],
+  });
+  if (!unknownRoot) throw new Error("Fixture failed to parse");
+  expect(
+    runningForProjectSession(
+      { ...snapshot, groups: unknownRoot },
+      "/projects/a",
+      "owner",
+    ),
+  ).toBeNull();
+});
+
+test("running snapshot distinguishes observed zero from missing, expired, and malformed data", () => {
+  const path = tempSnapshotPath();
+  try {
+    expect(readRunningJobsSnapshot(1000, path)).toBeUndefined();
+    writeRunningJobsSnapshot([], 1000, path);
+    expect(
+      runningForProjectSession(
+        readRunningJobsSnapshot(1000, path),
+        "/projects/a",
+        "owner",
+      ),
+    ).toBe(0);
+    expect(
+      readRunningJobsSnapshot(1000 + WEFT_JOBS_SNAPSHOT_TTL_MS + 1, path),
+    ).toBeUndefined();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        generatedAt: 1000,
+        groups: [
+          { projectRoot: "/projects/a", submitterSession: "owner", count: -1 },
+        ],
+      }),
+    );
+    expect(readRunningJobsSnapshot(1000, path)).toBeUndefined();
+  } finally {
+    rmSync(path, { force: true });
+  }
+});
+
+test("awaiting-processing counts remain distinct and exact-project scoped", () => {
+  const groups = parseUnprocessedGroups(DOC);
+  if (!groups) throw new Error("Fixture failed to parse");
+  const snapshot = {
+    version: 2 as const,
+    generatedAt: 1000,
+    generatedBy: 1,
+    bySession: { "live-1": 99 },
+    total: 99,
+    groups,
+  };
+  expect(unprocessedForProjectSession(snapshot, "/p/alpha", "live-1")).toBe(3);
+  expect(unprocessedForProjectSession(snapshot, "/p/beta", "live-1")).toBe(0);
+  expect(
+    unprocessedForProjectSession(undefined, "/p/alpha", "live-1"),
+  ).toBeNull();
+  expect(
+    unprocessedForProjectSession(
+      { ...snapshot, groups: [{ ...groups[0], projectRoot: null }] },
+      "/p/alpha",
+      "live-1",
+    ),
+  ).toBeNull();
 });

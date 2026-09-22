@@ -737,3 +737,21 @@ test("OMP resolves the calling session from the registered process tree", () => 
   rmSync(project, { recursive: true, force: true });
   rmSync(elsewhere, { recursive: true, force: true });
 });
+
+test("name shortening is supplied by the generated model and preserves custom names", () => {
+  const generated = {
+    scheme: "adjective-noun" as const,
+    slug: "quiet-sea-lion",
+    displayName: "Quiet Sea Lion",
+  };
+  expect(sessionNames(SID, undefined, CWD, generated).nameNoun).toBe(
+    "Sea Lion",
+  );
+  expect(
+    sessionNames(SID, { name: "Dr Quiet Sea Lion", nameSource: "user" }, CWD)
+      .nameNoun,
+  ).toBe("Dr Quiet Sea Lion");
+  expect(sessionNames(SID, undefined, CWD, LEGACY).nameNoun).toBe(
+    LEGACY.displayName,
+  );
+});

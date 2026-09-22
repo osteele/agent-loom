@@ -395,6 +395,7 @@ export function findReceipts(
 export function readReceipts(
   project: string,
   messageId?: string,
+  strict = false,
 ): DeliveryReceipt[] {
   const path = receiptPath(project);
   if (!existsSync(path)) return [];
@@ -404,7 +405,11 @@ export function readReceipts(
     try {
       const receipt = JSON.parse(line) as DeliveryReceipt;
       if (!messageId || receipt.messageId === messageId) out.push(receipt);
-    } catch {
+    } catch (error) {
+      if (strict)
+        throw new Error(
+          `Cannot read receipt history ${path}: ${String(error)}`,
+        );
       // A torn receipt does not hide later state transitions.
     }
   }
@@ -568,7 +573,7 @@ export function readMessages(
 
 /** Every message across every project spool, oldest-first. For dashboards and
  * cross-project aggregation; per-project read-state is applied. */
-export function readAllMessages(): StoredMessage[] {
+export function readAllMessages(strict = false): StoredMessage[] {
   if (!existsSync(INBOX_DIR)) return [];
   const out: StoredMessage[] = [];
   for (const name of readdirSync(INBOX_DIR)) {
@@ -587,7 +592,11 @@ export function readAllMessages(): StoredMessage[] {
           readByProject.set(msg.project, read);
         }
         out.push({ ...msg, id, read: read.has(id) });
-      } catch {
+      } catch (error) {
+        if (strict)
+          throw new Error(
+            `Cannot read message history ${join(INBOX_DIR, name)}: ${String(error)}`,
+          );
         // Skip corrupt/torn lines, consistent with readMessages.
       }
     }

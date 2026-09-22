@@ -24,7 +24,10 @@ export interface WorkTuiOptions {
 }
 
 /** Parse separately from permissive general CLI flags: no implicit selectors. */
-export function workTuiOptions(args: string[]): WorkTuiOptions {
+export function workTuiOptions(
+  args: string[],
+  command = "work tui",
+): WorkTuiOptions {
   let sessionId: string | undefined;
   let project: string | undefined;
   let once = false;
@@ -36,7 +39,7 @@ export function workTuiOptions(args: string[]): WorkTuiOptions {
       seen.has(flag)
     ) {
       throw new Error(
-        "work tui accepts only --session ID --project ABS [--once], each once",
+        `${command} accepts only --session ID --project ABS [--once], each once`,
       );
     }
     seen.add(flag);
@@ -47,7 +50,7 @@ export function workTuiOptions(args: string[]): WorkTuiOptions {
     const value = args[++index];
     if (!value || value.startsWith("--") || !value.trim()) {
       throw new Error(
-        "work tui requires nonempty --session ID and --project ABS",
+        `${command} requires nonempty --session ID and --project ABS`,
       );
     }
     if (flag === "--session") sessionId = value;
@@ -55,12 +58,12 @@ export function workTuiOptions(args: string[]): WorkTuiOptions {
   }
   if (!sessionId || !project || !isAbsolute(project)) {
     throw new Error(
-      "work tui requires explicit --session ID and absolute existing --project ABS",
+      `${command} requires explicit --session ID and absolute existing --project ABS`,
     );
   }
   const canonical = realpathSync(project);
   if (!statSync(canonical).isDirectory())
-    throw new Error("work tui project must be a directory");
+    throw new Error(`${command} project must be a directory`);
   return { sessionId, project: canonical, once };
 }
 
@@ -311,18 +314,16 @@ export function wrapWorkLines(lines: string[], columns: number): string[] {
   return wrapped;
 }
 
-export function runWorkTui(options: WorkTuiOptions): void {
-  if (options.once || !process.stdin.isTTY || !process.stdout.isTTY) {
-    const snapshot = readWorkSnapshot(options);
-    process.stdout.write(`${formatWorkSnapshot(snapshot)}\n`);
-    if (snapshot.unavailable) process.exitCode = 1;
-    return;
-  }
-
-  let snapshot = readWorkSnapshot(options);
-  let selected = 0;
-  let offset = 0;
-  let lines: string[] = [];
+/** Shared read-only terminal lifecycle. Views own their projection and viewport. */
+export function runReadOnlyTerminal(view: {
+  label: string;
+  refresh: () => void;
+  render: (
+    columns: number,
+    height: number,
+  ) => { lines: string[]; footer: string };
+  key: (key: Key, height: number) => void;
+}): void {
   let cleaned = false;
   let timer: NodeJS.Timeout | undefined;
   const wasRaw = process.stdin.isRaw;
@@ -333,7 +334,6 @@ export function runWorkTui(options: WorkTuiOptions): void {
     "SIGQUIT",
     "SIGTSTP",
   ] as const;
-
   const cleanup = (): void => {
     if (cleaned) return;
     cleaned = true;
@@ -342,7 +342,7 @@ export function runWorkTui(options: WorkTuiOptions): void {
     process.stdin.off("end", quit);
     process.stdin.off("error", fail);
     process.stdout.off("error", fail);
-    process.stdout.off("resize", resize);
+    process.stdout.off("resize", redraw);
     process.off("exit", cleanup);
     process.off("uncaughtExceptionMonitor", cleanup);
     for (const signal of signals) process.off(signal, quit);
@@ -359,56 +359,23 @@ export function runWorkTui(options: WorkTuiOptions): void {
   };
   const fail = (error: unknown): void => {
     cleanup();
-    console.error(`work tui unavailable: ${terminalText(String(error))}`);
+    console.error(`${view.label} unavailable: ${terminalText(String(error))}`);
     process.exitCode = 1;
   };
-  const draw = (): void => {
-    if ((process.stdout.columns || 80) < 3 || (process.stdout.rows || 24) < 2) {
-      process.stdout.write("\x1b[H\x1b[2J");
-      return;
-    }
-    const height = Math.max(1, (process.stdout.rows || 24) - 1);
-    offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - height)));
-    const footer = `Work ${snapshot.items.length ? selected + 1 : 0}/${snapshot.items.length} | lines ${offset + 1}-${Math.min(lines.length, offset + height)}/${lines.length} | n/p lease j/k scroll PgUp/PgDn g/G r q`;
-    const visible = lines.slice(offset, offset + height);
-    while (visible.length < height) visible.push("");
-    // Only generated terminal sequences reach the terminal unescaped.
-    process.stdout.write(
-      `\x1b[H\x1b[2J${visible.join("\r\n")}\r\n${footer.slice(0, Math.max(0, (process.stdout.columns || 80) - 1))}`,
-    );
-  };
-  const rebuild = (): void => {
-    const content = snapshotHeader(snapshot);
-    if (snapshot.unavailable)
-      content.push(`Work store unavailable: ${snapshot.unavailable}`);
-    else if (!snapshot.items.length)
-      content.push("No claimed work for this exact session and project.");
-    else {
-      content.push("");
-      for (const line of workItemLines(
-        snapshot.items[selected],
-        snapshot.capturedAt,
-      ))
-        content.push(line);
-    }
-    lines = wrapWorkLines(content, process.stdout.columns || 80);
-    draw();
-  };
-  const refresh = (): void => {
-    const id = snapshot.items[selected]?.lease.id;
-    snapshot = readWorkSnapshot(options);
-    const retained = snapshot.items.findIndex((item) => item.lease.id === id);
-    const next =
-      retained < 0
-        ? Math.min(selected, Math.max(0, snapshot.items.length - 1))
-        : retained;
-    if (snapshot.items[next]?.lease.id !== id) offset = 0;
-    selected = next;
-    rebuild();
-  };
-  function resize(): void {
+  function redraw(): void {
     try {
-      rebuild();
+      const columns = process.stdout.columns || 80;
+      const height = Math.max(1, (process.stdout.rows || 24) - 1);
+      if (columns < 3 || (process.stdout.rows || 24) < 2) {
+        process.stdout.write("\x1b[H\x1b[2J");
+        return;
+      }
+      const frame = view.render(columns, height);
+      const visible = frame.lines.slice(0, height);
+      while (visible.length < height) visible.push("");
+      process.stdout.write(
+        `\x1b[H\x1b[2J${visible.join("\r\n")}\r\n${frame.footer.slice(0, columns - 1)}`,
+      );
     } catch (error) {
       fail(error);
     }
@@ -419,55 +386,32 @@ export function runWorkTui(options: WorkTuiOptions): void {
         quit();
         return;
       }
-      if (key.name === "r") {
-        refresh();
-        return;
-      }
-      if (
-        key.name === "n" ||
-        key.name === "p" ||
-        key.name === "tab" ||
-        key.name === "left" ||
-        key.name === "right"
-      ) {
-        const backwards = key.name === "p" || key.name === "left" || key.shift;
-        const count = snapshot.items.length;
-        if (count) selected = (selected + (backwards ? -1 : 1) + count) % count;
-        offset = 0;
-        rebuild();
-        return;
-      }
-      const page = Math.max(1, (process.stdout.rows || 24) - 2);
-      if (key.name === "down" || key.name === "j") offset++;
-      else if (key.name === "up" || key.name === "k") offset--;
-      else if (key.name === "pagedown" || key.name === "space") offset += page;
-      else if (key.name === "pageup") offset -= page;
-      else if (key.name === "end" || (key.name === "g" && key.shift))
-        offset = lines.length;
-      else if (key.name === "home" || key.name === "g") offset = 0;
-      draw();
+      if (key.name === "r") view.refresh();
+      else view.key(key, Math.max(1, (process.stdout.rows || 24) - 1));
+      redraw();
     } catch (error) {
       fail(error);
     }
   }
-
   process.on("exit", cleanup);
   process.on("uncaughtExceptionMonitor", cleanup);
   for (const signal of signals) process.on(signal, quit);
   process.stdin.on("end", quit);
   process.stdin.on("error", fail);
   process.stdout.on("error", fail);
-  process.stdout.on("resize", resize);
+  process.stdout.on("resize", redraw);
   try {
     emitKeypressEvents(process.stdin);
     process.stdin.on("keypress", onKey);
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdout.write("\x1b[?1049h\x1b[?25l");
-    rebuild();
+    redraw();
+    if (cleaned) return;
     timer = setInterval(() => {
       try {
-        refresh();
+        view.refresh();
+        redraw();
       } catch (error) {
         fail(error);
       }
@@ -475,4 +419,77 @@ export function runWorkTui(options: WorkTuiOptions): void {
   } catch (error) {
     fail(error);
   }
+}
+
+export function scrollTuiOffset(
+  key: Key,
+  currentOffset: number,
+  length: number,
+  height: number,
+): number {
+  let offset = currentOffset;
+  const page = Math.max(1, height - 1);
+  if (key.name === "down" || key.name === "j") offset++;
+  else if (key.name === "up" || key.name === "k") offset--;
+  else if (key.name === "pagedown" || key.name === "space") offset += page;
+  else if (key.name === "pageup") offset -= page;
+  else if (key.name === "end" || (key.name === "g" && key.shift))
+    offset = length;
+  else if (key.name === "home" || key.name === "g") offset = 0;
+  return Math.max(0, Math.min(offset, Math.max(0, length - height)));
+}
+
+export function runWorkTui(options: WorkTuiOptions): void {
+  if (options.once || !process.stdin.isTTY || !process.stdout.isTTY) {
+    const snapshot = readWorkSnapshot(options);
+    process.stdout.write(`${formatWorkSnapshot(snapshot)}\n`);
+    if (snapshot.unavailable) process.exitCode = 1;
+    return;
+  }
+  let snapshot = readWorkSnapshot(options);
+  let selected = 0;
+  let offset = 0;
+  let lines: string[] = [];
+  runReadOnlyTerminal({
+    label: "work tui",
+    refresh() {
+      const id = snapshot.items[selected]?.lease.id;
+      snapshot = readWorkSnapshot(options);
+      const retained = snapshot.items.findIndex((item) => item.lease.id === id);
+      selected =
+        retained < 0
+          ? Math.min(selected, Math.max(0, snapshot.items.length - 1))
+          : retained;
+      if (snapshot.items[selected]?.lease.id !== id) offset = 0;
+    },
+    render(columns, height) {
+      const content = snapshotHeader(snapshot);
+      if (snapshot.unavailable)
+        content.push(`Work store unavailable: ${snapshot.unavailable}`);
+      else if (!snapshot.items.length)
+        content.push("No claimed work for this exact session and project.");
+      else
+        content.push(
+          "",
+          ...workItemLines(snapshot.items[selected], snapshot.capturedAt),
+        );
+      lines = wrapWorkLines(content, columns);
+      offset = Math.max(
+        0,
+        Math.min(offset, Math.max(0, lines.length - height)),
+      );
+      return {
+        lines: lines.slice(offset, offset + height),
+        footer: `Work ${snapshot.items.length ? selected + 1 : 0}/${snapshot.items.length} | lines ${offset + 1}-${Math.min(lines.length, offset + height)}/${lines.length} | n/p lease j/k scroll PgUp/PgDn g/G r q`,
+      };
+    },
+    key(key, height) {
+      if (["n", "p", "tab", "left", "right"].includes(key.name ?? "")) {
+        const backwards = key.name === "p" || key.name === "left" || key.shift;
+        const count = snapshot.items.length;
+        if (count) selected = (selected + (backwards ? -1 : 1) + count) % count;
+        offset = 0;
+      } else offset = scrollTuiOffset(key, offset, lines.length, height);
+    },
+  });
 }

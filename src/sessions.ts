@@ -82,6 +82,8 @@ export interface SessionNames {
   fullName: string;
   /** Human-facing name used where the project is already evident. */
   displayName: string;
+  /** Shortest producer-authorized display name; custom and legacy names stay whole. */
+  nameNoun: string;
   generated: boolean;
 }
 
@@ -517,7 +519,12 @@ export function sessionNames(
 ): SessionNames {
   const name = meta?.name?.trim();
   if (name && !isDerivedName(name, meta?.nameSource, cwd)) {
-    return { fullName: name, displayName: name, generated: false };
+    return {
+      fullName: name,
+      displayName: name,
+      nameNoun: name,
+      generated: false,
+    };
   }
   const generated =
     generatedName ?? assignedGeneratedSessionName(sessionId, false);
@@ -526,6 +533,10 @@ export function sessionNames(
       ? `${projectBase(cwd, sessionAliases())}-${generated.slug}`
       : generated.slug,
     displayName: generated.displayName,
+    nameNoun:
+      generated.scheme === "adjective-noun"
+        ? generated.displayName.slice(generated.displayName.indexOf(" ") + 1)
+        : generated.displayName,
     generated: true,
   };
 }

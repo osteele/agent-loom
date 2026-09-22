@@ -2,12 +2,23 @@
 import { canonicalProject } from "./paths.ts";
 import { peersInProject } from "./presence.ts";
 import { type Registration, coalesceRegistrations } from "./registry.ts";
-import { claudeSessions, sessionDisplayName } from "./sessions.ts";
+import {
+  type ClaudeSessionMeta,
+  claudeSessions,
+  sessionNames,
+} from "./sessions.ts";
 import {
   type UnreadSummaryEntry,
   computeUnreadSummary,
 } from "./unreadSummary.ts";
-import { readWeftJobsSnapshot } from "./weftJobs.ts";
+import {
+  type RunningJobsSnapshot,
+  type WeftJobsSnapshot,
+  readRunningJobsSnapshot,
+  readWeftJobsSnapshot,
+  runningForProjectSession,
+  unprocessedForProjectSession,
+} from "./weftJobs.ts";
 import {
   type WorkLease,
   type WorkProgress,
@@ -40,10 +51,12 @@ export interface SessionStatus {
   sessionId: string;
   generatedAt: number;
   name: string;
+  nameNoun: string | null;
   peers: number;
   unread: number;
   delivery: StatusDelivery;
   unprocessed: number | null;
+  running: number | null;
   work: StatusWork | null;
 }
 
@@ -100,6 +113,46 @@ export function statusWorkForSession(
   return { version: 1, items };
 }
 
+/** CLI and daemon share the same status contract and exact project/session joins. */
+export function makeSessionStatus(input: {
+  project: string;
+  sessionId: string;
+  sessions: Registration[];
+  meta: Map<string, ClaudeSessionMeta>;
+  unread: number;
+  leases: WorkLease[] | undefined;
+  jobs: WeftJobsSnapshot | undefined;
+  running: RunningJobsSnapshot | undefined;
+  nowMs: number;
+}): SessionStatus {
+  const {
+    project,
+    sessionId,
+    sessions,
+    meta,
+    unread,
+    leases,
+    jobs,
+    running,
+    nowMs,
+  } = input;
+  const identity = sessionNames(sessionId, meta.get(sessionId), project);
+  return {
+    version: 1,
+    project,
+    sessionId,
+    generatedAt: nowMs,
+    name: identity.displayName,
+    nameNoun: identity.nameNoun,
+    peers: peersInProject(sessions, sessionId, meta, nowMs).length,
+    unread,
+    delivery: pushDeliveryFor(sessions, sessionId),
+    unprocessed: unprocessedForProjectSession(jobs, project, sessionId),
+    running: runningForProjectSession(running, project, sessionId),
+    work: leases ? statusWorkForSession(leases, sessionId, sessions) : null,
+  };
+}
+
 /** One collection per presence tick, one spool/work read per project.
  * HTTP readers perform only a lookup; they never launch processes or scan mail.
  * Muting disables reminder publication, not a session's ability to see its counts. */
@@ -117,6 +170,7 @@ export class SessionStatusCache {
   } {
     const meta = claudeSessions();
     const jobs = readWeftJobsSnapshot(nowMs);
+    const running = readRunningJobsSnapshot(nowMs);
     const grouped = new Map<string, Registration[]>();
     for (const registration of sessions) {
       if (!registration.sessionId) continue;
@@ -156,20 +210,20 @@ export class SessionStatusCache {
           const sessionId = registration.sessionId;
           if (!sessionId) continue;
           const summary = unread[sessionId];
-          statuses.set(sessionId, {
-            version: 1,
-            project,
+          statuses.set(
             sessionId,
-            generatedAt: nowMs,
-            name: sessionDisplayName(sessionId, meta.get(sessionId), project),
-            peers: peersInProject(logical, sessionId, meta, nowMs).length,
-            unread: summary.unread,
-            delivery: pushDeliveryFor(logical, sessionId),
-            unprocessed: jobs ? (jobs.bySession[sessionId] ?? 0) : null,
-            work: leases
-              ? statusWorkForSession(leases, sessionId, registrations)
-              : null,
-          });
+            makeSessionStatus({
+              project,
+              sessionId,
+              sessions: logical,
+              meta,
+              unread: summary.unread,
+              leases,
+              jobs,
+              running,
+              nowMs,
+            }),
+          );
         }
         next.set(project, statuses);
       } catch (error) {

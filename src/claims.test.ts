@@ -239,10 +239,10 @@ test("same-owner overlaps stay separate while an exact repeat is existing", () =
   expect(repeated.disposition).toBe("existing");
   expect(repeated.claim.id).toBe(first.claim.id);
   expect(repeated.releaseToken).toBeUndefined();
-  expect(store.list(project)).toHaveLength(2);
-  expect("lastActivityAt" in repeated.claim && repeated.claim.lastActivityAt).toBe(
-    new Date(nowMs).toISOString(),
-  );
+  expect(store.list(project, nowMs)).toHaveLength(2);
+  expect(
+    "lastActivityAt" in repeated.claim && repeated.claim.lastActivityAt,
+  ).toBe(new Date(nowMs).toISOString());
 });
 
 test("manual release requires the token and remains idempotent during retention", () => {

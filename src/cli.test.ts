@@ -2307,3 +2307,42 @@ test("notify refuses unresolved replies instead of falling back to broadcast", a
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("status JSON reports unresolved identity as null instead of empty success output", async () => {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), "agent-mail-json-unresolved-")),
+  );
+  try {
+    const home = join(root, "home");
+    const project = join(root, "project");
+    mkdirSync(home);
+    mkdirSync(project);
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "cli.ts"),
+        "status-line",
+        "--json",
+        "--project",
+        project,
+      ],
+      {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          HOME: home,
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: "",
+          AGENT_SESSION_ID: "",
+        },
+      },
+    );
+    child.stdin.end();
+    expect(await child.exited).toBe(0);
+    expect(JSON.parse(await new Response(child.stdout).text())).toBeNull();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

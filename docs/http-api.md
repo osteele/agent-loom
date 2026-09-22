@@ -75,19 +75,26 @@ A successful response has `Cache-Control: no-store` and this shape:
   "sessionId": "resolved-routing-id",
   "generatedAt": 1789162967260,
   "name": "Excellent Otter",
+  "nameNoun": "Otter",
   "peers": 0,
   "unread": 0,
   "delivery": "push",
   "unprocessed": null,
+  "running": null,
   "work": {"version": 1, "items": []}
 }
 ```
 
 `generatedAt` is the collection time in epoch milliseconds. Counts are
 nonnegative integers. `delivery` is `push`, `pull`, `unknown`, or an empty
-string when registration capabilities are unavailable. `unprocessed: null`
-means the Weft snapshot is unavailable; zero means a usable snapshot reports
-no unprocessed jobs for this session.
+string when registration capabilities are unavailable. `nameNoun` is the intact
+noun from a generated adjective-noun name; custom and legacy names keep the
+full display name. It is nullable for consumers that cannot obtain this field.
+`unprocessed` counts terminal jobs awaiting processing; `running` counts actual
+running jobs. Both require exact submitter-session and canonical project-root
+attribution. Null means that count's Weft snapshot is unavailable or a job's
+project cannot be attributed. Zero means a usable snapshot reports no matching
+jobs. The snapshots refresh independently, so either count can be unavailable.
 
 `work: null` means work collection failed. Otherwise, each item has `id`,
 `resourceType`, `resourceKey`, `state` (`working` or `waiting`), and an ISO

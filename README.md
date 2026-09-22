@@ -241,6 +241,38 @@ it can prove one, and otherwise sends with `--from` as a free-form label. A
 recipient sees such a label tagged `[label; not a reply address]`, because
 replying to it by name will not resolve.
 
+### Read-only session mail history
+
+```bash
+agent-mail mail tui --session EXACT_ID --project /absolute/project
+agent-mail mail tui --session EXACT_ID --project /absolute/project --once
+agent-mail mail history --session EXACT_ID --project /absolute/project
+```
+
+The timeline shows incoming and outgoing mail, newest first, including sends
+to other projects. Direct mail is attributed by its exact target; broadcasts
+need a persisted receipt naming the session. Sender attribution uses the
+stored session ID and source project. Sharing a project or matching a display
+name is insufficient. Historical refused and expired mail remains visible.
+
+Enter expands the message at the top of the viewport; `n`/`p` moves between
+messages, `j`/`k` and Page Up/Down scroll, `g` follows newest arrivals, and `G`
+moves to the bottom. While browsing older messages, arrivals preserve the
+visible message and line offset. `r` refreshes; `q` quits. A non-TTY invocation
+or `--once` prints the full bodies once. All external terminal controls are
+escaped. Viewing, expanding, refreshing, and quitting create no read or
+delivery receipts, register no session, and prune no state.
+
+`mail history` returns `{kind:"session_mail_history", version:1, project,
+sessionId, generatedAt, messages}`. `generatedAt` is epoch milliseconds.
+Each message has `key`, `id`, `direction` (`incoming` or `outgoing`),
+`timestamp` (ISO timestamp), destination `project`, `sender`,
+`senderSessionId` (string or null), `recipients` (exact session IDs),
+`broadcast` (boolean), `body`, and nullable `replyTo` and `threadId`.
+The key identifies one project/message/direction appearance; self-addressed
+mail has both appearances. Unknown broadcast recipients are left absent,
+never inferred. Invalid selectors or unreadable history exit nonzero.
+
 ### Unread-mail reminders for pull-only clients
 
 Every agent-mail MCP server reports an existing unread backlog in its initial
@@ -418,6 +450,14 @@ session is actually registered and reachable under — see
 [identity resolution](docs/status-line.md#project-and-session-resolution) for
 why the two can differ. It prints nothing when it cannot resolve a session ID,
 or when it cannot tell which registration in the project is its own.
+
+`--json` returns the version-1
+[session status document](docs/http-api.md#session-status), including
+authoritative `nameNoun`, separate exact-project/session `running` and
+`unprocessed` Weft counts, and `work` without an extra flag. Missing job data
+is `null`; observed zero is `0`. An unresolved identity prints JSON `null`.
+Collection errors exit nonzero with a diagnostic on stderr. The older name
+and `--fields` modes retain their existing behavior.
 
 `--fields` prints one tab-separated line instead: the name, peer count, unread
 messages, delivery mode, and unprocessed weft jobs this session submitted. The

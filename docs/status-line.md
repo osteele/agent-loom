@@ -2,8 +2,8 @@
 
 `agent-mail status-line` prints the current session's display name. The
 [README](../README.md#status-lines) shows the Claude Code and Kimi Code setup;
-this page specifies identity resolution, `--fields`, and each client's
-rendering constraints.
+this page specifies identity resolution, `--json`, `--fields`, and each
+client's rendering constraints.
 
 The display name prints whether or not anyone else is in the project and can be
 used as an address when it is unique there. The full name and session ID from
@@ -53,6 +53,36 @@ Every `--fields` value keys off that address, not the payload ID, so a rotated
 session cannot report another session's unread count or weft jobs. An empty
 name where one is expected means the session could not be identified in its own
 project; restarting it re-syncs the two IDs.
+
+## `--json`
+
+`agent-mail status-line --json` prints the version-1
+[SessionStatus document](http-api.md#session-status) with the resolved
+`project`, `sessionId`, epoch-millisecond `generatedAt`, `name`, `nameNoun`,
+`peers`, `unread`, `delivery`, `unprocessed`, `running`, and `work`.
+Work is always present, independent of `--work`. No resolved identity prints
+JSON `null`; collection errors print a diagnostic to stderr and exit nonzero.
+
+`nameNoun` is supplied by the naming model. Generated adjective-noun names
+expose the full noun portion; custom and legacy names retain their full display
+name. Consumers need not split arbitrary names into words.
+
+The two job counts are independent. `running` counts actual running jobs and
+`unprocessed` counts terminal jobs awaiting processing, both matched by exact
+submitter session and canonical owning-project root. A job from the same
+session in another project is excluded. An unknown project root for that
+session makes the count unavailable. Null means unavailable; zero requires a
+usable producer snapshot.
+
+The daemon refreshes the job snapshots in the background every 60 seconds.
+Running jobs use the version-1 Weft `job_list` envelope with a complete,
+unbounded selection and the `project_root` column. The supported query is
+`weft list jobs --running --all --all-hosts --limit 0 --no-sync --format json
+--columns id,status_code,submitter_session,project_root`.
+The running query has a 15-second deadline and bounded output. A failed query
+retains its previous snapshot until the three-minute expiry, independently
+of the awaiting-processing snapshot. Older Weft versions without the column
+leave running counts unavailable. The CLI never launches Weft.
 
 ## `--fields`
 
@@ -125,11 +155,11 @@ this session has nothing pending.
   projects where agent-mail may not be installed.
 - Redirect stderr. `--debug` reports the resolved project, session ID, and peer
   recency there; ordinary status lines should not render it.
-- Keep one `agent-mail status-line --fields` call. Add `--work` to that call
-  when execution state is displayed. Separate calls repeat process
-  startup and can observe different snapshots.
-- The command always exits 0, including on errors. Empty output means there is
-  nothing to show.
+- Keep one `agent-mail status-line --json` call for structured consumers.
+  Existing positional consumers can retain `--fields` and optional `--work`.
+  Separate calls repeat startup and can observe different snapshots.
+- Name and TSV modes exit 0 on errors and print nothing. JSON mode exits
+  nonzero on collection errors so callers can retain stale data accurately.
 - Keep the path fast. `status-line` reads the daemon's presence snapshot and
   scans the project spool for unread messages. With the daemon stopped, a
   project-scoped process scan replaces the snapshot read.

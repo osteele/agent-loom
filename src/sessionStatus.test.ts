@@ -1,7 +1,24 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  PRESENCE_SNAPSHOT_PATH,
+  WEFT_JOBS_SNAPSHOT_PATH,
+  WORK_DIR,
+  ensureDirs,
+  projectSlug,
+} from "./paths.ts";
+import { writePresenceSnapshot } from "./presence.ts";
 import type { Registration } from "./registry.ts";
 import {
   SESSION_STATUS_TTL_MS,
@@ -9,6 +26,11 @@ import {
   statusWorkForSession,
 } from "./sessionStatus.ts";
 import { appendMessage } from "./spool.ts";
+import {
+  WEFT_RUNNING_SNAPSHOT_PATH,
+  writeRunningJobsSnapshot,
+  writeWeftJobsSnapshot,
+} from "./weftJobs.ts";
 import { type WorkLease, work } from "./work.ts";
 
 const directories: string[] = [];
@@ -266,5 +288,118 @@ test("published position survives a session restart and becomes unreported after
     expect(cleared.work.items[0].progress).toBeUndefined();
   } finally {
     work.release(owner.cwd, lease.id);
+  }
+});
+
+test("source JSON CLI and cached daemon agree on exact-scoped counts, identity and always-present work", async () => {
+  const owner = registration("json-status-owner");
+  const ownerId = owner.sessionId;
+  if (!ownerId) throw new Error("Fixture has no session identity");
+  const now = Date.now();
+  ensureDirs();
+  const paths = [
+    PRESENCE_SNAPSHOT_PATH,
+    WEFT_JOBS_SNAPSHOT_PATH,
+    WEFT_RUNNING_SNAPSHOT_PATH,
+  ];
+  const previous = paths.map((path) =>
+    existsSync(path) ? readFileSync(path) : undefined,
+  );
+  const invoke = () =>
+    spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dir, "cli.ts"),
+        "status-line",
+        "--json",
+        "--project",
+        owner.cwd,
+        "--session",
+        ownerId,
+      ],
+      {
+        env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+        encoding: "utf8",
+        timeout: 5000,
+      },
+    );
+  try {
+    writePresenceSnapshot(now, PRESENCE_SNAPSHOT_PATH, [owner]);
+    writeWeftJobsSnapshot(
+      {
+        total: 8,
+        bySession: { [ownerId]: 8 },
+        groups: [
+          {
+            projectRoot: owner.cwd,
+            project: "owner",
+            submitterSession: ownerId,
+            unattributedSession: false,
+            dispositions: { completed_ok: 2 },
+            total: 2,
+          },
+          {
+            projectRoot: "/different/project",
+            project: "other",
+            submitterSession: ownerId,
+            unattributedSession: false,
+            dispositions: { completed_ok: 6 },
+            total: 6,
+          },
+        ],
+      },
+      now,
+    );
+    writeRunningJobsSnapshot(
+      [
+        {
+          projectRoot: owner.cwd,
+          submitterSession: ownerId,
+          count: 1,
+        },
+        {
+          projectRoot: "/different/project",
+          submitterSession: ownerId,
+          count: 9,
+        },
+        { projectRoot: owner.cwd, submitterSession: "other-session", count: 8 },
+      ],
+      now,
+    );
+    const cache = new SessionStatusCache();
+    cache.refresh([owner], now);
+    const daemon = await cache.response(owner.cwd, ownerId, now).json();
+    const source = invoke();
+    expect(source.error).toBeUndefined();
+    expect(source.status).toBe(0);
+    const cli = JSON.parse(source.stdout);
+    expect({ ...cli, generatedAt: 0 }).toEqual({ ...daemon, generatedAt: 0 });
+    expect(cli).toMatchObject({
+      version: 1,
+      project: owner.cwd,
+      sessionId: owner.sessionId,
+      running: 1,
+      unprocessed: 2,
+      work: { version: 1, items: [] },
+    });
+    expect(cli.name.endsWith(cli.nameNoun)).toBe(true);
+    rmSync(WEFT_RUNNING_SNAPSHOT_PATH);
+    expect(JSON.parse(invoke().stdout).running).toBeNull();
+    writeRunningJobsSnapshot([], now);
+    expect(JSON.parse(invoke().stdout).running).toBe(0);
+    const directory = join(WORK_DIR, projectSlug(owner.cwd));
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "broken.json"), "{not JSON");
+    const failed = invoke();
+    expect(failed.status).toBe(1);
+    expect(failed.stdout).toBe("");
+    expect(failed.stderr).toContain("status-line failed");
+    rmSync(directory, { recursive: true, force: true });
+  } finally {
+    for (let index = 0; index < paths.length; index++) {
+      const contents = previous[index];
+      if (contents) writeFileSync(paths[index], contents);
+      else rmSync(paths[index], { force: true });
+    }
   }
 });

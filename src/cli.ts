@@ -112,7 +112,9 @@ import {
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
 } from "./integrations.ts";
+import { readSessionMailHistory } from "./mailHistory.ts";
 import { selectTriageCandidates } from "./mailTriage.ts";
+import { runMailTui } from "./mailTui.ts";
 import { installMcpStartupDiagnostics } from "./mcpDiagnostics.ts";
 import {
   CONFIG_PATH,
@@ -158,7 +160,11 @@ import {
 } from "./remind.ts";
 import { replyRecipient } from "./replies.ts";
 import { readFileSliceSync, readStdinText, sleepSync } from "./runtime.ts";
-import { pushDeliveryFor, statusWorkForSession } from "./sessionStatus.ts";
+import {
+  makeSessionStatus,
+  pushDeliveryFor,
+  statusWorkForSession,
+} from "./sessionStatus.ts";
 import {
   type ClaudeSessionMeta,
   activityTag,
@@ -192,13 +198,17 @@ import {
 import { unreadVisibleForSession } from "./unread.ts";
 import { readUnreadSummarySnapshot } from "./unreadSummary.ts";
 import { unregisteredActiveSessions } from "./unregistered.ts";
-import { weftJobsForSession } from "./weftJobs.ts";
 import {
+  readRunningJobsSnapshot,
+  readWeftJobsSnapshot,
+  weftJobsForSession,
+} from "./weftJobs.ts";
+import {
+  WorkConflictError,
   type WorkLease,
   type WorkProgress,
   type WorkReleaseOutcome,
   type WorkState,
-  WorkConflictError,
   sameWorkOwner,
   validateWorkProgress,
   work,
@@ -1313,13 +1323,11 @@ async function readStatusLinePayload(): Promise<StatusLinePayload | undefined> {
   }
 }
 
-/** Print this session's display name when another live agent shares the
- * project, and nothing at all when it is alone.
+/** Print the resolved session's display name or structured status.
  *
- * Always exits 0, including on error. The consumer is a shell substitution
- * inside a status-line script (`name=$(agent-mail status-line)`), where a
- * non-zero exit is hazardous under `set -e` and any stray output corrupts the
- * user's prompt. Empty output is already the signal for "nothing to show".
+ * Name and TSV modes always exit 0, including on error, for existing shell
+ * substitutions. JSON mode reports unresolved identity as null and fails
+ * explicitly on collection errors so structured clients can retain stale data.
  *
  * Resolves the project with `canonicalProject` rather than `resolveProjectArg`:
  * this addresses no mailbox, and `resolveProjectArg` both rejects unknown
@@ -1400,6 +1408,28 @@ async function cmdStatusLine(
     // already reports nothing rather than guessing. Falling back would let it
     // claim counts belonging to an id no peer can reach.
     const address = sessionAddress(sessions, sessionId, names, now, hostPids);
+    if (flags.json === true) {
+      if (!address) {
+        console.log("null");
+        return;
+      }
+      console.log(
+        JSON.stringify(
+          makeSessionStatus({
+            project,
+            sessionId: address,
+            sessions: coalesceRegistrations(sessions),
+            meta: names,
+            unread: unreadForSession(project, address),
+            leases: work.list(project),
+            jobs: readWeftJobsSnapshot(now),
+            running: readRunningJobsSnapshot(now),
+            nowMs: now,
+          }),
+        ),
+      );
+      return;
+    }
     const name = statusLineName(
       project,
       sessionId,
@@ -1451,7 +1481,9 @@ async function cmdStatusLine(
     }
     if (name) console.log(name);
   } catch (error) {
-    if (debug) console.error(`status-line failed: ${error}`);
+    if (debug || flags.json === true)
+      console.error(`status-line failed: ${error}`);
+    if (flags.json === true) process.exitCode = 1;
   }
 }
 
@@ -2254,6 +2286,28 @@ function parseWorkProgress(
     ...(total !== undefined ? { total: Number(total) } : {}),
     ...(typeof label === "string" ? { label } : {}),
   });
+}
+
+function cmdMail(args: string[]): void {
+  try {
+    const command = args[0];
+    if (command !== "history" && command !== "tui")
+      throw new Error(
+        "usage: agent-mail mail history|tui --session ID --project ABS [--once]",
+      );
+    const options = workTuiOptions(args.slice(1), `mail ${command}`);
+    if (command === "history") {
+      if (options.once) throw new Error("mail history does not accept --once");
+      console.log(
+        JSON.stringify(
+          readSessionMailHistory(options.project, options.sessionId),
+        ),
+      );
+    } else runMailTui(options);
+  } catch (error) {
+    console.error(`mail: ${terminalText(String(error))}`);
+    process.exitCode = 1;
+  }
 }
 
 function cmdWork(
@@ -3253,6 +3307,10 @@ Coordination:
   release-claim (--id <claim-id> | --token <release-token>)
                 [--project <dir>]
                         Release by token, session identity, or plan executor
+  mail history --session <id> --project <absolute-dir>
+                        Version-1 JSON incoming/outgoing history, read-only
+  mail tui --session <id> --project <absolute-dir> [--once]
+                        Read-only timeline; Enter expands, j/k scroll, g follows
   work list [--project <dir> | --all] [--type <type>] [--owner <owner>]
                         List exclusive logical-work leases
   work tui --session <id> --project <absolute-dir> [--once]
@@ -3297,10 +3355,10 @@ Dashboards:
                         Post / refresh the editable Slack dashboard
 
 Status line:
-  status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
-                        Print this session's display name, or tab-separated
-                        identity fields with --fields. Reads a supported client
-                        payload on stdin and falls back to session-id env vars.
+  status-line [--project <dir>] [--session <id>] [--json | --fields] [--work] [--debug]
+                        Print this session's display name, SessionStatus v1 JSON,
+                        or tab-separated fields. JSON always includes work;
+                        unresolved identity is null and collection errors fail.
                         --work appends versioned logical-work JSON to --fields.
 
 Reminders (hook-driven, for pull-only harnesses):
@@ -3440,6 +3498,9 @@ if (rest.includes("--help") || rest.includes("-h")) {
 switch (cmd) {
   case "notify":
     await cmdNotify(flags);
+    break;
+  case "mail":
+    cmdMail(rest);
     break;
   case "inbox":
     cmdInbox(flags);

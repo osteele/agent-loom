@@ -28,7 +28,12 @@
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { WEFT_JOBS_SNAPSHOT_PATH, canonicalProject } from "./paths.ts";
+import { isAbsolute, join } from "node:path";
+import {
+  STATE_DIR,
+  WEFT_JOBS_SNAPSHOT_PATH,
+  canonicalProject,
+} from "./paths.ts";
 
 /** Action-uniform disposition, cut on observables rather than on weft's attempt
  * status. The attempt marking drifts — the same runner recorded the same
@@ -129,10 +134,34 @@ export function readWeftJobsSnapshot(
   if (typeof snapshot.generatedAt !== "number") return undefined;
   if (!Number.isFinite(snapshot.generatedAt)) return undefined;
   if (typeof snapshot.total !== "number") return undefined;
+  if (!Number.isSafeInteger(snapshot.total) || snapshot.total < 0)
+    return undefined;
   if (typeof snapshot.bySession !== "object" || snapshot.bySession === null) {
     return undefined;
   }
   if (!Array.isArray(snapshot.groups)) return undefined;
+  if (
+    Object.values(snapshot.bySession).some(
+      (count) => !Number.isSafeInteger(count) || count < 0,
+    ) ||
+    snapshot.groups.some(
+      (group) =>
+        !group ||
+        !(
+          group.projectRoot === null ||
+          (typeof group.projectRoot === "string" &&
+            isAbsolute(group.projectRoot))
+        ) ||
+        !(
+          group.submitterSession === null ||
+          typeof group.submitterSession === "string"
+        ) ||
+        typeof group.unattributedSession !== "boolean" ||
+        !Number.isSafeInteger(group.total) ||
+        group.total < 0,
+    )
+  )
+    return undefined;
   if (nowMs - snapshot.generatedAt > maxAgeMs) return undefined;
   return snapshot as WeftJobsSnapshot;
 }
@@ -153,6 +182,158 @@ export function weftJobsForSession(
   const snapshot = readWeftJobsSnapshot(nowMs, WEFT_JOBS_SNAPSHOT_TTL_MS, path);
   if (!snapshot) return undefined;
   return snapshot.bySession[sessionId] ?? 0;
+}
+
+/** Project attribution comes from Weft's stored root, never its display label. */
+export function unprocessedForProjectSession(
+  snapshot: WeftJobsSnapshot | undefined,
+  project: string,
+  sessionId: string,
+): number | null {
+  if (!snapshot) return null;
+  let count = 0;
+  for (const group of snapshot.groups) {
+    if (group.submitterSession !== sessionId || group.unattributedSession)
+      continue;
+    if (group.projectRoot === null) return null;
+    if (canonicalProject(group.projectRoot) === project) count += group.total;
+  }
+  return count;
+}
+
+export interface RunningJobGroup {
+  projectRoot: string | null;
+  submitterSession: string;
+  count: number;
+}
+
+export interface RunningJobsSnapshot {
+  version: 1;
+  generatedAt: number;
+  groups: RunningJobGroup[];
+}
+
+export const WEFT_RUNNING_SNAPSHOT_PATH = join(STATE_DIR, "weft-running.json");
+export const WEFT_RUNNING_ARGS = [
+  "list",
+  "jobs",
+  "--running",
+  "--all",
+  "--all-hosts",
+  "--limit",
+  "0",
+  "--no-sync",
+  "--format",
+  "json",
+  "--columns",
+  "id,status_code,submitter_session,project_root",
+];
+
+/** A complete, versioned query is necessary to distinguish no jobs from no data. */
+export function parseRunningJobs(raw: unknown): RunningJobGroup[] | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const doc = raw as Record<string, unknown>;
+  const selection = doc.selection as Record<string, unknown> | undefined;
+  if (
+    doc.kind !== "job_list" ||
+    doc.version !== 1 ||
+    selection?.complete !== true ||
+    !Array.isArray(selection.constraints) ||
+    selection.constraints.length !== 0 ||
+    !Array.isArray(doc.jobs)
+  )
+    return undefined;
+  const groups = new Map<string, RunningJobGroup>();
+  const ids = new Set<number>();
+  for (const row of doc.jobs) {
+    if (
+      typeof row !== "object" ||
+      row === null ||
+      !Number.isSafeInteger(row.id) ||
+      row.id <= 0 ||
+      ids.has(row.id) ||
+      row.status_code !== "running" ||
+      typeof row.submitter_session !== "string" ||
+      !(
+        row.project_root === null ||
+        (typeof row.project_root === "string" && isAbsolute(row.project_root))
+      )
+    )
+      return undefined;
+    ids.add(row.id);
+    const key = JSON.stringify([row.project_root, row.submitter_session]);
+    const group = groups.get(key) ?? {
+      projectRoot: row.project_root,
+      submitterSession: row.submitter_session,
+      count: 0,
+    };
+    group.count++;
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+export function writeRunningJobsSnapshot(
+  groups: RunningJobGroup[],
+  nowMs = Date.now(),
+  path = WEFT_RUNNING_SNAPSHOT_PATH,
+): void {
+  const snapshot: RunningJobsSnapshot = {
+    version: 1,
+    generatedAt: nowMs,
+    groups,
+  };
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify(snapshot));
+  renameSync(temporary, path);
+}
+
+export function readRunningJobsSnapshot(
+  nowMs = Date.now(),
+  path = WEFT_RUNNING_SNAPSHOT_PATH,
+): RunningJobsSnapshot | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as RunningJobsSnapshot;
+    if (
+      value.version !== 1 ||
+      !Number.isFinite(value.generatedAt) ||
+      nowMs < value.generatedAt ||
+      nowMs - value.generatedAt > WEFT_JOBS_SNAPSHOT_TTL_MS ||
+      !Array.isArray(value.groups) ||
+      value.groups.some(
+        (group) =>
+          !group ||
+          !(
+            group.projectRoot === null ||
+            (typeof group.projectRoot === "string" &&
+              isAbsolute(group.projectRoot))
+          ) ||
+          typeof group.submitterSession !== "string" ||
+          !Number.isSafeInteger(group.count) ||
+          group.count < 0,
+      )
+    )
+      return undefined;
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+export function runningForProjectSession(
+  snapshot: RunningJobsSnapshot | undefined,
+  project: string,
+  sessionId: string,
+): number | null {
+  if (!snapshot) return null;
+  let count = 0;
+  for (const group of snapshot.groups) {
+    if (group.submitterSession !== sessionId) continue;
+    // A job with an unknown root may belong to this project: zero would be a guess.
+    if (group.projectRoot === null) return null;
+    if (canonicalProject(group.projectRoot) === project) count += group.count;
+  }
+  return count;
 }
 
 /** Parse weft's grouped inbox document (`kind: unprocessed_groups`).
@@ -180,13 +361,34 @@ export function parseUnprocessedGroups(
   for (const entry of doc.groups) {
     if (typeof entry !== "object" || entry === null) return undefined;
     const group = entry as Record<string, unknown>;
+    if (
+      !(
+        group.project_root === null ||
+        (typeof group.project_root === "string" &&
+          isAbsolute(group.project_root))
+      ) ||
+      !(
+        group.submitter_session === null ||
+        typeof group.submitter_session === "string"
+      ) ||
+      typeof group.unattributed_session !== "boolean" ||
+      typeof group.project !== "string" ||
+      typeof group.total !== "number" ||
+      !Number.isSafeInteger(group.total) ||
+      group.total < 0
+    )
+      return undefined;
     const raw_dispositions = group.dispositions;
     if (typeof raw_dispositions !== "object" || raw_dispositions === null) {
       return undefined;
     }
     const dispositions: Record<string, number> = {};
     for (const [key, value] of Object.entries(raw_dispositions)) {
-      if (typeof value !== "number" || !Number.isFinite(value))
+      if (
+        typeof value !== "number" ||
+        !Number.isSafeInteger(value) ||
+        value < 0
+      )
         return undefined;
       dispositions[key] = value;
     }
@@ -200,7 +402,7 @@ export function parseUnprocessedGroups(
           : null,
       unattributedSession: group.unattributed_session === true,
       dispositions,
-      total: typeof group.total === "number" ? group.total : 0,
+      total: group.total,
     });
   }
   return out;

@@ -16,6 +16,7 @@
  * SIGTERM: graceful stop. SIGHUP: reload config (Slack webhook, echo mode).
  */
 
+import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -65,7 +66,10 @@ import { flushTransferNotifications, transfers } from "./transfers.ts";
 import { writeUnreadSummarySnapshot } from "./unreadSummary.ts";
 import {
   WEFT_JOBS_REFRESH_MS,
+  WEFT_RUNNING_ARGS,
+  parseRunningJobs,
   parseUnprocessedGroups,
+  writeRunningJobsSnapshot,
   writeWeftJobsSnapshot,
 } from "./weftJobs.ts";
 
@@ -576,7 +580,36 @@ function resolveWeft(): string | undefined {
   return undefined;
 }
 
+let refreshingRunning = false;
+function tickRunningJobs(): void {
+  if (refreshingRunning) return;
+  const weft = resolveWeft();
+  if (!weft) return;
+  refreshingRunning = true;
+  execFile(
+    weft,
+    WEFT_RUNNING_ARGS,
+    { timeout: 15_000, maxBuffer: 8 * 1024 * 1024 },
+    (error, stdout) => {
+      try {
+        if (error) throw error;
+        const groups = parseRunningJobs(JSON.parse(stdout));
+        if (!groups)
+          throw new Error(
+            "unrecognized or incomplete Weft running-job document",
+          );
+        writeRunningJobsSnapshot(groups);
+      } catch (failure) {
+        log(`weft running snapshot failed: ${String(failure)}`);
+      } finally {
+        refreshingRunning = false;
+      }
+    },
+  );
+}
+
 function tickWeftJobs(): void {
+  tickRunningJobs();
   if (refreshing) return;
   const weft = resolveWeft();
   if (!weft) {
