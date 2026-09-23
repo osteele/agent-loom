@@ -2,17 +2,28 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import {
+  type Stats,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { type LockOwner, withFileLock } from "./lock.ts";
 import { CLAIMS_DIR, canonicalProject, projectSlug } from "./paths.ts";
 
@@ -198,6 +209,26 @@ export function pathClaimIsOverdue(
   );
 }
 
+export type PathClaimOwnerCondition =
+  | "session-live"
+  | "session-restart-grace"
+  | "manual-fresh"
+  | "plan-held"
+  | "released";
+
+export function pathClaimOwnerCondition(
+  claim: AnyPathClaim,
+): PathClaimOwnerCondition {
+  if ("state" in claim && claim.state === "released") return "released";
+  if ("state" in claim && claim.state === "restart-grace") {
+    return "session-restart-grace";
+  }
+  const kind = claimOwnerKind(claim.owner);
+  if (kind === "manual") return "manual-fresh";
+  if (kind === "plan") return "plan-held";
+  return "session-live";
+}
+
 /** Text identifying what a claim is on, used for deterministic display order. */
 function claimSortKey(claim: Claim): string {
   return claim.type === "path"
@@ -218,38 +249,55 @@ export function compareClaims(a: Claim, b: Claim): number {
 
 export class ClaimConflictError extends Error {
   readonly claimId: string;
-  readonly conflictingPath?: string;
+  readonly overlappingPaths: string[];
 
-  constructor(claim: Claim, conflictingPath?: string) {
+  constructor(claim: Claim, overlappingPaths: string[] = []) {
     const resource =
       claim.type === "path"
-        ? (conflictingPath ??
-          pathClaimTargets(claim)
-            .map((target) => target.path)
-            .join(", "))
+        ? overlappingPaths.length > 0
+          ? `overlapping targets ${[...new Set(overlappingPaths)].join(" and ")}`
+          : pathClaimTargets(claim)
+              .map((target) => target.path)
+              .join(", ")
         : `${claim.experimentId} in ${claim.notebook}`;
-    super(`${resource} is claimed by ${claim.owner.label} (${claim.id})`);
+    super(
+      `${resource} ${claim.type === "path" ? "are" : "is"} claimed by ${claim.owner.label} (${claim.id})`,
+    );
     this.name = "ClaimConflictError";
     this.claimId = claim.id;
-    this.conflictingPath = conflictingPath;
+    this.overlappingPaths = [...new Set(overlappingPaths)];
   }
 }
 
-export function canonicalPath(path: string): string {
-  const absolute = resolve(path);
-  if (existsSync(absolute)) return realpathSync(absolute);
-
-  const missing: string[] = [];
-  let cursor = absolute;
-  while (!existsSync(cursor)) {
-    const parent = dirname(cursor);
-    if (parent === cursor) break;
-    missing.unshift(
-      cursor.slice(parent.length + (parent.endsWith("/") ? 0 : 1)),
-    );
-    cursor = parent;
+export function canonicalPath(path: string, symlinkDepth = 0): string {
+  if (symlinkDepth > 40) {
+    throw new Error(`too many symbolic links while resolving ${path}`);
   }
-  return resolve(realpathSync(cursor), ...missing);
+  const absolute = resolve(path);
+  const root = parse(absolute).root;
+  const parts = relative(root, absolute).split(sep).filter(Boolean);
+  let cursor = root;
+  for (let index = 0; index < parts.length; index += 1) {
+    const candidate = resolve(cursor, parts[index]);
+    let stat: Stats;
+    try {
+      stat = lstatSync(candidate);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      return resolve(candidate, ...parts.slice(index + 1));
+    }
+    if (stat.isSymbolicLink()) {
+      const destination = resolve(
+        dirname(candidate),
+        readlinkSync(candidate),
+        ...parts.slice(index + 1),
+      );
+      return canonicalPath(destination, symlinkDepth + 1);
+    }
+    cursor = candidate;
+  }
+  return realpathSync(cursor);
 }
 
 function isWithin(project: string, path: string): boolean {
@@ -257,10 +305,7 @@ function isWithin(project: string, path: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function pathsConflict(
-  a: PathClaimTarget,
-  b: PathClaimTarget,
-): boolean {
+function pathsConflict(a: PathClaimTarget, b: PathClaimTarget): boolean {
   if (a.path === b.path) return true;
   if (a.pathType === "directory" && isWithin(a.path, b.path)) return true;
   return b.pathType === "directory" && isWithin(b.path, a.path);
@@ -280,12 +325,15 @@ function normalizedTargets(
   project: string,
   targets: PathClaimRequestTarget[],
 ): PathClaimTarget[] {
-  if (targets.length === 0) throw new Error("at least one claim path is required");
+  if (targets.length === 0)
+    throw new Error("at least one claim path is required");
   const byPath = new Map<string, PathClaimTarget["pathType"]>();
   for (const target of targets) {
     const path = canonicalPath(target.path);
     if (!isWithin(project, path)) {
-      throw new Error(`claim target must be inside project ${project}: ${path}`);
+      throw new Error(
+        `claim target must be inside project ${project}: ${path}`,
+      );
     }
     let pathType = target.pathType ?? "file";
     if (existsSync(path)) {
@@ -295,7 +343,8 @@ function normalizedTargets(
         : stat.isFile()
           ? "file"
           : undefined;
-      if (!observed) throw new Error(`claim target is not a file or directory: ${path}`);
+      if (!observed)
+        throw new Error(`claim target is not a file or directory: ${path}`);
       if (target.pathType && target.pathType !== observed) {
         throw new Error(`${path} is a ${observed}, not a ${target.pathType}`);
       }
@@ -329,10 +378,19 @@ function requireValidOwner(owner: ClaimOwner): void {
   if (kind === "session" && !owner.sessionId) {
     throw new Error("session claim owner requires a session id");
   }
-  if (kind === "plan" && !owner.plan) {
-    throw new Error("plan claim owner requires a plan project and stem");
+  if (kind !== "session" && owner.sessionId) {
+    throw new Error(`a ${kind} claim owner cannot carry a session id`);
   }
-  if (kind !== "plan" && owner.plan) {
+  if (kind === "plan") {
+    if (!owner.plan?.stem) {
+      throw new Error("plan claim owner requires a plan project and stem");
+    }
+    if (canonicalProject(owner.plan.project) !== owner.plan.project) {
+      throw new Error("plan claim owner project must be canonical");
+    }
+    return;
+  }
+  if (owner.plan) {
     throw new Error("only a plan claim owner may carry a plan identity");
   }
 }
@@ -376,11 +434,7 @@ export class ClaimStore {
     const retained: PathClaim[] = [];
     for (const claim of this.readDirectory(dir)) {
       if (claim.type !== "path" || claim.state !== "released") continue;
-      if (Date.parse(claim.retainedUntil ?? "") <= nowMs) {
-        const path = join(dir, `${claim.id}.json`);
-        if (existsSync(path)) unlinkSync(path);
-        continue;
-      }
+      if (Date.parse(claim.retainedUntil ?? "") <= nowMs) continue;
       retained.push(claim);
     }
     return retained;
@@ -390,13 +444,22 @@ export class ClaimStore {
     return this.readDirectory(this.projectDir(canonicalProject(project)));
   }
 
-  list(project: string, nowMs = Date.now()): Claim[] {
+  /** Raw active records for read-only status surfaces; performs no lifecycle transitions. */
+  peek(project: string): Claim[] {
+    return this.listStored(project);
+  }
+  list(
+    project: string,
+    nowMs = Date.now(),
+    options: PathClaimStoreOptions = {},
+  ): Claim[] {
     const canonical = canonicalProject(project);
+    if (!existsSync(this.projectDir(canonical))) return [];
     return this.withLock(canonical, () => {
       const now = new Date(nowMs);
       for (const stored of this.listStored(canonical)) {
         if (stored.type !== "path") continue;
-        const claim = this.refreshClaim(stored, {}, now);
+        const claim = this.refreshClaim(stored, options, now);
         if (!claim || !pathClaimIsOverdue(claim, nowMs)) continue;
         const reason =
           claimOwnerKind(claim.owner) === "manual"
@@ -408,8 +471,8 @@ export class ClaimStore {
                 Date.parse(claim.lastActivityAt ?? claim.createdAt) +
                   PATH_CLAIM_MANUAL_TTL_MS,
               ).toISOString()
-            : claim.graceDeadline ?? now.toISOString();
-        this.releasePathClaim(claim, reason, releasedAt, now);
+            : (claim.graceDeadline ?? now.toISOString());
+        this.releasePathClaim(claim, reason, releasedAt);
       }
       return this.listStored(canonical);
     });
@@ -435,10 +498,17 @@ export class ClaimStore {
       );
   }
 
-  listAll(nowMs = Date.now()): Claim[] {
-    const projects = new Set(this.listAllStored().map((claim) => claim.project));
+  /** Raw active records across projects; performs no lifecycle transitions. */
+  peekAll(): Claim[] {
+    return this.listAllStored();
+  }
+
+  listAll(nowMs = Date.now(), options: PathClaimStoreOptions = {}): Claim[] {
+    const projects = new Set(
+      this.listAllStored().map((claim) => claim.project),
+    );
     return [...projects]
-      .flatMap((project) => this.list(project, nowMs))
+      .flatMap((project) => this.list(project, nowMs, options))
       .sort(
         (a, b) => a.project.localeCompare(b.project) || compareClaims(a, b),
       );
@@ -452,6 +522,27 @@ export class ClaimStore {
       .sort(
         (a, b) => a.project.localeCompare(b.project) || compareClaims(a, b),
       );
+  }
+
+  pruneReleased(nowMs = Date.now()): number {
+    let removed = 0;
+    for (const projectDir of this.projectDirectories()) {
+      const releasedDir = join(projectDir, "released");
+      for (const claim of this.readDirectory(releasedDir)) {
+        if (
+          claim.type !== "path" ||
+          claim.state !== "released" ||
+          Date.parse(claim.retainedUntil ?? "") > nowMs
+        ) {
+          continue;
+        }
+        const path = join(releasedDir, `${claim.id}.json`);
+        if (!existsSync(path)) continue;
+        unlinkSync(path);
+        removed += 1;
+      }
+    }
+    return removed;
   }
 
   private write(claim: Claim, replace = false): void {
@@ -473,7 +564,6 @@ export class ClaimStore {
     claim: AnyPathClaim,
     reason: PathClaimReleaseReason,
     releasedAt: string,
-    retainedAt = new Date(),
   ): PathClaim {
     const released: PathClaim = {
       ...claim,
@@ -484,10 +574,10 @@ export class ClaimStore {
       releasedAt,
       releaseReason: reason,
       retainedUntil: new Date(
-        retainedAt.getTime() + PATH_CLAIM_RETENTION_MS,
+        Date.parse(releasedAt) + PATH_CLAIM_RETENTION_MS,
       ).toISOString(),
     };
-    delete released.graceDeadline;
+    released.graceDeadline = undefined;
     const dir = this.releasedDir(claim.project);
     mkdirSync(dir, { recursive: true });
     const destination = join(dir, `${claim.id}.json`);
@@ -528,7 +618,6 @@ export class ClaimStore {
           new Date(
             Date.parse(current.lastActivityAt) + PATH_CLAIM_MANUAL_TTL_MS,
           ).toISOString(),
-          now,
         );
         return undefined;
       }
@@ -537,12 +626,7 @@ export class ClaimStore {
     if (kind === "plan") {
       if (!options.planExecutor || !current.owner.plan) return current;
       if (!options.planExecutor(current.owner.plan)) {
-        this.releasePathClaim(
-          current,
-          "plan-lease-lost",
-          now.toISOString(),
-          now,
-        );
+        this.releasePathClaim(current, "plan-lease-lost", now.toISOString());
         return undefined;
       }
       return current;
@@ -558,14 +642,13 @@ export class ClaimStore {
         current,
         "session-absence",
         current.graceDeadline ?? now.toISOString(),
-        now,
       );
       return undefined;
     }
     if (live) {
       if (current.state === "restart-grace") {
         const active: PathClaim = { ...current, state: "active" };
-        delete active.graceDeadline;
+        active.graceDeadline = undefined;
         this.write(active, true);
         return active;
       }
@@ -592,7 +675,12 @@ export class ClaimStore {
     owner: ClaimOwner,
     options: PathClaimStoreOptions = {},
   ): PathClaimAcquisition {
-    return this.claimPaths(project, [{ path: target, pathType }], owner, options);
+    return this.claimPaths(
+      project,
+      [{ path: target, pathType }],
+      owner,
+      options,
+    );
   }
 
   claimPaths(
@@ -603,8 +691,7 @@ export class ClaimStore {
   ): PathClaimAcquisition {
     requireValidOwner(owner);
     if (claimOwnerKind(owner) === "plan") {
-      const executor =
-        owner.plan && options.planExecutor?.(owner.plan);
+      const executor = owner.plan && options.planExecutor?.(owner.plan);
       if (
         !executor ||
         !options.actor ||
@@ -649,10 +736,18 @@ export class ClaimStore {
         }
         for (const claim of active) {
           if (sameClaimOwner(claim.owner, owner)) continue;
-          const conflict = pathClaimTargets(claim).find((held) =>
-            requested.some((target) => pathsConflict(held, target)),
-          );
-          if (conflict) throw new ClaimConflictError(claim, conflict.path);
+          const heldTargets = pathClaimTargets(claim);
+          for (const held of heldTargets) {
+            const requestedTarget = requested.find((target) =>
+              pathsConflict(held, target),
+            );
+            if (requestedTarget) {
+              throw new ClaimConflictError(claim, [
+                held.path,
+                requestedTarget.path,
+              ]);
+            }
+          }
         }
         const token = releaseToken();
         const claim: PathClaim = {
@@ -661,7 +756,8 @@ export class ClaimStore {
           project: canonical,
           paths: requested,
           path: requested.length === 1 ? requested[0].path : canonical,
-          pathType: requested.length === 1 ? requested[0].pathType : "directory",
+          pathType:
+            requested.length === 1 ? requested[0].pathType : "directory",
           releaseToken: token,
           state: "active",
           owner: { ...owner, kind: claimOwnerKind(owner) },
@@ -683,7 +779,9 @@ export class ClaimStore {
     const canonical = canonicalProject(project);
     const notebookPath = canonicalPath(notebook);
     if (!isWithin(canonical, notebookPath)) {
-      throw new Error(`notebook must be inside project ${canonical}: ${notebookPath}`);
+      throw new Error(
+        `notebook must be inside project ${canonical}: ${notebookPath}`,
+      );
     }
     const experiments = join(notebookPath, "experiments");
     if (!existsSync(experiments) || !statSync(experiments).isDirectory()) {
@@ -729,17 +827,27 @@ export class ClaimStore {
     releaseToken?: string;
     project?: string;
     actor?: ClaimOwner;
+    sessionIsLive?: (sessionId: string) => boolean | undefined;
     planExecutor?: (plan: PlanClaimIdentity) => ClaimOwner | undefined;
     now?: Date;
   }): ClaimReleaseResult {
-    if ((request.claimId === undefined) === (request.releaseToken === undefined)) {
+    if (
+      (request.claimId === undefined) ===
+      (request.releaseToken === undefined)
+    ) {
       throw new Error("release requires exactly one claim id or release token");
     }
-    const project = request.project ? canonicalProject(request.project) : undefined;
+    if (request.claimId?.trim() === "" || request.releaseToken?.trim() === "") {
+      throw new Error("claim id and release token must not be empty");
+    }
+    const requestNow = request.now ?? new Date();
+    const project = request.project
+      ? canonicalProject(request.project)
+      : undefined;
     const active = project ? this.listStored(project) : this.listAllStored();
     const released = project
-      ? this.listReleased(project)
-      : this.listAllReleased();
+      ? this.listReleased(project, requestNow.getTime())
+      : this.listAllReleased(requestNow.getTime());
     const matches = (claim: Claim): boolean =>
       request.releaseToken !== undefined
         ? claim.type === "path" &&
@@ -750,25 +858,54 @@ export class ClaimStore {
     if (!liveClaim) {
       const prior = released.find(matches);
       if (prior) return { claim: prior, disposition: "already-released" };
-      throw new Error("claim not found");
+      throw new Error("unknown claim");
     }
 
     return this.withLock(
       liveClaim.project,
       () => {
-        const current = this.listStored(liveClaim.project).find(matches);
+        let current = this.listStored(liveClaim.project).find(matches);
         if (!current) {
-          const prior = this.listReleased(liveClaim.project).find(matches);
+          const prior = this.listReleased(
+            liveClaim.project,
+            requestNow.getTime(),
+          ).find(matches);
           if (prior) return { claim: prior, disposition: "already-released" };
-          throw new Error("claim not found");
+          throw new Error("unknown claim");
+        }
+        if (current.type === "path") {
+          const refreshed = this.refreshClaim(
+            current,
+            {
+              sessionIsLive: request.sessionIsLive,
+              planExecutor: request.planExecutor,
+            },
+            requestNow,
+          );
+          if (!refreshed) {
+            const prior = this.listReleased(
+              liveClaim.project,
+              requestNow.getTime(),
+            ).find(matches);
+            if (prior) {
+              return { claim: prior, disposition: "already-released" };
+            }
+            throw new Error("unknown claim");
+          }
+          current = refreshed;
         }
         if (current.type === "experiment") {
-          if (!request.actor || !experimentOwnerMatches(current.owner, request.actor)) {
+          if (
+            !request.actor ||
+            !experimentOwnerMatches(current.owner, request.actor)
+          ) {
             throw new Error(
               `claim ${current.id} belongs to ${current.owner.label}; only its owner can release it`,
             );
           }
-          unlinkSync(join(this.projectDir(current.project), `${current.id}.json`));
+          unlinkSync(
+            join(this.projectDir(current.project), `${current.id}.json`),
+          );
           return { claim: current, disposition: "released" };
         }
 
@@ -790,7 +927,9 @@ export class ClaimStore {
             request.planExecutor
           ) {
             const executor = request.planExecutor(current.owner.plan);
-            byIdentity = executor !== undefined && sameOwnerProcess(executor, request.actor);
+            byIdentity =
+              executor !== undefined &&
+              sameOwnerProcess(executor, request.actor);
           }
         }
         if (!byToken && !byIdentity) {
@@ -798,12 +937,10 @@ export class ClaimStore {
             `claim ${current.id} belongs to ${current.owner.label}; release requires its token or proven owner identity`,
           );
         }
-        const releaseTime = request.now ?? new Date();
         const releasedClaim = this.releasePathClaim(
           current,
           "owner-request",
-          releaseTime.toISOString(),
-          releaseTime,
+          requestNow.toISOString(),
         );
         return { claim: releasedClaim, disposition: "released" };
       },
@@ -822,7 +959,9 @@ export class ClaimStore {
   ): Claim {
     const canonical = canonicalProject(project);
     return this.withLock(canonical, () => {
-      const claim = this.listStored(canonical).find((item) => item.id === claimId);
+      const claim = this.listStored(canonical).find(
+        (item) => item.id === claimId,
+      );
       if (!claim) throw new Error(`claim not found: ${claimId}`);
       const reason = options.reason ?? "forced-recovery";
       const now = options.at ? new Date(options.at) : new Date();
@@ -831,25 +970,54 @@ export class ClaimStore {
         reason === "session-absence" &&
         claimOwnerKind(claim.owner) === "session"
       ) {
-        const refreshed = this.refreshClaim(
-          claim,
-          {
-            sessionIsLive: () => ownerIsLive(claim.owner, claim),
-          },
-          now,
-        );
-        if (refreshed) {
-          throw new Error(
-            refreshed.state === "restart-grace"
-              ? `claim ${claimId} is in restart grace until ${refreshed.graceDeadline}`
-              : `claim ${claimId} belongs to ${claim.owner.label}; its owner is live or cannot be verified offline`,
+        const current: PathClaim =
+          "state" in claim && claim.state
+            ? claim
+            : {
+                ...claim,
+                paths: pathClaimTargets(claim),
+                releaseToken: releaseToken(),
+                state: "active",
+                lastActivityAt: claim.createdAt,
+              };
+        if (current !== claim) this.write(current, true);
+        const live = ownerIsLive(current.owner, current);
+        if (
+          current.state === "restart-grace" &&
+          pathClaimIsOverdue(current, now.getTime())
+        ) {
+          return this.releasePathClaim(
+            current,
+            "session-absence",
+            current.graceDeadline ?? now.toISOString(),
           );
         }
-        const released = this.listReleased(canonical, now.getTime()).find(
-          (item) => item.id === claimId,
+        if (live) {
+          if (current.state === "restart-grace") {
+            const active: PathClaim = { ...current, state: "active" };
+            active.graceDeadline = undefined;
+            this.write(active, true);
+          }
+          throw new Error(
+            `claim ${claimId} belongs to ${current.owner.label}; its owner is live or cannot be verified offline`,
+          );
+        }
+        if (current.state === "active") {
+          const grace: PathClaim = {
+            ...current,
+            state: "restart-grace",
+            graceDeadline: new Date(
+              now.getTime() + PATH_CLAIM_SESSION_GRACE_MS,
+            ).toISOString(),
+          };
+          this.write(grace, true);
+          throw new Error(
+            `claim ${claimId} is in restart grace until ${grace.graceDeadline}`,
+          );
+        }
+        throw new Error(
+          `claim ${claimId} is in restart grace until ${current.graceDeadline}`,
         );
-        if (!released) throw new Error(`claim release was not retained: ${claimId}`);
-        return released;
       }
       if (ownerIsLive(claim.owner, claim)) {
         throw new Error(
@@ -860,7 +1028,10 @@ export class ClaimStore {
         unlinkSync(join(this.projectDir(canonical), `${claim.id}.json`));
         return claim;
       }
-      if (reason === "manual-expiry" && !pathClaimIsOverdue(claim, now.getTime())) {
+      if (
+        reason === "manual-expiry" &&
+        !pathClaimIsOverdue(claim, now.getTime())
+      ) {
         throw new Error(`claim ${claimId} has not reached its manual expiry`);
       }
       const releasedAt =
@@ -870,14 +1041,11 @@ export class ClaimStore {
               Date.parse(claim.lastActivityAt) + PATH_CLAIM_MANUAL_TTL_MS,
             ).toISOString()
           : new Date().toISOString());
-      return this.releasePathClaim(claim, reason, releasedAt, now);
+      return this.releasePathClaim(claim, reason, releasedAt);
     });
   }
 
-  observeSessions(
-    liveSessionIds: ReadonlySet<string>,
-    now = new Date(),
-  ): void {
+  observeSessions(liveSessionIds: ReadonlySet<string>, now = new Date()): void {
     const projects = new Set(
       this.listAllStored()
         .filter(

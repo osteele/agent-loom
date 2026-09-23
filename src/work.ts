@@ -12,13 +12,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { type LockOwner, withFileLock } from "./lock.ts";
-import { WORK_DIR, canonicalProject, projectSlug } from "./paths.ts";
 import {
   type ClaimStore,
-  claims,
   type PathClaimReleaseReason,
+  claims,
 } from "./claims.ts";
+import { type LockOwner, withFileLock } from "./lock.ts";
+import { WORK_DIR, canonicalProject, projectSlug } from "./paths.ts";
 
 export interface WorkOwner {
   id: string;

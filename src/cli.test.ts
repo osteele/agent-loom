@@ -834,15 +834,13 @@ test("claim-path groups repeated path flags under one claim id", async () => {
     expect(listed.trim().split("\n")).toHaveLength(1);
     expect(listed).toContain("one.swift");
     expect(listed).toContain("two.swift");
+    expect(listed).toContain(realpathSync(project));
+    expect(listed).toContain("[owner manual; manual-fresh]");
+    expect(listed).toContain("[state active]");
+    expect(listed).not.toContain(releaseToken);
 
     const release = Bun.spawn(
-      [
-        process.execPath,
-        cli,
-        "release-claim",
-        "--token",
-        releaseToken,
-      ],
+      [process.execPath, cli, "release-claim", "--token", releaseToken],
       { env, stdout: "pipe", stderr: "pipe" },
     );
     expect(await release.exited).toBe(0);

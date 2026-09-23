@@ -264,9 +264,7 @@ function claimEntry(
   const paths = pathClaimTargets(pathClaim).map((target) => target.path);
   const overdue = pathClaimIsOverdue(pathClaim);
   const inGrace =
-    "state" in pathClaim &&
-    pathClaim.state === "restart-grace" &&
-    !overdue;
+    "state" in pathClaim && pathClaim.state === "restart-grace" && !overdue;
   return {
     id: pathClaim.id,
     kind: "path-claim",
@@ -364,18 +362,39 @@ export function listCoordination(
   } = {},
 ): CoordinationEntry[] {
   const registrations = options.registrations ?? listLive();
+  const registrationsReliable = options.registrationsReliable ?? true;
   const claimStore = options.claimStore ?? claims;
   const workStore = options.workStore ?? work;
-  const claimRecords = options.allProjects
-    ? claimStore.listAll()
-    : options.project
-      ? claimStore.list(options.project)
-      : [];
   const workRecords = options.allProjects
     ? workStore.listAll()
     : options.project
       ? workStore.list(options.project)
       : [];
+  const claimRecords = options.allProjects
+    ? claimStore.peekAll()
+    : options.project
+      ? claimStore.peek(options.project)
+      : [];
+  const claimWorkById = new Map(workRecords.map((lease) => [lease.id, lease]));
+  if (!options.allProjects) {
+    const planProjects = new Set(
+      claimRecords
+        .filter(
+          (claim) =>
+            claim.type === "path" &&
+            claimOwnerKind(claim.owner) === "plan" &&
+            claim.owner.plan,
+        )
+        .map((claim) => claim.owner.plan?.project)
+        .filter((project): project is string => project !== undefined),
+    );
+    for (const planProject of planProjects) {
+      for (const lease of workStore.list(planProject)) {
+        claimWorkById.set(lease.id, lease);
+      }
+    }
+  }
+  const claimWorkRecords = [...claimWorkById.values()];
   const ownerPids = [...workRecords, ...claimRecords]
     .map((record) => record.owner)
     .filter((owner) => !owner.sessionId && owner.pid !== undefined)
@@ -386,20 +405,15 @@ export function listCoordination(
       : (options.processes ?? coordinationProcessEvidence(ownerPids));
   return [
     ...workRecords.map((lease) =>
-      workEntry(
-        lease,
-        registrations,
-        processes,
-        options.registrationsReliable ?? true,
-      ),
+      workEntry(lease, registrations, processes, registrationsReliable),
     ),
     ...claimRecords.map((claim) =>
       claimEntry(
         claim,
         registrations,
         processes,
-        options.registrationsReliable ?? true,
-        workRecords,
+        registrationsReliable,
+        claimWorkRecords,
       ),
     ),
   ].sort(
@@ -415,39 +429,41 @@ export function describeCoordination(entry: CoordinationEntry): string {
   const identity = [
     entry.owner.id,
     entry.owner.sessionId && entry.owner.sessionId !== entry.owner.id
-      ? `session ${entry.owner.sessionId}`
+      ? entry.owner.sessionId
       : undefined,
     entry.owner.pid !== undefined ? `pid ${entry.owner.pid}` : undefined,
   ]
     .filter(Boolean)
-    .join("; ");
+    .join(", ");
   const lastSeen = entry.ownerLastSeen
-    ? `; last seen ${entry.ownerLastSeen}`
+    ? ` [owner activity ${entry.ownerLastSeen}]`
     : "";
-  return `${entry.id} ${entry.projectLabel}/${entry.resourceType}:${entry.resourceLabel} — ${entry.owner.label} (${identity})${state}${activity} [${entry.condition}] [owner ${entry.ownerStatus}${lastSeen}] [updated ${entry.updatedAt}]`;
+  return `${entry.id} ${entry.projectLabel}/${entry.resourceLabel} — ${entry.owner.label}${identity ? ` (${identity})` : ""} [${entry.ownerStatus}:${entry.condition}]${state}${activity} [created ${entry.createdAt}] [updated ${entry.updatedAt}]${lastSeen}`;
 }
 
-/** Actionable conflict guidance without weakening ownership safeguards. */
 export function coordinationConflictAdvice(entry: CoordinationEntry): string {
   if (entry.condition === "restart-grace") {
-    return "owner session is in restart grace; wait for the grace deadline or ask the operator to authorize forced recovery";
+    return "wait for the restart-grace deadline";
   }
   if (entry.ownerStatus === "offline") {
-    return `owner is offline; retry acquisition or run agent-mail coordination recover --id ${entry.id}`;
+    return `run agent-mail coordination recover --id ${entry.id}`;
   }
   if (entry.ownerStatus === "expired") {
-    return `owner is manual and has not renewed in ${Math.round(MANUAL_OWNER_TTL_MS / 3_600_000)}h; retry acquisition or run agent-mail coordination recover --id ${entry.id}`;
+    return "retry the acquisition";
   }
   if (entry.ownerStatus === "unverifiable") {
-    return `owner liveness is unverifiable in this sandbox; inspect from a normal terminal, then run agent-mail coordination recover --id ${entry.id} if it reports owner-offline`;
+    return "inspect owner liveness from a normal terminal";
   }
   if (entry.ownerStatus === "manual") {
-    return "owner is deliberately manual; ask the operator to release it";
+    return `owner is deliberately manual; obtain operator authority and a reason, then run agent-mail coordination recover --id ${entry.id}`;
+  }
+  if (entry.ownerStatus === "plan") {
+    return `ask the current plan executor to release ${entry.id}`;
   }
   if (entry.kind === "work") {
-    return "owner is live; use request_coordination_transfer for an auditable handoff";
+    return "use request_coordination_transfer for an auditable handoff";
   }
-  return `owner is live; ${entry.kind === "path-claim" ? "path claims" : "experiment reservations"} are not transferable; ask ${entry.owner.label} to release ${entry.id}, or ask the operator to authorize agent-mail coordination recover --id ${entry.id} --authority <who> --reason <why>`;
+  return `${entry.kind === "path-claim" ? "path claims" : "experiment reservations"} are not transferable; ask ${entry.owner.label} to release ${entry.id}`;
 }
 
 /** Durable trace of a recovery that bypassed the liveness proof. */
@@ -566,14 +582,13 @@ export function recoverCoordination(
   if (entry.kind === "work") {
     work.recover(entry.project, entry.id, isLive);
   } else {
-    const releaseReason =
-      forced
-        ? "forced-recovery"
-        : entry.ownerStatus === "expired"
-          ? "manual-expiry"
-          : claimOwnerKind(entry.owner as ClaimOwner) === "plan"
-            ? "plan-lease-lost"
-            : "session-absence";
+    const releaseReason = forced
+      ? "forced-recovery"
+      : entry.ownerStatus === "expired"
+        ? "manual-expiry"
+        : claimOwnerKind(entry.owner as ClaimOwner) === "plan"
+          ? "plan-lease-lost"
+          : "session-absence";
     claims.recover(entry.project, entry.id, isLive, {
       reason: releaseReason,
     });

@@ -356,11 +356,11 @@ log(`daemon started pid=${process.pid} port=${config.port}`);
 
 /** Periodic liveness sweep.
  *
- * Two jobs. It publishes the snapshot that latency-bound readers (the status
- * line) use instead of running their own process scan. And because `listLive()`
- * prunes as a side effect, this is the only thing that removes dead
- * registrations without a human happening to run `listeners` or open a
- * dashboard.
+ * Publishes the snapshot that latency-bound readers (the status line) use
+ * instead of running their own process scan. Because `listLive()` prunes as a
+ * side effect, the tick removes dead registrations without a human running
+ * `listeners` or opening a dashboard. It also advances claim liveness and
+ * removes released-claim history after its retention deadline.
  *
  * No SIGHUP coupling is needed because the snapshot stores raw registrations —
  * nothing in it derives from config. If it ever starts carrying names or
@@ -379,6 +379,7 @@ function tickPresence(): void {
           .filter((id): id is string => Boolean(id)),
       ),
     );
+    claims.pruneReleased();
     // Status and reminders share one project-grouped unread collection.
     // Muted sessions still get status counts, but no reminder entry.
     const status = sessionStatus.refresh(snapshot.sessions);

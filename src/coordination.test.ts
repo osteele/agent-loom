@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -262,6 +263,56 @@ test("coordination conditions preserve the different resource lifecycles", () =>
   expect(entries.find((entry) => entry.id === experiment.id)?.condition).toBe(
     "materialized",
   );
+});
+
+test("plan claim status follows a lease in another project", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cross-plan-"));
+  temporaryDirectories.push(root);
+  const planProject = join(root, "plans");
+  const targetProject = join(root, "target");
+  mkdirSync(planProject);
+  mkdirSync(targetProject);
+  const claimStore = new ClaimStore(join(root, "claims"));
+  const workStore = new WorkStore(join(root, "work"), claimStore);
+  const executor = {
+    id: "session-a",
+    label: "Quiet Lantern",
+    kind: "session" as const,
+    sessionId: "session-a",
+    pid: process.pid,
+    instanceId: "session-a-instance",
+  };
+  workStore.acquire(
+    planProject,
+    { type: "research-plan", key: "pilot" },
+    executor,
+  );
+  const canonicalPlanProject = realpathSync(planProject);
+  const planOwner = {
+    id: `plan:${canonicalPlanProject}:pilot`,
+    label: "plan pilot",
+    kind: "plan" as const,
+    plan: { project: canonicalPlanProject, stem: "pilot" },
+  };
+  const claim = claimStore.claimPath(
+    targetProject,
+    join(targetProject, "future.ts"),
+    undefined,
+    planOwner,
+    {
+      actor: executor,
+      planExecutor: () => executor,
+    },
+  ).claim;
+
+  const entry = listCoordination({
+    project: targetProject,
+    registrations: [],
+    claimStore,
+    workStore,
+  }).find((candidate) => candidate.id === claim.id);
+  expect(entry?.ownerStatus).toBe("plan");
+  expect(entry?.condition).toBe("healthy");
 });
 
 test("live-owner conflict advice only offers a transfer for work leases", () => {

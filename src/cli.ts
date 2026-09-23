@@ -70,6 +70,7 @@ import {
   type PlanClaimIdentity,
   claimOwnerKind,
   claims,
+  pathClaimOwnerCondition,
   pathClaimTargets,
 } from "./claims.ts";
 import { loadConfig } from "./config.ts";
@@ -1913,17 +1914,20 @@ function describeClaim(claim: Claim): string {
       : pathClaimTargets(claim)
           .map((target) => `${target.pathType} ${target.path}`)
           .join(", ");
-  const kind =
-    claim.type === "path" ? ` [owner ${claimOwnerKind(claim.owner)}]` : "";
-  const lifecycle =
-    claim.type === "path" && "state" in claim && claim.state
-      ? claim.state === "released"
-        ? ` [released ${claim.releaseReason} at ${claim.releasedAt}]`
-        : claim.state === "restart-grace"
-          ? ` [restart grace until ${claim.graceDeadline}]`
-          : ""
+  if (claim.type === "experiment") {
+    return `${claim.id} ${claim.project} ${resource} — ${claim.owner.label} [created ${claim.createdAt}]`;
+  }
+  const activity =
+    "lastActivityAt" in claim && claim.lastActivityAt
+      ? ` [activity ${claim.lastActivityAt}]`
       : "";
-  return `${claim.id} ${resource} — ${claim.owner.label} [${claim.createdAt}]${kind}${lifecycle}`;
+  const lifecycle =
+    "state" in claim && claim.state === "released"
+      ? ` [state released; reason ${claim.releaseReason}; released ${claim.releasedAt}]`
+      : "state" in claim && claim.state === "restart-grace"
+        ? ` [state restart-grace; deadline ${claim.graceDeadline}]`
+        : " [state active]";
+  return `${claim.id} ${claim.project} ${resource} — ${claim.owner.label} [owner ${claimOwnerKind(claim.owner)}; ${pathClaimOwnerCondition(claim)}] [created ${claim.createdAt}]${activity}${lifecycle}`;
 }
 
 function withConflictGuidance<T>(project: string, operation: () => T): T {
@@ -1942,7 +1946,20 @@ function withConflictGuidance<T>(project: string, operation: () => T): T {
     );
     if (!entry) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${message}; ${coordinationConflictAdvice(entry)}`);
+    const owner =
+      error instanceof ClaimConflictError
+        ? (() => {
+            const claim = claims
+              .peek(project)
+              .find((candidate) => candidate.id === error.claimId);
+            const condition =
+              claim?.type === "path"
+                ? pathClaimOwnerCondition(claim)
+                : entry.condition;
+            return `blocking owner ${claimOwnerKind(entry.owner as ClaimOwner)}; condition ${condition}; `;
+          })()
+        : "";
+    throw new Error(`${message}; ${owner}${coordinationConflictAdvice(entry)}`);
   }
 }
 
@@ -2003,7 +2020,14 @@ function cmdClaims(flags: Record<string, string | boolean>): void {
     throw new Error("claims accepts --project or --all, not both");
   }
   const project = flags.all ? undefined : claimProject(flags);
-  const active = project ? claims.list(project) : claims.listAll();
+  const claimOptions = {
+    sessionIsLive: (id: string) =>
+      listLive().some((registration) => registration.sessionId === id),
+    planExecutor: currentCliPlanExecutor,
+  };
+  const active = project
+    ? claims.list(project, Date.now(), claimOptions)
+    : claims.listAll(Date.now(), claimOptions);
   const history =
     flags.history === true
       ? project
@@ -2044,6 +2068,8 @@ function cmdReleaseClaim(flags: Record<string, string | boolean>): void {
     releaseToken,
     project,
     actor,
+    sessionIsLive: (id) =>
+      listLive().some((registration) => registration.sessionId === id),
     planExecutor: currentCliPlanExecutor,
   });
   const prefix =
@@ -2444,7 +2470,10 @@ function cmdWork(
       typeof flags.outcome === "string"
         ? (flags.outcome as WorkReleaseOutcome)
         : undefined;
-    if (outcome !== undefined && !["completed", "abandoned"].includes(outcome)) {
+    if (
+      outcome !== undefined &&
+      !["completed", "abandoned"].includes(outcome)
+    ) {
       throw new Error("--outcome must be completed or abandoned");
     }
     const project = claimProject(flags);

@@ -4,8 +4,8 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
-  utimesSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -139,6 +139,29 @@ test("symlinks resolve before project-boundary validation", () => {
   ).toThrow("claim target must be inside project");
 });
 
+test("broken symlinks reserve their resolved names", () => {
+  const { project, store } = fixture();
+  const futureTarget = join(project, "future.ts");
+  const alias = join(project, "future-alias.ts");
+  symlinkSync(futureTarget, alias);
+
+  expect(
+    pathClaimTargets(
+      store.claimPath(project, alias, undefined, manualA).claim,
+    )[0],
+  ).toEqual({
+    path: join(realpathSync(project), "future.ts"),
+    pathType: "file",
+  });
+
+  const outsideTarget = join(dirname(project), "future-outside.ts");
+  const outsideAlias = join(project, "future-outside-alias.ts");
+  symlinkSync(outsideTarget, outsideAlias);
+  expect(() =>
+    store.claimPath(project, outsideAlias, undefined, manualB),
+  ).toThrow("claim target must be inside project");
+});
+
 test("normalization removes duplicates and descendants covered by a directory", () => {
   const { project, store } = fixture();
   const acquisition = store.claimPaths(
@@ -167,9 +190,9 @@ test("directory conflict detection is hierarchical and symmetric", () => {
   expect(() =>
     store.claimPath(project, join(source, "worker.ts"), undefined, manualB),
   ).toThrow(ClaimConflictError);
-  expect(() =>
-    store.claimPath(project, project, "directory", manualB),
-  ).toThrow(ClaimConflictError);
+  expect(() => store.claimPath(project, project, "directory", manualB)).toThrow(
+    ClaimConflictError,
+  );
   expect(store.list(project)).toEqual([held]);
 
   const sibling = store.claimPath(
@@ -282,7 +305,8 @@ test("the same logical session may release after its process restarts", () => {
   );
 
   expect(
-    store.release({ claimId: acquisition.claim.id, actor: resumed }).disposition,
+    store.release({ claimId: acquisition.claim.id, actor: resumed })
+      .disposition,
   ).toBe("released");
 });
 
@@ -301,19 +325,18 @@ test("session absence starts grace and a later transaction settles its deadline"
 
   nowMs += 60_000;
   expect(() =>
-    store.claimPath(
-      project,
-      join(project, "owned.ts"),
-      undefined,
-      manualB,
-      { now, sessionIsLive: () => false },
-    ),
+    store.claimPath(project, join(project, "owned.ts"), undefined, manualB, {
+      now,
+      sessionIsLive: () => false,
+    }),
   ).toThrow(ClaimConflictError);
-  const grace = store.list(project, nowMs).find((claim) => claim.id === held.id);
+  const grace = store
+    .list(project, nowMs)
+    .find((claim) => claim.id === held.id);
   expect(grace).toMatchObject({ state: "restart-grace" });
-  expect(grace && "graceDeadline" in grace ? grace.graceDeadline : undefined).toBe(
-    new Date(nowMs + PATH_CLAIM_SESSION_GRACE_MS).toISOString(),
-  );
+  expect(
+    grace && "graceDeadline" in grace ? grace.graceDeadline : undefined,
+  ).toBe(new Date(nowMs + PATH_CLAIM_SESSION_GRACE_MS).toISOString());
 
   nowMs += PATH_CLAIM_SESSION_GRACE_MS + 1;
   const replacement = store.claimPath(
@@ -346,27 +369,19 @@ test("a session return before the deadline cancels restart grace", () => {
   ).claim;
   live = false;
   expect(() =>
-    store.claimPath(
-      project,
-      join(project, "owned.ts"),
-      undefined,
-      manualB,
-      { sessionIsLive: () => live },
-    ),
+    store.claimPath(project, join(project, "owned.ts"), undefined, manualB, {
+      sessionIsLive: () => live,
+    }),
   ).toThrow(ClaimConflictError);
   live = true;
   expect(() =>
-    store.claimPath(
-      project,
-      join(project, "owned.ts"),
-      undefined,
-      manualB,
-      { sessionIsLive: () => live },
-    ),
+    store.claimPath(project, join(project, "owned.ts"), undefined, manualB, {
+      sessionIsLive: () => live,
+    }),
   ).toThrow(ClaimConflictError);
-  expect(store.list(project).find((claim) => claim.id === held.id)).toMatchObject(
-    { state: "active" },
-  );
+  expect(
+    store.list(project).find((claim) => claim.id === held.id),
+  ).toMatchObject({ state: "active" });
 });
 
 test("recovery observes session liveness inside the transaction", () => {
@@ -433,6 +448,31 @@ test("manual expiry stops blocking and records its fixed deadline", () => {
   });
 });
 
+test("release settles an overdue manual claim before applying its token", () => {
+  const { project, store } = fixture();
+  const createdMs = Date.parse("2026-09-20T00:00:00.000Z");
+  const acquisition = store.claimPath(
+    project,
+    join(project, "owned.ts"),
+    undefined,
+    manualA,
+    { now: () => new Date(createdMs) },
+  );
+  const deadline = createdMs + PATH_CLAIM_MANUAL_TTL_MS;
+
+  const result = store.release({
+    releaseToken: acquisition.releaseToken,
+    now: new Date(deadline + 1),
+  });
+
+  expect(result.disposition).toBe("already-released");
+  expect(result.claim).toMatchObject({
+    state: "released",
+    releaseReason: "manual-expiry",
+    releasedAt: new Date(deadline).toISOString(),
+  });
+});
+
 test("normal listing settles expired claims into retained history", () => {
   const { project, store } = fixture();
   const createdMs = Date.parse("2026-09-20T00:00:00.000Z");
@@ -468,8 +508,14 @@ test("released history disappears from reads after retention", () => {
     now: at,
   });
 
-  expect(store.listReleased(project, at.getTime() + PATH_CLAIM_RETENTION_MS - 1)).toHaveLength(1);
-  expect(store.listReleased(project, at.getTime() + PATH_CLAIM_RETENTION_MS)).toEqual([]);
+  expect(
+    store.listReleased(project, at.getTime() + PATH_CLAIM_RETENTION_MS - 1),
+  ).toHaveLength(1);
+  expect(
+    store.listReleased(project, at.getTime() + PATH_CLAIM_RETENTION_MS),
+  ).toEqual([]);
+  expect(store.pruneReleased(at.getTime() + PATH_CLAIM_RETENTION_MS)).toBe(1);
+  expect(store.pruneReleased(at.getTime() + PATH_CLAIM_RETENTION_MS)).toBe(0);
 });
 
 test("legacy singular path records still block another owner", () => {
@@ -491,12 +537,7 @@ test("legacy singular path records still block another owner", () => {
   );
 
   expect(() =>
-    store.claimPath(
-      project,
-      join(project, "legacy.swift"),
-      undefined,
-      manualB,
-    ),
+    store.claimPath(project, join(project, "legacy.swift"), undefined, manualB),
   ).toThrow(ClaimConflictError);
 });
 

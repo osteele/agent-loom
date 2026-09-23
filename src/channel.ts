@@ -35,12 +35,13 @@ import {
 } from "./channelIdentity.ts";
 import {
   type Claim,
-  type ClaimOwner,
   ClaimConflictError,
+  type ClaimOwner,
   type PathClaimTarget,
   type PlanClaimIdentity,
   claimOwnerKind,
   claims,
+  pathClaimOwnerCondition,
   pathClaimTargets,
 } from "./claims.ts";
 import { loadConfig } from "./config.ts";
@@ -263,9 +264,7 @@ const claimedProjects = new Set<string>([cwd]);
 const workOwner: WorkOwner = claimOwner;
 let hostClient: string | undefined;
 
-function currentPlanExecutor(
-  plan: PlanClaimIdentity,
-): ClaimOwner | undefined {
+function currentPlanExecutor(plan: PlanClaimIdentity): ClaimOwner | undefined {
   return work
     .list(plan.project)
     .find(
@@ -287,7 +286,9 @@ function ownerForPathClaim(
   const plan = { project, stem: planStem };
   const executor = currentPlanExecutor(plan);
   if (!executor) {
-    throw new Error(`research plan is not currently held: ${project}/${planStem}`);
+    throw new Error(
+      `research plan is not currently held: ${project}/${planStem}`,
+    );
   }
   if (!sameWorkOwner(executor, workOwner)) {
     throw new Error(
@@ -1050,36 +1051,27 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
-function describeClaim(claim: Claim, registrations = listLive()): string {
+function describeClaim(claim: Claim): string {
   const resource =
     claim.type === "experiment"
       ? `${claim.experimentId} (${claim.notebook})`
       : pathClaimTargets(claim)
           .map((target) => `${target.pathType} ${target.path}`)
           .join(", ");
-  const status =
-    claim.type === "path" && claimOwnerKind(claim.owner) === "plan"
-      ? "plan"
-      : ownerStatus(
-          claim.owner,
-          registrations,
-          claim.createdAt,
-          undefined,
-          true,
-          claim.type === "path" && "lastActivityAt" in claim
-            ? claim.lastActivityAt
-            : undefined,
-        );
-  const ownerSuffix = status === "live" ? "" : ` [owner ${status}]`;
-  const lifecycle =
-    claim.type === "path" && "state" in claim && claim.state
-      ? claim.state === "released"
-        ? ` [released ${claim.releaseReason} at ${claim.releasedAt}]`
-        : claim.state === "restart-grace"
-          ? ` [restart grace until ${claim.graceDeadline}]`
-          : ""
+  if (claim.type === "experiment") {
+    return `${claim.id} ${claim.project} ${resource} — ${claim.owner.label} [created ${claim.createdAt}]`;
+  }
+  const activity =
+    "lastActivityAt" in claim && claim.lastActivityAt
+      ? ` [activity ${claim.lastActivityAt}]`
       : "";
-  return `${claim.id} ${resource} — ${claim.owner.label} [${claim.createdAt}]${ownerSuffix}${lifecycle}`;
+  const lifecycle =
+    "state" in claim && claim.state === "released"
+      ? ` [state released; reason ${claim.releaseReason}; released ${claim.releasedAt}]`
+      : "state" in claim && claim.state === "restart-grace"
+        ? ` [state restart-grace; deadline ${claim.graceDeadline}]`
+        : " [state active]";
+  return `${claim.id} ${claim.project} ${resource} — ${claim.owner.label} [owner ${claimOwnerKind(claim.owner)}; ${pathClaimOwnerCondition(claim)}] [created ${claim.createdAt}]${activity}${lifecycle}`;
 }
 
 function workOwnerIsLive(
@@ -1120,7 +1112,20 @@ function withConflictGuidance<T>(project: string, operation: () => T): T {
     );
     if (!entry) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${message}; ${coordinationConflictAdvice(entry)}`);
+    const owner =
+      error instanceof ClaimConflictError
+        ? (() => {
+            const claim = claims
+              .peek(project)
+              .find((candidate) => candidate.id === error.claimId);
+            const condition =
+              claim?.type === "path"
+                ? pathClaimOwnerCondition(claim)
+                : entry.condition;
+            return `blocking owner ${claimOwnerKind(entry.owner as ClaimOwner)}; condition ${condition}; `;
+          })()
+        : "";
+    throw new Error(`${message}; ${owner}${coordinationConflictAdvice(entry)}`);
   }
 }
 
@@ -1688,15 +1693,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
   }
   if (req.params.name === "claim_path") {
-    const { project, path, paths, directory, plan_project, plan_stem } =
-      (req.params.arguments ?? {}) as {
-        project?: string;
-        path?: string;
-        paths?: string[];
-        directory?: boolean;
-        plan_project?: string;
-        plan_stem?: string;
-      };
+    const { project, path, paths, directory, plan_project, plan_stem } = (req
+      .params.arguments ?? {}) as {
+      project?: string;
+      path?: string;
+      paths?: string[];
+      directory?: boolean;
+      plan_project?: string;
+      plan_stem?: string;
+    };
     if ((path === undefined) === (paths === undefined)) {
       throw new Error("claim_path requires exactly one of path or paths");
     }
@@ -1755,20 +1760,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       throw new Error("list_claims accepts project or all_projects, not both");
     }
     const target = project ? explicitCanonicalProject(project) : cwd;
-    const active = all_projects ? claims.listAll() : claims.list(target);
+    const claimOptions = {
+      sessionIsLive: (id: string) =>
+        listLive().some((registration) => registration.sessionId === id),
+      planExecutor: currentPlanExecutor,
+    };
+    const active = all_projects
+      ? claims.listAll(Date.now(), claimOptions)
+      : claims.list(target, Date.now(), claimOptions);
     const history = include_history
       ? all_projects
         ? claims.listAllReleased()
         : claims.listReleased(target)
       : [];
     const visible = [...active, ...history];
-    const live = listLive();
     return {
       content: [
         {
           type: "text",
           text: visible.length
-            ? visible.map((claim) => describeClaim(claim, live)).join("\n")
+            ? visible.map((claim) => describeClaim(claim)).join("\n")
             : include_history
               ? "no claims"
               : "no active claims",
@@ -1787,6 +1798,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       releaseToken: release_token,
       ...(project ? { project: explicitCanonicalProject(project) } : {}),
       actor: claimOwner,
+      sessionIsLive: (id) =>
+        listLive().some((registration) => registration.sessionId === id),
       planExecutor: currentPlanExecutor,
     });
     const prefix =

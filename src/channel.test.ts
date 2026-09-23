@@ -118,7 +118,9 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     });
     const claimedText = textContent(claimed);
     expect(claimedText).toContain("2 targets claimed");
-    const releaseToken = /release token ([A-Za-z0-9_-]+)/.exec(claimedText)?.[1];
+    const releaseToken = /release token ([A-Za-z0-9_-]+)/.exec(
+      claimedText,
+    )?.[1];
     expect(releaseToken).toBeDefined();
     const claimId = /claim ([0-9a-f-]+)/.exec(claimedText)?.[1];
     expect(claimId).toBeDefined();
@@ -142,6 +144,10 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     expect(textContent(active).split("\n")).toHaveLength(1);
     expect(textContent(active)).toContain("Sources/Schedule.swift");
     expect(textContent(active)).toContain("Checks/main.swift");
+    expect(textContent(active)).toContain(realpathSync(project));
+    expect(textContent(active)).toContain("[owner session; session-live]");
+    expect(textContent(active)).toContain("[state active]");
+    expect(textContent(active)).not.toContain(releaseToken as string);
 
     await client.callTool({
       name: "release_claim",
@@ -149,6 +155,14 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     });
     const empty = await client.callTool({ name: "list_claims" });
     expect(textContent(empty)).toBe("no active claims");
+    const history = await client.callTool({
+      name: "list_claims",
+      arguments: { include_history: true },
+    });
+    expect(textContent(history)).toContain(
+      "[state released; reason owner-request; released ",
+    );
+    expect(textContent(history)).not.toContain(releaseToken as string);
 
     await expect(
       client.callTool({
@@ -198,9 +212,9 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
         .map(String)
         .filter((name) => name.endsWith(".json"))
     : [];
-  expect(claimFiles.filter((name) => !name.includes("/released/"))).toHaveLength(
-    1,
-  );
+  expect(
+    claimFiles.filter((name) => !name.includes("/released/")),
+  ).toHaveLength(1);
   expect(claimFiles.filter((name) => name.includes("/released/"))).toHaveLength(
     2,
   );
@@ -549,7 +563,7 @@ test("coordination recovery starts grace for an offline session claim", async ()
       await client.callTool({ name: "list_coordination" }),
     );
     expect(listed).toContain("stale-claim");
-    expect(listed).toContain("[owner-offline]");
+    expect(listed).toContain("owner-offline");
 
     await expect(
       client.callTool({
