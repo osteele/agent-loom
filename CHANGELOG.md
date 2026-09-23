@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recognize both source and packaged daemons from either CLI installation, so
+  status and lifecycle commands agree when the CLI and daemon use different
+  entry-point extensions.
 - Preserve the previous Codex MCP registration when replacement fails, and
   stop treating every failed `codex mcp get` probe as proof that the entry is
   absent.

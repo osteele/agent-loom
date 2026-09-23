@@ -275,8 +275,9 @@ const SRC_DIR = dirname(SELF);
 // wrote point at a file that a package install does not contain.
 const ENTRY_EXT = extname(SELF);
 const DAEMON_ENTRY = join(SRC_DIR, `daemon${ENTRY_EXT}`);
-/** Enough of the daemon's command line to tell it from a recycled pid. */
-const DAEMON_ENTRY_NAME = `daemon${ENTRY_EXT}`;
+// Detection accepts either installation form: a packaged CLI can manage a
+// source-running daemon, and a source CLI can manage a packaged daemon.
+const DAEMON_ENTRY_NAMES = ["daemon.ts", "daemon.js"];
 const CHANNEL_ENTRY = join(SRC_DIR, `channel${ENTRY_EXT}`);
 const NATIVE_AUDIT_ENTRY = join(SRC_DIR, `nativeAudit${ENTRY_EXT}`);
 const OH_MY_PI_PLUGIN_DIR = join(
@@ -442,7 +443,9 @@ function daemonPid(): number | null {
   // No scan is not a negative: `ps` can fail, and reporting "stopped" for a
   // daemon that is serving would send the reader to restart it for nothing.
   if (!info) return pid;
-  return info.command.includes(DAEMON_ENTRY_NAME) ? pid : null;
+  return DAEMON_ENTRY_NAMES.some((entry) => info.command.includes(entry))
+    ? pid
+    : null;
 }
 
 function launchdInstalled(): boolean {
