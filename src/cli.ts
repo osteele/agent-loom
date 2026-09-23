@@ -2541,6 +2541,7 @@ function plistContents(): string {
 <plist version="1.0">
 <dict>
   <key>Label</key><string>${LAUNCHD_LABEL}</string>
+  <key>ProcessType</key><string>Interactive</string>
   <key>ProgramArguments</key>
   <array>
     <string>${runtimePath()}</string>

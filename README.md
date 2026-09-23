@@ -144,6 +144,9 @@ Mail is delivered with or without it: when no daemon answers, a session writes
 to the project's spool itself. On macOS, the daemon runs as a launchd service.
 Nothing about delivery depends on it.
 
+The LaunchAgent uses the `Interactive` process class for latency-sensitive
+HTTP status requests and push connections.
+
 `agent-mail install` also registers agent-mail with Claude Code and Codex. If
 Antigravity CLI (`agy`), Kimi Code, Gemini CLI, or OpenCode has a user config
 directory, it registers with those clients too. Running both setup paths is
