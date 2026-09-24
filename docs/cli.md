@@ -432,6 +432,19 @@ position. Ages are measured from persisted lease timestamps at snapshot time;
 an old report may be stale but does not prove the owner dead. Updating any lease
 metadata changes `updatedAt`, even if the activity text was preserved.
 
+When the session has no claimed work, the view lists the project's plans
+instead: the active plans at the top of `lab-notebook/plans/`, and those in its
+`proposed/` and `backlog/` subdirectories, following the research-ops plan
+convention. Each entry shows the plan's first heading, its project-relative
+path, and the `updated`, `summary`, and `next_action` frontmatter. A plan held
+by a `research-plan` lease whose key is exactly the plan's filename stem shows
+that lease's owner, id, state, and last-report age, from any session; no other
+join is attempted. A plan without frontmatter, whose `status` disagrees with
+its directory, or that cannot be read stays listed with a diagnostic naming
+`plan_index.py`, the convention's checker. A project with no
+`lab-notebook/plans` directory says so. Plan files are read under the same
+containment and size limits as lease sources.
+
 `--once` prints one plain-text snapshot without ANSI and exits. Non-TTY stdin
 or stdout also selects one-shot output. An unavailable work store produces a
 visible diagnostic and exit status 1, distinct from no claimed work. A missing

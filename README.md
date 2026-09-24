@@ -378,7 +378,10 @@ Inspect one session's work and full plan files with
 Both selectors are explicit: the view matches the exact originating session ID
 and canonical project, including leases retained across restarts. It reads
 without starting a daemon, pruning records, or changing claims. `--once` emits
-one plain-text snapshot; redirected input or output does the same.
+one plain-text snapshot; redirected input or output does the same. A session
+with no claimed work sees the project's active, proposed, and backlog plans from
+`lab-notebook/plans/` instead, each marked with any `research-plan` lease that
+holds it.
 
 In a terminal, use `n`/`p` to select a lease, arrows or `j`/`k` to scroll,
 Page Up/Page Down or Space for pages, `g`/`G` for the start/end, `r` to refresh,

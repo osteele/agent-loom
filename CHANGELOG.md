@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `work tui` lists the project's active, proposed, and backlog
+  `lab-notebook/plans` files when the session has no claimed work, marking
+  each plan held by a `research-plan` lease with that exact stem and flagging
+  plans whose frontmatter does not match their directory.
 - Accept cross-project MCP path claims when `claim_path` receives the
   destination project's canonical absolute path.
 - Add versioned `agent-mail inbox --json` output with structured sender

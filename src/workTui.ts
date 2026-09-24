@@ -11,6 +11,11 @@ import {
 import { isAbsolute, relative, resolve } from "node:path";
 import { type Key, emitKeypressEvents } from "node:readline";
 import {
+  type PlanListing,
+  planListingLines,
+  readPlanListing,
+} from "./planListing.ts";
+import {
   type WorkLease,
   type WorkStore,
   validateWorkProgress,
@@ -89,6 +94,8 @@ export interface WorkSnapshot {
   capturedAt: number;
   items: WorkViewItem[];
   unavailable?: string;
+  /** The project's plans, read only when this session has no claimed work. */
+  plans?: PlanListing;
 }
 
 function inside(project: string, path: string): boolean {
@@ -98,23 +105,26 @@ function inside(project: string, path: string): boolean {
   );
 }
 
+/** A contained, regular, bounded file could not be read; the message says why. */
+export class SourceUnavailable extends Error {}
+
 /** Open nonblocking, refuse special files, verify containment and inode before reading.
- * A bounded descriptor read also limits files that grow after fstat. */
-export function readWorkSource(project: string, sourcePath?: string): string {
-  if (!sourcePath) return "Plan/source: unreported (no source path)";
+ * A bounded descriptor read also limits files that grow after fstat.
+ * Throws SourceUnavailable for a refused read and the filesystem error otherwise. */
+export function readContainedFile(project: string, sourcePath: string): string {
   let fd: number | undefined;
   try {
     const candidate = realpathSync(resolve(project, sourcePath));
     if (!inside(project, candidate))
-      return "Plan/source unavailable: path escapes project";
+      throw new SourceUnavailable("path escapes project");
     if (!statSync(candidate).isFile())
-      return "Plan/source unavailable: not a regular file";
+      throw new SourceUnavailable("not a regular file");
     fd = openSync(
       candidate,
       constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
     );
     const opened = fstatSync(fd);
-    if (!opened.isFile()) return "Plan/source unavailable: not a regular file";
+    if (!opened.isFile()) throw new SourceUnavailable("not a regular file");
     // Recheck after open: an ancestor may have changed while resolving the path.
     const current = realpathSync(candidate);
     const verified = statSync(current);
@@ -123,10 +133,12 @@ export function readWorkSource(project: string, sourcePath?: string): string {
       opened.dev !== verified.dev ||
       opened.ino !== verified.ino
     ) {
-      return "Plan/source unavailable: path changed while opening";
+      throw new SourceUnavailable("path changed while opening");
     }
     if (opened.size > MAX_PLAN_BYTES) {
-      return `Plan/source unavailable: unsupported size ${opened.size} bytes (limit ${MAX_PLAN_BYTES}); content not shown`;
+      throw new SourceUnavailable(
+        `unsupported size ${opened.size} bytes (limit ${MAX_PLAN_BYTES}); content not shown`,
+      );
     }
     const buffer = Buffer.alloc(opened.size + 1);
     let count = 0;
@@ -136,15 +148,26 @@ export function readWorkSource(project: string, sourcePath?: string): string {
       count += bytes;
     }
     if (count > opened.size || fstatSync(fd).mtimeMs !== opened.mtimeMs) {
-      return "Plan/source unavailable: file changed while reading; refresh to retry";
+      throw new SourceUnavailable(
+        "file changed while reading; refresh to retry",
+      );
     }
-    return `Plan/source content (read at refresh):\n${terminalText(buffer.toString("utf8", 0, count).replace(/\r\n/g, "\n"), true)}`;
+    return buffer.toString("utf8", 0, count).replace(/\r\n/g, "\n");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function readWorkSource(project: string, sourcePath?: string): string {
+  if (!sourcePath) return "Plan/source: unreported (no source path)";
+  try {
+    return `Plan/source content (read at refresh):\n${terminalText(readContainedFile(project, sourcePath), true)}`;
   } catch (error) {
+    if (error instanceof SourceUnavailable)
+      return `Plan/source unavailable: ${terminalText(error.message)}`;
     return error instanceof Error && "code" in error && error.code === "ENOENT"
       ? "Plan/source missing"
       : `Plan/source unavailable: ${terminalText(String(error))}`;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -235,13 +258,15 @@ export function readWorkSnapshot(
         lease,
         content: readWorkSource(project, lease.resource.sourcePath),
       }));
+    if (!snapshot.items.length)
+      snapshot.plans = readPlanListing(project, leases);
   } catch (error) {
     snapshot.unavailable = terminalText(String(error));
   }
   return snapshot;
 }
 
-function age(timestamp: string, now: number): string {
+export function age(timestamp: string, now: number): string {
   const seconds = Math.floor((now - Date.parse(timestamp)) / 1000);
   if (seconds < 0) return "in the future (clock skew)";
   if (seconds < 60) return `${seconds}s ago`;
@@ -267,6 +292,12 @@ export function workItemLines(item: WorkViewItem, now: number): string[] {
   ];
 }
 
+function emptySnapshotLines(snapshot: WorkSnapshot): string[] {
+  return snapshot.plans
+    ? planListingLines(snapshot.plans, snapshot.capturedAt)
+    : ["No claimed work for this exact session and project."];
+}
+
 function snapshotHeader(snapshot: WorkSnapshot): string[] {
   return [
     `Session: ${terminalText(snapshot.sessionId)}`,
@@ -280,8 +311,7 @@ export function formatWorkSnapshot(snapshot: WorkSnapshot): string {
   const lines = snapshotHeader(snapshot);
   if (snapshot.unavailable)
     lines.push(`Work store unavailable: ${snapshot.unavailable}`);
-  else if (!snapshot.items.length)
-    lines.push("No claimed work for this exact session and project.");
+  else if (!snapshot.items.length) lines.push(...emptySnapshotLines(snapshot));
   else
     for (const item of snapshot.items) {
       lines.push("");
@@ -467,7 +497,7 @@ export function runWorkTui(options: WorkTuiOptions): void {
       if (snapshot.unavailable)
         content.push(`Work store unavailable: ${snapshot.unavailable}`);
       else if (!snapshot.items.length)
-        content.push("No claimed work for this exact session and project.");
+        content.push(...emptySnapshotLines(snapshot));
       else
         content.push(
           "",

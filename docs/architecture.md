@@ -334,7 +334,10 @@ Position is explicitly reported, never inferred from activity or source text;
 omission preserves it and `null` clears it. `release_work` relinquishes
 responsibility. The read-only `work tui --session ID --project ABS` command
 inspects exact-session leases and contained source files without a live-registry
-scan; [the CLI reference](cli.md#work-tui) defines controls and source limits.
+scan. When the session holds no work it lists the project's active, proposed,
+and backlog `lab-notebook/plans` files, joined to `research-plan` leases only by
+exact filename stem; [the CLI reference](cli.md#work-tui) defines controls,
+source limits, and the plan listing.
 
 Coordination CLI commands run from a registered agent shell use that host's
 session identity, so their leases and claims have the same liveness and
