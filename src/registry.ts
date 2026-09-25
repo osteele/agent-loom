@@ -17,6 +17,11 @@ import {
 import { join } from "node:path";
 import type { ChannelPushStatus } from "./channelIdentity.ts";
 import {
+  type PruneCause,
+  appendChannelLifecycle,
+  channelLifecycleRecord,
+} from "./channelLifecycle.ts";
+import {
   REGISTRY_DIR,
   canonicalProject,
   ensureDirs,
@@ -783,6 +788,29 @@ function readEntries(
   return entries;
 }
 
+function pruneCause(info: ProcessInfo | undefined): PruneCause {
+  if (!info) return "no-process";
+  return isDefunct(info.command) ? "defunct" : "pid-reused";
+}
+
+/** A pruned entry is the only trace a killed channel server leaves: it ran no
+ * exit code, so this sweep is the first thing to notice it is gone. */
+function logPrune(entry: Registration, cause: PruneCause): void {
+  appendChannelLifecycle(
+    channelLifecycleRecord({
+      event: "pruned",
+      pid: entry.pid,
+      parentPid: entry.parentPid,
+      sessionId: entry.sessionId,
+      cwd: entry.cwd,
+      client: entry.client,
+      cause,
+      registered: entry.started,
+      sweptBy: process.pid,
+    }),
+  );
+}
+
 /** Keep the entries whose process is still the one that registered; prune the
  * rest. `bankLegacyNames` is upgrade bookkeeping and belongs only to the global
  * sweep — a scoped read stays a pure read. */
@@ -817,6 +845,7 @@ function verifyLive(
           current.started === entry.started
         ) {
           rmSync(path);
+          logPrune(entry, pruneCause(scan.processes.get(entry.pid)));
         }
       });
     }

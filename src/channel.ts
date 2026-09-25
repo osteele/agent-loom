@@ -34,6 +34,10 @@ import {
   pushReceiptDetail,
 } from "./channelIdentity.ts";
 import {
+  recordChannelAttached,
+  recordChannelShutdown,
+} from "./channelLifecycle.ts";
+import {
   type Claim,
   ClaimConflictError,
   type ClaimOwner,
@@ -2080,6 +2084,7 @@ mcp.oninitialized = () => {
     hostClient = client;
     registerSelf();
   }
+  recordChannelAttached({ sessionId, cwd, client: hostClient });
   // The initialization response has now delivered the startup instructions to
   // the host. Record that announcement outside receipts so the first turn hook
   // does not repeat the same backlog count.
@@ -2286,7 +2291,8 @@ async function poll(): Promise<void> {
 
 const timer = setInterval(() => void poll(), 1000);
 
-function shutdown(): void {
+function shutdown(reason: string): void {
+  recordChannelShutdown(reason);
   clearInterval(timer);
   for (const project of claimedProjects) {
     claims.releaseOwner(project, sessionId, process.pid);
@@ -2296,7 +2302,7 @@ function shutdown(): void {
   process.exit(0);
 }
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-  process.on(sig, shutdown);
+  process.on(sig, () => shutdown(sig));
 }
-process.stdin.on("close", shutdown);
-process.stdin.on("end", shutdown);
+process.stdin.on("close", () => shutdown("stdin-close"));
+process.stdin.on("end", () => shutdown("stdin-end"));

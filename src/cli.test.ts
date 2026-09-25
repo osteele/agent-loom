@@ -1554,6 +1554,61 @@ test("CLI recognizes source and packaged daemon entry points, but not unrelated 
   }
 }, 30_000);
 
+test("logs selects its file by flag and refuses arguments it does not know", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-logs-"));
+  const home = join(root, "home");
+  const data = join(home, ".claude", "agent-mail");
+  mkdirSync(data, { recursive: true });
+  const cli = join(import.meta.dir, "cli.ts");
+  const env = { ...process.env, HOME: home, PATH: "/usr/bin:/bin" };
+
+  const runLogs = async (
+    ...args: string[]
+  ): Promise<{ code: number; stdout: string; stderr: string }> => {
+    const child = Bun.spawn([process.execPath, cli, "logs", ...args], {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { code: await child.exited, stdout, stderr };
+  };
+
+  try {
+    writeFileSync(join(data, "daemon.log"), "daemon line\n");
+
+    // With no lifecycle log, --lifecycle names the file it looked for and
+    // never substitutes the daemon log.
+    const missing = await runLogs("--lifecycle");
+    expect(missing.code).toBe(0);
+    expect(missing.stdout).toContain("channel-lifecycle.jsonl");
+    expect(missing.stdout).not.toContain("daemon line");
+
+    writeFileSync(
+      join(data, "channel-lifecycle.jsonl"),
+      '{"event":"attached"}\n',
+    );
+    const lifecycle = await runLogs("--lifecycle");
+    expect(lifecycle.stdout).toContain('"event":"attached"');
+    expect(lifecycle.stdout).not.toContain("daemon line");
+
+    expect((await runLogs()).stdout).toContain("daemon line");
+
+    // An unknown flag is an error, not a quiet fallback to the daemon log.
+    const unknown = await runLogs("--lifecyle");
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toContain("--lifecyle");
+    expect(unknown.stdout).not.toContain("daemon line");
+
+    expect((await runLogs("--mcp", "--lifecycle")).code).toBe(1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
 /** A seeded project inbox: two unread messages, plus a live registration for
  * session "cli-reader" borrowed from this test process (a registration is only
  * live if its pid and start time still match, so an invented pid would not do). */

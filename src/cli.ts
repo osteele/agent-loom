@@ -118,6 +118,7 @@ import { selectTriageCandidates } from "./mailTriage.ts";
 import { runMailTui } from "./mailTui.ts";
 import { installMcpStartupDiagnostics } from "./mcpDiagnostics.ts";
 import {
+  CHANNEL_LIFECYCLE_LOG_PATH,
   CONFIG_PATH,
   LAUNCHD_LABEL,
   LOG_PATH,
@@ -599,10 +600,33 @@ async function cmdStatus(): Promise<void> {
     console.log(line);
 }
 
-function cmdLogs(follow: boolean, mcp: boolean): void {
-  const path = mcp ? MCP_STARTUP_FAILURES_PATH : LOG_PATH;
+const LOGS_ARGS = new Set(["-f", "--follow", "--mcp", "--lifecycle"]);
+
+/** `logs` selects among three files by flag. An argument it does not know —
+ * say, a flag from a newer CLI run against an older install — must fail
+ * rather than fall through to the daemon log, which would print a plausible
+ * answer to a different question. */
+function cmdLogs(args: string[]): void {
+  const unknown = args.filter((arg) => !LOGS_ARGS.has(arg));
+  if (unknown.length > 0) {
+    console.error(`logs: unrecognized argument: ${unknown.join(" ")}`);
+    console.error("usage: agent-mail logs [-f] [--mcp|--lifecycle]");
+    process.exit(1);
+  }
+  if (args.includes("--mcp") && args.includes("--lifecycle")) {
+    console.error(
+      "logs: --mcp and --lifecycle select different logs; pick one",
+    );
+    process.exit(1);
+  }
+  const follow = args.includes("-f") || args.includes("--follow");
+  const path = args.includes("--mcp")
+    ? MCP_STARTUP_FAILURES_PATH
+    : args.includes("--lifecycle")
+      ? CHANNEL_LIFECYCLE_LOG_PATH
+      : LOG_PATH;
   if (!existsSync(path)) {
-    console.log("no log file yet");
+    console.log(`no log file yet: ${path}`);
     return;
   }
   if (follow) {
@@ -3416,8 +3440,10 @@ Daemon (launchd-aware):
   start | stop | restart   Manage the daemon process
   graceful                 Reload config (SIGHUP) without a restart
   status                   Daemon health + listening sessions
-  logs [-f] [--mcp]        Show, or follow, the daemon log; --mcp selects
-                           sanitized pre-handshake MCP failures
+  logs [-f] [--mcp|--lifecycle]
+                           Show, or follow, the daemon log; --mcp selects
+                           sanitized pre-handshake MCP failures, --lifecycle
+                           channel-server attach, exit, and prune records
 
 Setup:
   mcp                   Run the MCP server on stdio. This is what an agent's
@@ -3615,10 +3641,7 @@ switch (cmd) {
     await cmdStatus();
     break;
   case "logs":
-    cmdLogs(
-      rest.includes("-f") || rest.includes("--follow"),
-      rest.includes("--mcp"),
-    );
+    cmdLogs(rest);
     break;
   case "dashboard":
     await cmdDashboard(flags);

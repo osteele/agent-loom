@@ -15,7 +15,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NOUNS } from "./nameWords.ts";
-import { REGISTRY_DIR, projectSlug } from "./paths.ts";
+import {
+  CHANNEL_LIFECYCLE_LOG_PATH,
+  REGISTRY_DIR,
+  projectSlug,
+} from "./paths.ts";
 import {
   type Registration,
   type SessionCapabilities,
@@ -412,6 +416,54 @@ test("registry mutations wait for the entry transaction lock", async () => {
       child.kill();
       await child.exited;
     }
+    if (existsSync(path)) rmSync(path);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pruning a dead registration records it in the lifecycle log", () => {
+  // A server killed outright runs no exit code; the sweep that removes its
+  // entry is the only thing that can say when, and for which session, it went.
+  const exited = spawnSync("true");
+  const pid = exited.pid;
+  expect(pid).toBeGreaterThan(0);
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), "agent-mail-registry-")),
+  );
+  mkdirSync(REGISTRY_DIR, { recursive: true });
+  const path = join(REGISTRY_DIR, `${projectSlug(root)}-killed.json`);
+  try {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        cwd: root,
+        pid,
+        procStart: "Thu Jan  1 00:00:00 1970",
+        parentPid: 7,
+        sessionId: "killed",
+        client: "claude-code",
+        started: "2026-09-25T00:00:00.000Z",
+      }),
+    );
+    expect(listLiveInProject(root)).toEqual([]);
+    expect(existsSync(path)).toBe(false);
+    const pruned = readFileSync(CHANNEL_LIFECYCLE_LOG_PATH, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .filter((r) => r.event === "pruned" && r.sessionId === "killed");
+    expect(pruned).toHaveLength(1);
+    expect(pruned[0]).toMatchObject({
+      pid,
+      parentPid: 7,
+      cwd: root,
+      client: "claude-code",
+      registered: "2026-09-25T00:00:00.000Z",
+      sweptBy: process.pid,
+    });
+    // A recycled pid reads as reuse; an unused one as no process.
+    expect(["no-process", "pid-reused"]).toContain(pruned[0].cause);
+  } finally {
     if (existsSync(path)) rmSync(path);
     rmSync(root, { recursive: true, force: true });
   }

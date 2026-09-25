@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Record channel-server lifecycle edges — attach, shutdown, exit, and registry
+  prune — in `channel-lifecycle.jsonl`, readable with
+  `agent-mail logs --lifecycle`, so a session that lost its server can be traced.
 - `work tui` lists the project's active, proposed, and backlog
   `lab-notebook/plans` files when the session has no claimed work, marking
   each plan held by a `research-plan` lease with that exact stem and flagging

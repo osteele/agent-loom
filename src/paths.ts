@@ -17,6 +17,7 @@
  *   ack-reminders.json   daemon bookkeeping for unacknowledged-delivery reminders
  *   remind-diagnostics.log rate-limited stale-summary diagnostics from remind
  *   mcp-startup-failures.jsonl sanitized pre-handshake MCP failure records
+ *   channel-lifecycle.jsonl channel-server attach, shutdown, exit, and prune records
  *   daemon.pid, daemon.log daemon state
  * Config:     ~/.config/agent-mail/config.toml
  */
@@ -80,6 +81,13 @@ export const REMIND_DIAGNOSTICS_PATH = join(
 export const MCP_STARTUP_FAILURES_PATH = join(
   STATE_DIR,
   "mcp-startup-failures.jsonl",
+);
+/** Append-only JSONL record of each channel server's handshake, exit, and
+ * removal from the registry. The registry forgets a server the moment it goes;
+ * this is what is left to explain why a session became unreachable. */
+export const CHANNEL_LIFECYCLE_LOG_PATH = join(
+  STATE_DIR,
+  "channel-lifecycle.jsonl",
 );
 /** Append-only JSONL record of authority-forced coordination recoveries. A
  * forced recovery bypasses the liveness proof, so the declared authority is the

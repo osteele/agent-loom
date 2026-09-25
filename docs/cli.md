@@ -676,11 +676,29 @@ as `agent-mail reload`.
 ### `logs`
 
 ```
-agent-mail logs [-f]
+agent-mail logs [-f] [--mcp|--lifecycle]
 ```
 
 Prints the last 50 lines of the daemon log, or follows it with `-f`
-(`--follow`).
+(`--follow`). `--mcp` selects the sanitized record of MCP servers that failed
+before completing the handshake. `--lifecycle` selects the channel-server
+lifecycle log, `channel-lifecycle.jsonl`, with one JSON line per event:
+
+- `attached`: a host completed the handshake with a channel server.
+- `shutdown`: a server left on its own path, after a signal or when stdin
+  closed. The line gives the reason.
+- `exit`: a server exited some other way. The line gives the exit code and any
+  uncaught exception.
+- `pruned`: a registry sweep removed an entry whose process was gone. The line
+  gives the cause (`no-process`, `pid-reused`, or `defunct`) and the pid of the
+  process that swept it.
+
+An `attached` record followed by `pruned`, with no `shutdown` or `exit` between
+them, means the server was killed outright. A session with no `attached` record
+was never given a channel server by its host.
+
+Any other argument is an error, as is passing both `--mcp` and `--lifecycle`.
+When the selected log does not exist yet, `logs` names the path it looked for.
 
 ## Setup
 
