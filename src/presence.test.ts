@@ -21,6 +21,7 @@ import {
   resolveSelf,
   sessionAddress,
   statusLineName,
+  unaddressedCause,
   writePresenceSnapshot,
 } from "./presence.ts";
 import type { Registration } from "./registry.ts";
@@ -181,7 +182,9 @@ test("stale peers are excluded from the peer count", () => {
   const meta = metaMap({ self: { status: "busy", name: "Self Name" } });
   const peers = peersInProject(sessions, "self", meta, NOW);
   expect(peers.map((p) => p.sessionId)).toEqual(["fresh"]);
-  expect(statusLineName("/proj", "self", meta)).toBe("Self Name");
+  expect(statusLineName("/proj", "self", meta, sessions, [], NOW)).toBe(
+    "Self Name",
+  );
 });
 
 test("a session alone in its project still renders its name", () => {
@@ -190,7 +193,9 @@ test("a session alone in its project still renders its name", () => {
   const sessions = [reg({ pid: 1, sessionId: "self" })];
   const meta = metaMap({ self: { status: "busy", name: "Self Name" } });
   expect(peersInProject(sessions, "self", meta, NOW)).toHaveLength(0);
-  expect(statusLineName("/proj", "self", meta)).toBe("Self Name");
+  expect(statusLineName("/proj", "self", meta, sessions, [], NOW)).toBe(
+    "Self Name",
+  );
 });
 
 test("an abandoned peer is not counted as a peer", () => {
@@ -224,7 +229,9 @@ test("self is excluded by session id, not by pid", () => {
   ];
   const meta = metaMap({ self: { status: "busy", name: "Self Name" } });
   expect(peersInProject(sessions, "self", meta, NOW)).toHaveLength(0);
-  expect(statusLineName("/proj", "self", meta)).toBe("Self Name");
+  expect(statusLineName("/proj", "self", meta, sessions, [], NOW)).toBe(
+    "Self Name",
+  );
 });
 
 test("an unidentifiable self discounts one live entry", () => {
@@ -259,7 +266,9 @@ test("legacy and canonical spellings of one directory collapse to one project", 
   expect(scoped).toHaveLength(2);
 
   const meta = metaMap({ self: { status: "busy", name: "Self Name" } });
-  expect(statusLineName(canon, "self", meta)).toBe("Self Name");
+  expect(statusLineName(canon, "self", meta, scoped, [], NOW)).toBe(
+    "Self Name",
+  );
   if (existsSync(root)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -323,13 +332,41 @@ test("two registrations under one host pid is not an identification", () => {
   ).toBeUndefined();
 });
 
-test("with no registrations the host's own id still names the session", () => {
-  // Nothing to contradict: a session whose channel server has not registered
-  // yet should not blank its own name.
-  const meta = metaMap({ fresh: { status: "busy", name: "Fresh Name" } });
-  expect(sessionAddress([], "fresh", meta, NOW, [99])).toBe("fresh");
-  expect(statusLineName("/proj", "fresh", meta, [], [99], NOW)).toBe(
-    "Fresh Name",
+test("a session with no channel server has no address and no name", () => {
+  // The regression: a Claude session whose channel server had exited kept
+  // showing its generated name, alone in its project. A peer that read the
+  // name off the pane and sent to it got "no live recipient", and concluded
+  // agent-mail's liveness check was wrong — the status line was the part lying.
+  const meta = metaMap({ orphan: { status: "busy", name: "Orphan Name" } });
+  expect(sessionAddress([], "orphan", meta, NOW, [99])).toBeUndefined();
+  expect(statusLineName("/proj", "orphan", meta, [], [99], NOW)).toBe("");
+
+  // A peer's registration elsewhere in the project changes nothing.
+  const others = [reg({ pid: 10, sessionId: "peer", parentPid: 7 })];
+  expect(sessionAddress(others, "orphan", meta, NOW, [99])).toBeUndefined();
+  expect(unaddressedCause(others, "orphan", meta, NOW, [99])).toBe(
+    "unregistered",
+  );
+});
+
+test("an unaddressed session's cause uses the resolver's staleness filter", () => {
+  // The regression: `status-line --debug` counted this session's own
+  // registration without the staleness filter `resolveSelf` applies, so a
+  // stale match was diagnosed as a rotated session id.
+  const meta = metaMap({});
+  const stale = { ...peer("spawned", 48, 10), parentPid: 99 };
+  expect(sessionAddress([stale], "rotated", meta, NOW, [99])).toBeUndefined();
+  expect(unaddressedCause([stale], "rotated", meta, NOW, [99])).toBe("stale");
+  // The same holds for a stale exact-id match with no host-pid evidence.
+  const byId = peer("mine", 48, 11);
+  expect(unaddressedCause([byId], "mine", meta, NOW, [])).toBe("stale");
+
+  const shared = [
+    reg({ pid: 10, sessionId: "a", parentPid: 99 }),
+    reg({ pid: 11, sessionId: "b", parentPid: 99 }),
+  ];
+  expect(unaddressedCause(shared, "rotated", meta, NOW, [99])).toBe(
+    "ambiguous",
   );
 });
 

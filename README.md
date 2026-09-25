@@ -455,7 +455,10 @@ name and session ID for unambiguous routing. The command prints the name this
 session is actually registered and reachable under — see
 [identity resolution](docs/status-line.md#project-and-session-resolution) for
 why the two can differ. It prints nothing when it cannot resolve a session ID,
-or when it cannot tell which registration in the project is its own.
+when the session has no registered channel server (so peers could not reach it),
+or when it cannot tell which registration in the project is its own. `--debug`
+says which, and `agent-mail logs --lifecycle` shows when channel servers attach
+and go away.
 
 `--json` returns the version-1
 [session status document](docs/http-api.md#session-status), including

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop the status line naming a session that has no registered channel server.
+  Peers sending to such a name got "no live recipient" while the status line
+  showed the session as reachable. It now prints nothing (`--json`: `null`), and
+  `--debug` names the cause.
 - Recognize both source and packaged daemons from either CLI installation, so
   status and lifecycle commands agree when the CLI and daemon use different
   entry-point extensions.

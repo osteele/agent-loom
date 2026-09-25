@@ -272,10 +272,39 @@ export function statusLineName(
  * unread count, its pending jobs) keys off this, so a rotated id cannot make a
  * surface describe a session nobody can reach.
  *
- * Undefined when the caller has a registration it cannot pick out: with no
- * routable address there is nothing honest to show, and a name that peers
- * reject is worse than no name. With no registrations at all there is nothing
- * to contradict, so the host's own id stands. Pure: no filesystem. */
+ * Undefined whenever no registration can be identified as the caller's,
+ * including when the project has no registrations at all. The host's own id is
+ * never a fallback: an id with no channel server behind it is exactly the
+ * address peers reject with "no live recipient", and a status line that
+ * renders it tells the user the session is reachable when it is not. Pure: no
+ * filesystem. */
+/** Why `resolveSelf` found no registration for this caller:
+ * - `unregistered` — nothing matches by session id or host pid.
+ * - `stale`        — something matches, but every match is past the staleness
+ *                    threshold, so it is not counted as present.
+ * - `ambiguous`    — several present registrations share the host pid. */
+export type UnaddressedCause = "unregistered" | "stale" | "ambiguous";
+
+/** Classify a failed `resolveSelf` with the same `present` filter it applied,
+ * so a diagnosis cannot name a cause the resolver did not act on. Meaningful
+ * only when `resolveSelf(...).self` is undefined. */
+export function unaddressedCause(
+  sessions: Registration[],
+  sessionId: string | undefined,
+  meta: Map<string, ClaudeSessionMeta>,
+  nowMs: number,
+  hostPids: readonly number[] = [],
+): UnaddressedCause {
+  const { present } = resolveSelf(sessions, sessionId, meta, nowMs, hostPids);
+  const hosts = new Set(hostPids);
+  const mine = (r: Registration) =>
+    (sessionId !== undefined && r.sessionId === sessionId) ||
+    (r.parentPid !== undefined && hosts.has(r.parentPid));
+  if (present.filter(mine).length > 1) return "ambiguous";
+  if (sessions.some(mine)) return "stale";
+  return "unregistered";
+}
+
 export function sessionAddress(
   sessions: Registration[],
   sessionId: string | undefined,
@@ -283,15 +312,8 @@ export function sessionAddress(
   nowMs: number,
   hostPids: readonly number[] = [],
 ): string | undefined {
-  const { present, self } = resolveSelf(
-    sessions,
-    sessionId,
-    meta,
-    nowMs,
-    hostPids,
-  );
-  if (self?.sessionId) return self.sessionId;
-  return present.length === 0 ? sessionId : undefined;
+  return resolveSelf(sessions, sessionId, meta, nowMs, hostPids).self
+    ?.sessionId;
 }
 
 /** How far up the process tree to look for the host agent. The status-line

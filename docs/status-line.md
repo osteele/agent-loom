@@ -8,8 +8,9 @@ client's rendering constraints.
 The display name prints whether or not anyone else is in the project and can be
 used as an address when it is unique there. The full name and session ID from
 `list_sessions` disambiguate collisions. The command prints nothing when it
-cannot resolve a session ID, and when it can resolve one but cannot tell which
-registration is its own (see below).
+cannot resolve a session ID, when no channel server is registered for the
+session, and when it cannot tell which registration is its own (see below). A
+name is shown only for a session that mail can reach.
 
 ## Project and session resolution
 
@@ -46,13 +47,21 @@ So the command reports the ID the session is registered and addressable under:
 1. the registration whose session ID matches, if there is one;
 2. otherwise the registration spawned by the same host agent process, which the
    status-line process and the channel server share as a parent;
-3. otherwise nothing, unless no registration exists at all — with nothing to
-   contradict, the resolved ID stands.
+3. otherwise nothing.
+
+The resolved ID is never used on its own. A session with no registration has no
+channel server, so peers sending to it get "no live recipient"; a status line
+that named it would report the session as reachable when it is not.
 
 Every `--fields` value keys off that address, not the payload ID, so a rotated
 session cannot report another session's unread count or weft jobs. An empty
-name where one is expected means the session could not be identified in its own
-project; restarting it re-syncs the two IDs.
+name where one is expected means either that the session has no channel server
+or that it could not be identified in its own project. `--debug` says which.
+Restarting the session fixes both, by respawning its channel server.
+`agent-mail logs --lifecycle` records when channel servers attach, shut down,
+exit, and are pruned from the registry. A session whose server has vanished
+shows there as an `attached` record followed by a `pruned` record with no
+`shutdown` or `exit` between them.
 
 ## `--json`
 

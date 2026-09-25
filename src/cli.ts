@@ -138,6 +138,7 @@ import {
   resolveSelf,
   sessionAddress,
   statusLineName,
+  unaddressedCause,
 } from "./presence.ts";
 import { resolveRecipient } from "./recipients.ts";
 import {
@@ -1492,12 +1493,26 @@ async function cmdStatusLine(
     if (debug) {
       console.error(`project: ${project}`);
       console.error(`session: ${sessionId ?? "(no session id)"}`);
-      // A blank name and a wrong-looking peer count have the same cause often
-      // enough to be worth naming outright: the host rotated its session id and
-      // the channel server is still registered under the old one.
-      if (address !== sessionId) {
+      // A restart reattaches the session in every case below; the cause says
+      // what to look for first.
+      if (!address) {
+        const cause = unaddressedCause(
+          sessions,
+          sessionId,
+          names,
+          now,
+          hostPids,
+        );
         console.error(
-          `address: ${address ?? "(unresolved)"} — host reports a different session id than this session is registered under; restart it to re-sync`,
+          cause === "unregistered"
+            ? "address: (none) — no channel server is registered for this session, so mail cannot reach it; restart the session to reattach (see agent-mail logs --lifecycle)"
+            : cause === "stale"
+              ? "address: (none) — this session's registration has been idle past the staleness threshold and is not counted as present; restart the session to reattach"
+              : "address: (none) — several registrations share this session's host process, so none can be identified as this session's; restart the session to reattach",
+        );
+      } else if (address !== sessionId) {
+        console.error(
+          `address: ${address} — host reports a different session id than this session is registered under; restart it to re-sync`,
         );
       }
       for (const r of sessions) {

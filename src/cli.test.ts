@@ -57,18 +57,49 @@ test("notify --no-slack suppresses only that message's Slack echo", async () => 
   expect(requests[1].slackEcho).toBe(false);
 });
 
-test("status-line prints nothing and exits 0 with no session to name", async () => {
+/** Register this test process as `sessionId`'s channel server under `home`, so
+ * a CLI subprocess run with that HOME finds a live, addressable session. */
+function registerLiveSession(
+  home: string,
+  project: string,
+  sessionId: string,
+): void {
+  const registry = join(home, ".claude", "agent-mail", "registry");
+  mkdirSync(registry, { recursive: true });
+  const procStart = processInfo([process.pid]).get(process.pid)?.start;
+  expect(procStart).toBeTruthy();
+  writeFileSync(
+    join(registry, `${projectSlug(project)}-${process.pid}.json`),
+    JSON.stringify({
+      cwd: realpathSync(project),
+      pid: process.pid,
+      procStart,
+      sessionId,
+      started: new Date().toISOString(),
+    }),
+  );
+}
+
+test("status-line prints nothing and exits 0 without a registered session", async () => {
   // The consumer is a shell substitution inside a status-line script, so a
   // non-zero exit is hazardous under `set -e` and stray output corrupts the
-  // user's prompt. Empty output is the signal for "nothing to show" — which
-  // now means only that no session id could be resolved. Being alone in the
-  // project is not that: the name is this session's address elsewhere, so it
-  // prints whether or not anyone is standing nearby.
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-statusline-"));
+  // user's prompt. Empty output is the signal for "nothing to show": no
+  // session id, or a session id with no channel server registered behind it.
+  // The second is the case that matters — that id is exactly the address peers
+  // reject with "no live recipient", so naming it would advertise a session
+  // nobody can reach. Being alone in the project is different: a registered
+  // session's name is its address elsewhere, so it prints with no peers nearby.
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-statusline-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(project, { recursive: true });
   const cli = join(import.meta.dir, "cli.ts");
   // The environment carries this very session's id; inheriting it would have
   // the test name the agent running it.
-  const env = { ...process.env };
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: home,
+  };
   for (const key of [
     "CLAUDE_CODE_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -85,23 +116,29 @@ test("status-line prints nothing and exits 0 with no session to name", async () 
     expect(await child.exited).toBe(0);
     expect(await new Response(child.stdout).text()).toBe("");
 
-    const named = Bun.spawn(
-      [
-        process.execPath,
-        cli,
-        "status-line",
-        "--project",
-        project,
-        "--session",
-        "solitary-session",
-      ],
-      { stdin: "pipe", stdout: "pipe", stderr: "pipe", env },
-    );
-    named.stdin.end();
-    expect(await named.exited).toBe(0);
-    expect((await new Response(named.stdout).text()).trim()).not.toBe("");
+    const named = async (): Promise<string> => {
+      const proc = Bun.spawn(
+        [
+          process.execPath,
+          cli,
+          "status-line",
+          "--project",
+          project,
+          "--session",
+          "solitary-session",
+        ],
+        { stdin: "pipe", stdout: "pipe", stderr: "pipe", env },
+      );
+      proc.stdin.end();
+      expect(await proc.exited).toBe(0);
+      return (await new Response(proc.stdout).text()).trim();
+    };
+    expect(await named()).toBe("");
+
+    registerLiveSession(home, project, "solitary-session");
+    expect(await named()).not.toBe("");
   } finally {
-    rmSync(project, { recursive: true });
+    rmSync(root, { recursive: true });
   }
 });
 
@@ -120,6 +157,7 @@ test("status-line accepts Kimi cwd payload and launcher session id", async () =>
     CLAUDE_CODE_SESSION_ID: undefined,
     CODEX_THREAD_ID: undefined,
   };
+  registerLiveSession(home, project, "kimi-launcher-session");
 
   try {
     const child = Bun.spawn([process.execPath, cli, "status-line", "--debug"], {
@@ -274,7 +312,7 @@ test("status-line exposes this session's work through an opt-in versioned field"
           sessionId: "status-session",
           client: "omp-coding-agent",
           capabilities: { workLeases: true },
-          started: "2026-09-01T12:00:00.000Z",
+          started: new Date().toISOString(),
         },
       ],
     }),
