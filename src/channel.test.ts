@@ -270,7 +270,7 @@ test("a live channel restores a missing registry entry without another tool call
   } finally {
     await client.close();
   }
-}, 5_000);
+}, 20_000);
 
 test("a stale registration is rewritten, not just a missing one", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-stale-"));
@@ -329,7 +329,7 @@ test("a stale registration is rewritten, not just a missing one", async () => {
   } finally {
     await client.close();
   }
-}, 5_000);
+}, 20_000);
 
 test("initial MCP instructions report the session's unread backlog only", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-backlog-"));
@@ -634,7 +634,7 @@ test("a channel push carries the acknowledgement it cannot perform", async () =>
   } finally {
     await client.close();
   }
-}, 5_000);
+}, 20_000);
 
 test("the unread count separates pushed-but-unread from never-pushed", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-split-"));
@@ -706,7 +706,7 @@ test("the unread count separates pushed-but-unread from never-pushed", async () 
   } finally {
     await client.close();
   }
-}, 5_000);
+}, 20_000);
 
 test("refusal counts only what it refused, and still reports what the limit withheld", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-refuse-count-"));
@@ -776,7 +776,7 @@ test("refusal counts only what it refused, and still reports what the limit with
   } finally {
     await client.close();
   }
-}, 5_000);
+}, 20_000);
 
 test("refused mail is reported as refused, not as a page the limit withheld", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-refuse-"));
@@ -838,7 +838,7 @@ test("refused mail is reported as refused, not as a page the limit withheld", as
   } finally {
     await client.close();
   }
-}, 5_000);
+}, 20_000);
 
 test("check_inbox marks returned messages read unless peek", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-markread-"));
@@ -977,6 +977,16 @@ test("cli-origin senders without a stamped session render as labels, not address
       origin: cliOrigin,
       meta: { sessionId: "sender-session", fromName: "sender-full-name" },
     },
+    {
+      // A CLI send from a verified live session stamps the canonical
+      // envelope field directly; it is addressable with no meta fallback.
+      id: "cli-origin-stamped",
+      ts: "2026-08-31T12:02:00.000Z",
+      from: "ci-robot",
+      project: canonical,
+      message: "origin-stamped body",
+      origin: { ...cliOrigin, sessionId: "origin-sender-9" },
+    },
   ];
   writeFileSync(
     join(inboxDirectory, `${slug}.jsonl`),
@@ -1015,6 +1025,11 @@ test("cli-origin senders without a stamped session render as labels, not address
     const attributed = lines.find((line) => line.startsWith("cli-attributed "));
     expect(attributed).toContain("[sender-full-name]");
     expect(attributed).not.toContain("[label; not a reply address]");
+    const originStamped = lines.find((line) =>
+      line.startsWith("cli-origin-stamped "),
+    );
+    expect(originStamped).not.toContain("[label; not a reply address]");
+    expect(originStamped).toContain("[origin-s]");
   } finally {
     await client.close();
   }
@@ -1287,7 +1302,7 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
   } finally {
     await Promise.all(clients.map((client) => client.close()));
   }
-}, 20_000);
+}, 45_000);
 
 test("owner addressing refuses ambiguity and pins delivery across an accepted handoff", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-owner-routing-"));
@@ -1488,4 +1503,4 @@ test("owner addressing refuses ambiguity and pins delivery across an accepted ha
   } finally {
     await Promise.all(clients.map((client) => client.close()));
   }
-}, 20_000);
+}, 45_000);

@@ -15,6 +15,7 @@ import {
   hasReceipt,
   isExpired,
   messageVisibleToSession,
+  senderSessionIdOf,
 } from "./spool.ts";
 
 // --- Sending: daemon first, direct append as fallback ------------------------
@@ -284,6 +285,7 @@ export function deliverNewMessage(
     ts: receiptTs(nowMs),
     status: nextStatus,
     sessionId,
+    senderSessionId: senderSessionIdOf(msg) ?? undefined,
     ...(action.type === "refuse" || action.type === "push-unreachable"
       ? { detail: action.detail }
       : {}),

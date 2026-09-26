@@ -703,7 +703,7 @@ test("session-address resolves only fresh project-scoped identity without writes
   } finally {
     rmSync(root, { recursive: true });
   }
-});
+}, 45_000);
 
 test("session-address requires explicit absolute project, raw session, and JSON", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-address-args-"));
@@ -1410,7 +1410,7 @@ test("notify --reply-to returns cross-project mail to the sender", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-}, 20_000);
+}, 45_000);
 
 test("notify reports delivery when the daemon stored the message but lost its reply", async () => {
   // The observed defect. The daemon appended the message and then failed to

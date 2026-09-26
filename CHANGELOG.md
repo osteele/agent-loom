@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Carry the sending session's id on every attributed message and its delivery
+  receipts. `origin.sessionId` is now stamped on CLI sends (previously only MCP
+  sends), receipts record a distinct `senderSessionId` alongside the
+  recipient's `sessionId`, `delivery_status` renders it as `sender=`, and
+  `check_inbox`, the Slack echo, `inbox --json`, and the mail TUI derive the
+  sender through one canonical fallback. Unattributed sends (no verified host
+  process, decision 0014) remain unstamped.
 - Record channel-server lifecycle edges — attach, shutdown, exit, and registry
   prune — in `channel-lifecycle.jsonl`, readable with
   `agent-mail logs --lifecycle`, so a session that lost its server can be traced.

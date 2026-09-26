@@ -192,6 +192,7 @@ import {
   messageVisibleToSession,
   readMessages,
   readReceipts,
+  senderSessionIdOf,
 } from "./spool.ts";
 import {
   findWorkLease,
@@ -871,6 +872,12 @@ async function cmdNotify(
       kind: "automation",
       transport: "cli",
       authority: "untrusted",
+      // Same proof that stamps meta.sessionId: only a verified live
+      // registration whose host process is an ancestor of this process
+      // (decision 0014) may put its id on the envelope. The id lives in
+      // `origin` too so every reader needs one canonical field, not a
+      // per-transport private convention.
+      ...(sender ? { sessionId: sender.sessionId } : {}),
     },
     ...(hasMeta ? { meta } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -1057,7 +1064,7 @@ function cmdInbox(flags: Record<string, string | boolean>): void {
             sender: {
               project: message.from,
               name: message.meta?.fromName ?? null,
-              sessionId: message.meta?.sessionId ?? null,
+              sessionId: senderSessionIdOf(message),
             },
             toSession: message.meta?.toSession ?? null,
             replyTo: message.replyTo ?? null,

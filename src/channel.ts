@@ -134,6 +134,7 @@ import {
   readMessages,
   readReceiptTail,
   readReceipts,
+  senderSessionIdOf,
   visibleToSession,
 } from "./spool.ts";
 import {
@@ -1467,7 +1468,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             recordReceipt(receipts, refused, "refused", "held queue full");
           }
         }
-        recordReceipt(receipts, msg.id, "held");
+        recordReceipt(
+          receipts,
+          msg.id,
+          "held",
+          undefined,
+          senderSessionIdOf(msg) ?? undefined,
+        );
         pending.push(msg.id);
       }
       return {
@@ -1489,14 +1496,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         // refused and expired, so a message this session has already seen is
         // still on the page and must not be tallied as a refusal.
         if (settled(receipts, msg.id, sessionId)) continue;
-        recordReceipt(receipts, msg.id, "refused", "policy");
+        recordReceipt(
+          receipts,
+          msg.id,
+          "refused",
+          "policy",
+          senderSessionIdOf(msg) ?? undefined,
+        );
         refusedByPolicy += 1;
       }
       messages = [];
     } else {
       for (const msg of messages) {
         if (!settled(receipts, msg.id, sessionId)) {
-          recordReceipt(receipts, msg.id, "pushed", "inbox pull");
+          recordReceipt(
+            receipts,
+            msg.id,
+            "pushed",
+            "inbox pull",
+            senderSessionIdOf(msg) ?? undefined,
+          );
         }
       }
     }
@@ -1519,7 +1538,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             ? `${messages
                 .map((m) => {
                   const sender =
-                    m.meta?.fromName ?? m.meta?.sessionId?.slice(0, 8);
+                    m.meta?.fromName ??
+                    senderSessionIdOf(m)?.slice(0, 8) ??
+                    undefined;
                   const tag = sender ? ` [${sender}]` : "";
                   const direct =
                     m.meta?.toSession === sessionId ? " (to you)" : "";
@@ -1529,9 +1550,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
                     : " [legacy origin; untrusted]";
                   // A cli-origin message without a stamped session shows a
                   // free-form sender label that cannot be replied to; say so
-                  // rather than letting it read as an address.
+                  // rather than letting it read as an address. The canonical
+                  // field is `origin.sessionId`; `meta.sessionId` is the
+                  // pre-0014 fallback for lines written before it existed.
                   const labelNote =
-                    m.origin?.transport === "cli" && !m.meta?.sessionId
+                    m.origin?.transport === "cli" && !senderSessionIdOf(m)
                       ? " [label; not a reply address]"
                       : "";
                   return `${m.id} ${m.read ? "read" : "unread"} [${m.ts}] from ${displayName(m.from)}${tag}${origin}${labelNote}${direct}${reply}: ${m.message}`;
@@ -1668,7 +1691,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
               selected
                 .map(
                   (receipt) =>
-                    `${receipt.messageId} ${receipt.status} [${receipt.ts}]${receipt.sessionId ? ` session=${receipt.sessionId}` : ""}${receipt.detail ? ` (${receipt.detail})` : ""}`,
+                    `${receipt.messageId} ${receipt.status} [${receipt.ts}]${receipt.sessionId ? ` session=${receipt.sessionId}` : ""}${receipt.senderSessionId ? ` sender=${receipt.senderSessionId}` : ""}${receipt.detail ? ` (${receipt.detail})` : ""}`,
                 )
                 .join("\n") +
               receiptNotes
@@ -2126,6 +2149,7 @@ function recordReceipt(
   messageId: string,
   status: DeliveryReceipt["status"],
   detail?: string,
+  senderSessionId?: string,
 ): void {
   const receipt: DeliveryReceipt = {
     messageId,
@@ -2133,6 +2157,7 @@ function recordReceipt(
     ts: new Date().toISOString(),
     status,
     sessionId,
+    ...(senderSessionId ? { senderSessionId } : {}),
     ...(detail ? { detail } : {}),
   };
   appendReceipt(cwd, receipt);
@@ -2170,7 +2195,13 @@ async function pushMessage(
       },
     },
   });
-  recordReceipt(receipts, msg.id, "pushed", pushReceiptDetail(channelPush));
+  recordReceipt(
+    receipts,
+    msg.id,
+    "pushed",
+    pushReceiptDetail(channelPush),
+    senderSessionIdOf(msg) ?? undefined,
+  );
 }
 
 async function settleHeld(

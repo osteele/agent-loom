@@ -3,6 +3,7 @@ import {
   classifyFallback,
   decideHeldSettlements,
   decideNewMessageDelivery,
+  deliverNewMessage,
   pendingHeldIds,
   withAttemptKey,
 } from "./delivery.ts";
@@ -50,6 +51,41 @@ test("collisions that are not our own attempt stay duplicates", () => {
       classifyFallback({ status: "duplicate", id: "msg-1", reason }),
     ).toEqual({ kind: "duplicate", id: "msg-1" });
   }
+});
+
+test("deliverNewMessage copies the sender session onto the receipt", () => {
+  // The receipt's `sessionId` is the recipient; `senderSessionId` is the
+  // sender, derived from the envelope so "who sent this" is answerable from
+  // the receipt log alone — the question that mis-attributed a whole thread.
+  const msg: Message & { id: string } = {
+    ...BASE,
+    id: "msg-9",
+    origin: {
+      kind: "agent",
+      transport: "mcp",
+      sessionId: "sender-session-3",
+      authority: "untrusted",
+    },
+  };
+  const receipts = deliverNewMessage(
+    BASE.project,
+    msg,
+    "recipient-session",
+    "accept",
+    false,
+    true,
+    5,
+    [],
+    NOW,
+  );
+  expect(receipts).toEqual([
+    expect.objectContaining({
+      messageId: "msg-9",
+      status: "pushed",
+      sessionId: "recipient-session",
+      senderSessionId: "sender-session-3",
+    }),
+  ]);
 });
 
 test("ordinary and rate-limited fallbacks pass through unchanged", () => {

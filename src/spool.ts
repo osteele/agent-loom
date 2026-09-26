@@ -89,7 +89,12 @@ export interface DeliveryReceipt {
   project: string;
   ts: string;
   status: ReceiptStatus;
+  /** The receiving session this delivery event happened to. */
   sessionId?: string;
+  /** The sending session, copied from the message envelope when the appender
+   * had the message at hand. Distinct from `sessionId`, which is always the
+   * recipient: answering "who sent this" from receipts alone is the point. */
+  senderSessionId?: string;
   detail?: string;
 }
 
@@ -120,6 +125,16 @@ function messageTime(msg: Message): number {
 
 function senderKey(msg: Message): string {
   return msg.origin?.sessionId ?? msg.meta?.sessionId ?? msg.from;
+}
+
+/** The sending session's id: the canonical envelope field with the legacy
+ * meta fallback. One derivation for every reader that names a sender —
+ * check_inbox, the Slack echo, receipts, the mail TUI — so "who sent this"
+ * cannot drift between surfaces. Null for mail sent unattributed (decision
+ * 0014): without a proven live session there is no stamp, and an id read
+ * from an unverified environment would name the wrong agent. */
+export function senderSessionIdOf(msg: Message | undefined): string | null {
+  return msg?.origin?.sessionId ?? msg?.meta?.sessionId ?? null;
 }
 
 function duplicateSignature(msg: Message): string {
@@ -252,6 +267,7 @@ export function intendedDeliveryReceipts(
       ts: new Date(nowMs).toISOString(),
       status: unreachable ? "push-unreachable" : "pending",
       sessionId,
+      senderSessionId: senderSessionIdOf(msg) ?? undefined,
       detail: unreachable
         ? `channel:${registration.capabilities?.channelPushStatus}`
         : "intended live recipient",
@@ -295,6 +311,7 @@ export function appendMessage(msg: Message): string {
     project: msg.project,
     ts: new Date().toISOString(),
     status: "spooled",
+    senderSessionId: senderSessionIdOf(withId) ?? undefined,
   });
   try {
     const registrations = coalesceRegistrations(listLiveInProject(msg.project));

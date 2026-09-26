@@ -114,3 +114,15 @@ Q, accepting D.*
   forever, to keep release idempotent for as long as a caller plausibly
   retries, accepting that an older id answers `unknown` and that history reads
   are excluded from the hot path.
+
+- **2026-09-26** — In the context of cross-session mail attribution, facing a
+  mis-attribution chain where receipts identified the receiving session but
+  never the sender, and the sender id lived in `origin.sessionId` on MCP sends
+  but only in `meta.sessionId` on CLI sends, we decided to stamp
+  `origin.sessionId` on every verified send and echo a distinct
+  `senderSessionId` onto delivery receipts and every rendering surface, and
+  neglected joining receipts against the spool archive at read time, to keep
+  "who sent this" answerable from the receipt log alone and from one
+  derivation (`senderSessionIdOf`) everywhere, accepting duplicate identity
+  across the two receipt fields and `meta.sessionId` remaining only as the
+  legacy fallback for lines written before the canonical field existed.

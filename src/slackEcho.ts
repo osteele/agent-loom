@@ -2,7 +2,7 @@ import { slackifyMarkdown } from "slackify-markdown";
 import { canonicalProject, displayName } from "./paths.ts";
 import type { Registration } from "./registry.ts";
 import { type ClaudeSessionMeta, sessionDisplayName } from "./sessions.ts";
-import type { Message } from "./spool.ts";
+import { type Message, senderSessionIdOf } from "./spool.ts";
 
 const SLACK_SECTION_LIMIT = 3000;
 const LIVE_NAME_LIMIT = 3;
@@ -57,7 +57,7 @@ function liveRecipientNames(
   registrations: Registration[],
   sessions: Map<string, ClaudeSessionMeta>,
 ): string[] {
-  const senderSid = msg.meta?.sessionId;
+  const senderSid = senderSessionIdOf(msg);
   return registrations
     .filter(
       (registration) =>
@@ -91,7 +91,7 @@ function route(
   registrations: Registration[],
   sessions: Map<string, ClaudeSessionMeta>,
 ): { mrkdwn: string; plain: string; listening: boolean } {
-  const senderSid = msg.meta?.sessionId;
+  const senderSid = senderSessionIdOf(msg);
   const sourceProject = displayName(msg.from);
   const targetProject = displayName(msg.project);
   const senderSession = senderSid

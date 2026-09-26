@@ -86,6 +86,38 @@ test("spooling records each intended live recipient before its transport polls",
       ts: base.ts,
       status: "pending",
       sessionId: "target",
+      senderSessionId: "sender",
+      detail: "intended live recipient",
+    },
+  ]);
+});
+
+test("intended-recipient receipts carry the canonical origin session id", () => {
+  // `origin.sessionId` is the envelope's canonical sender field; a message
+  // stamped only there (no legacy `meta.sessionId`) must still attribute its
+  // receipts, or receipts answer "who sent this" only for old-format mail.
+  const receipts = intendedDeliveryReceipts(
+    {
+      ...base,
+      id: "mail-1b",
+      origin: {
+        kind: "agent",
+        transport: "mcp",
+        sessionId: "origin-sender",
+        authority: "untrusted",
+      },
+    },
+    [{ sessionId: "target", capabilities: PUSH_CAPABLE }],
+    Date.parse(base.ts),
+  );
+  expect(receipts).toEqual([
+    {
+      messageId: "mail-1b",
+      project: base.project,
+      ts: base.ts,
+      status: "pending",
+      sessionId: "target",
+      senderSessionId: "origin-sender",
       detail: "intended live recipient",
     },
   ]);
@@ -151,6 +183,40 @@ test("appendMessage persists intended-recipient evidence without a receiver poll
     );
   } finally {
     unregister(project, process.pid, instanceId);
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("appendMessage stamps the spooled receipt with the sender session", () => {
+  const project = mkdtempSync(join(tmpdir(), "agent-mail-sender-"));
+  try {
+    appendMessage({
+      ...base,
+      id: "mail-4",
+      project,
+      origin: {
+        kind: "agent",
+        transport: "mcp",
+        sessionId: "sender-session-7",
+        authority: "untrusted",
+      },
+    });
+    expect(readReceipts(project, "mail-4")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          messageId: "mail-4",
+          status: "spooled",
+          senderSessionId: "sender-session-7",
+        }),
+      ]),
+    );
+    // An unattributed message (decision 0014: no verified session) must not
+    // grow a sender field out of the free-form `from` label.
+    appendMessage({ ...base, id: "mail-5", project });
+    for (const receipt of readReceipts(project, "mail-5")) {
+      expect(receipt.senderSessionId).toBeUndefined();
+    }
+  } finally {
     rmSync(project, { recursive: true, force: true });
   }
 });
