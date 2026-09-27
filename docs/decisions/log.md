@@ -126,3 +126,87 @@ Q, accepting D.*
   derivation (`senderSessionIdOf`) everywhere, accepting duplicate identity
   across the two receipt fields and `meta.sessionId` remaining only as the
   legacy fallback for lines written before the canonical field existed.
+
+- **2026-09-27** — In the context of cross-session obligation tracking, facing
+  the ceremony of obligor-confirmed resolution across MCP and CLI, we decided
+  that an obligation is announced, not negotiated — the obligee creates it,
+  the obligee closes it, and a claim release settles claim-release
+  obligations deterministically in the release transaction — and neglected
+  obligor-confirmed satisfaction with owner CAS, to keep announcing an
+  obligation zero-ceremony for the blocked session, accepting that a
+  closed-by-obligee record states belief rather than agreement and that the
+  obligor's only move is to contest. Spec: `specs/obligations.allium`.
+
+- **2026-09-27** — In the context of decisions owed by the operator, facing
+  the cost of an explicit resolve act on every answer, we decided that a
+  human-obligor obligation closes when the answer reaches the asking session,
+  and neglected a first-class human resolve action, to place zero obligation
+  on the operator beyond answering, accepting that an answer delivered
+  outside the asking session leaves a stale open row until the session
+  closes or withdraws it.
+
+- **2026-09-27** — In the context of an obligation naming the wrong or an
+  obsolete obligor, facing a model whose only closer is the obligee, we
+  decided the named obligor may mark it contested — visible everywhere,
+  tagged with a reason — and neglected voiding it outright, to keep the
+  disagreement on the record rather than silently deleting an ask, accepting
+  that contested rows persist until the obligee withdraws or authority
+  clears them.
+
+- **2026-09-27** — In the context of dangling obligations, facing the
+  pre-[0007](0007-manual-owner-expiry.md) ghost-accumulation pattern, we
+  decided to ship v1 with no time-based expiry — liveness and reference
+  health read as conditions on open records — and neglected inactivity
+  expiry, to avoid killing legitimate long waits such as external fixes,
+  accepting that dead-obligee rows persist until adoption, withdrawal, or
+  authority clears them.
+
+- **2026-09-27** — In the context of announcing an obligation, facing an
+  obligor learning of the ask only by querying, we decided to push exactly
+  one mail to a session obligor at creation, and neglected reminders or
+  escalation, to give the obligor one timely signal without a notification
+  channel of its own, accepting that an obligor who ignores that message
+  hears nothing further in v1.
+
+- **2026-09-27** — In the context of obligation obligees, facing plans that
+  outlive their executor sessions, we decided to allow only registered
+  sessions as obligees in v1, and neglected plan-obligees mirroring
+  [0019](0019-a-plan-is-a-claim-owner.md), to keep one obligee kind in every
+  view and closure path, accepting that a plan waits through its executor
+  session and re-announces on executor change.
+
+- **2026-09-27** — In the context of a session's obligations after it dies,
+  facing resume flows that mint a new session id and strands the
+  predecessor's obligations, we decided a successor session may adopt all of
+  an offline predecessor's open obligations atomically — both what it was
+  owed and what it owed — when its resume id names the predecessor or the
+  operator declares authority, and neglected free adoption by any session,
+  to keep work continuous across resumes, accepting that an adopter inherits
+  debts and disputes it did not create.
+
+- **2026-09-27** — In the context of the obligation model's session-and-human
+  parties, facing waits with no natural arc ends — weft job completions,
+  review handoffs, and component bugs nobody is individually blocked by — we
+  decided to generalize the ends to session, human, system, and role: a
+  system obligor settles by its own versioned event or CLI output and is
+  never contested, and a role (component owner, plan executor, experiment
+  claimer) resolves exactly to one responsible session or renders as
+  nothing, and neglected admitting an anonymous or "everyone" creditor, to
+  keep every obligation accountable and addressable, accepting that a bug
+  with neither a blocked session nor a resolvable owner lives in the ledger
+  alone. A bug that is owed is owed by the component's owner, credited to
+  the ledger or to the blocked session that announced it. Spec:
+  `specs/obligations.allium`, party model.
+
+- **2026-09-27** — In the context of plans and experiments that outlive
+  their executor sessions, facing the earlier same-day decision that only
+  registered sessions may hold the obligee end, we decided to admit plan and
+  experiment parties as artifact obligees, resolved through the plan's
+  current executor and the experiment's claimer of record per
+  [0019](0019-a-plan-is-a-claim-owner.md)'s precedent, and neglected
+  re-announcing waits on every executor change, so a notebook-visible wait
+  such as "EXP-042 is owed a review" survives executor churn, accepting a
+  second obligee kind in every view, adoption path, and resolution rule.
+  This reverses the obligee half of the sessions-only entry above; the
+  adoption half stands, because artifact-party records never name a session
+  and so are never orphaned by one.

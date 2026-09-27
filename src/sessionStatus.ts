@@ -1,4 +1,5 @@
 /** Daemon-owned presentation data. Delivery and coordination never read this cache. */
+import { type Obligation, type Role, obligations } from "./obligations.ts";
 import { canonicalProject } from "./paths.ts";
 import { peersInProject } from "./presence.ts";
 import { type Registration, coalesceRegistrations } from "./registry.ts";
@@ -45,6 +46,67 @@ export interface StatusWork {
   items: StatusWorkItem[];
 }
 
+/** What one session waits for and what waits on it. Obligations are
+ * machine-global, so `humanOwed` is the same number in every session's
+ * summary: it is the operator's owed view, not this session's. `roleOwed`
+ * counts open records owed by a role party; `unresolvedOwed` counts the
+ * role-obligor records whose role resolves to nobody right now (the same
+ * number in every summary — an unresolvable role belongs to no session).
+ * A role resolving to this session counts toward its `owed`
+ * (ResolvedOwedIsComplete). */
+export interface ObligationsSummary {
+  waiting: number;
+  owed: number;
+  humanOwed: number;
+  roleOwed: number;
+  unresolvedOwed: number;
+}
+
+/** Count open obligations for one session, or for the machine when no
+ * session is named. Globally, every open record waits on someone and is
+ * owed by a session, a role, or the operator, so
+ * `waiting = owed + humanOwed + roleOwed`. Roles resolve at read time via
+ * `resolveRole`; without one, every role counts as unresolved — a summary
+ * never guesses a resolution it cannot see. */
+export function summarizeObligations(
+  open: Obligation[],
+  sessionId?: string,
+  resolveRole?: (role: Role) => string | undefined,
+): ObligationsSummary {
+  let waiting = 0;
+  let owed = 0;
+  let humanOwed = 0;
+  let roleOwed = 0;
+  let unresolvedOwed = 0;
+  for (const obligation of open) {
+    if (sessionId !== undefined) {
+      if (
+        obligation.obligee.kind === "session" &&
+        obligation.obligee.sessionId === sessionId
+      ) {
+        waiting++;
+      }
+      if (
+        obligation.obligor.kind === "session" &&
+        obligation.obligor.sessionId === sessionId
+      ) {
+        owed++;
+      }
+    } else {
+      waiting++;
+      if (obligation.obligor.kind === "session") owed++;
+    }
+    if (obligation.obligor.kind === "human") humanOwed++;
+    if (obligation.obligor.kind === "role") {
+      roleOwed++;
+      const resolvedTo = resolveRole?.(obligation.obligor.role);
+      if (!resolvedTo) unresolvedOwed++;
+      else if (resolvedTo === sessionId) owed++;
+    }
+  }
+  return { waiting, owed, humanOwed, roleOwed, unresolvedOwed };
+}
+
 export interface SessionStatus {
   version: 1;
   project: string;
@@ -58,6 +120,10 @@ export interface SessionStatus {
   unprocessed: number | null;
   running: number | null;
   work: StatusWork | null;
+  /** Present only when the caller supplied open obligations; a failed store
+   * read degrades to absence, matching `work: null` in spirit. Additive, so
+   * no version bump. */
+  obligations?: ObligationsSummary;
 }
 
 export const SESSION_STATUS_TTL_MS = 30_000;
@@ -123,6 +189,10 @@ export function makeSessionStatus(input: {
   leases: WorkLease[] | undefined;
   jobs: WeftJobsSnapshot | undefined;
   running: RunningJobsSnapshot | undefined;
+  /** Open obligation records, machine-global, collected once per refresh by
+   * the caller. Optional so existing callers keep compiling; omitting it
+   * omits the summary rather than reporting zeros. */
+  openObligations?: Obligation[];
   nowMs: number;
 }): SessionStatus {
   const {
@@ -134,6 +204,7 @@ export function makeSessionStatus(input: {
     leases,
     jobs,
     running,
+    openObligations,
     nowMs,
   } = input;
   const identity = sessionNames(sessionId, meta.get(sessionId), project);
@@ -150,6 +221,15 @@ export function makeSessionStatus(input: {
     unprocessed: unprocessedForProjectSession(jobs, project, sessionId),
     running: runningForProjectSession(running, project, sessionId),
     work: leases ? statusWorkForSession(leases, sessionId, sessions) : null,
+    ...(openObligations
+      ? {
+          obligations: summarizeObligations(
+            openObligations,
+            sessionId,
+            (role: Role) => obligations.sessionResponsibleFor(role),
+          ),
+        }
+      : {}),
   };
 }
 
@@ -183,6 +263,14 @@ export class SessionStatusCache {
     const failed = new Set<string>();
     const unreadSummary: Record<string, UnreadSummaryEntry> = {};
     const errors: string[] = [];
+    // One machine-global read per refresh, shared by every session status;
+    // failures degrade to an absent summary like a failed work read does.
+    let openObligations: Obligation[] | undefined;
+    try {
+      openObligations = obligations.listOpen();
+    } catch (error) {
+      errors.push(`session status obligations failed: ${String(error)}`);
+    }
     for (const [project, registrations] of grouped) {
       try {
         const logical = coalesceRegistrations(registrations);
@@ -221,6 +309,7 @@ export class SessionStatusCache {
               leases,
               jobs,
               running,
+              openObligations,
               nowMs,
             }),
           );

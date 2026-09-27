@@ -9,6 +9,7 @@
  *   claims/<slug>/          experiment-number and path claims
  *   work/<slug>/            exclusive logical-work leases
  *   transfers/              auditable work-lease transfer requests
+ *   obligations/            machine-global obligation records + ref observations
  *   presence.json          daemon snapshot of the live registry
  *   processes.json         daemon snapshot of coordination-owner processes
  *   unread-summary.json    daemon snapshot of per-session unread counts
@@ -45,6 +46,9 @@ export const SESSION_NAMES_BY_HOST_PID_DIR = join(
 export const CLAIMS_DIR = join(STATE_DIR, "claims");
 export const WORK_DIR = join(STATE_DIR, "work");
 export const TRANSFERS_DIR = join(STATE_DIR, "transfers");
+/** Machine-global obligation records (specs/obligations.allium): unlike
+ * claims and work these are not project-scoped — a wait spans projects. */
+export const OBLIGATIONS_DIR = join(STATE_DIR, "obligations");
 export const CONFIG_DIR = join(homedir(), ".config", "agent-mail");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.toml");
 export const PID_PATH = join(STATE_DIR, "daemon.pid");

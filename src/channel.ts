@@ -71,6 +71,21 @@ import {
   markMcpInitialized,
   setMcpStartupPhase,
 } from "./mcpDiagnostics.ts";
+// Late-bound role resolution for the process-wide store, plus
+// componentProject for creation-notice delivery. Importing this module is
+// what wires the singleton in the channel-server process; see its own
+// comment for the import-cycle reasoning.
+import { componentProject } from "./obligationResolution.ts";
+import {
+  type Obligation,
+  ObligationAuthorityError,
+  ObligationDuplicateError,
+  type ObligationKind,
+  type Party,
+  type SessionRef,
+  type Succession,
+  obligations,
+} from "./obligations.ts";
 import {
   canonicalProject,
   displayName,
@@ -976,7 +991,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           kind: {
             type: "string",
-            enum: ["work", "path-claim", "experiment-claim"],
+            enum: ["work", "path-claim", "experiment-claim", "obligation"],
           },
           owner: {
             type: "string",
@@ -1053,6 +1068,193 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         "List durable work-lease transfer requests for this project, including deadlines and final dispositions.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "obligations_announce",
+      description:
+        "Announce that another session, the human operator, a system, or a " +
+        "component's owner owes this session a specific outcome. Announced, " +
+        "not negotiated: this session creates and later closes the record; " +
+        "the named obligor may contest it but never confirms it. A session " +
+        "obligor is resolved like send_mail recipients and gets exactly one " +
+        "notice; a component owner is notified through the session that " +
+        "holds the role; the operator and systems get none (the owed view " +
+        "and the system's own event feed are theirs). Announcing the same " +
+        "open subject twice is an error naming the existing obligation id.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          obligor: {
+            type: "string",
+            description:
+              "Session name or ID that owes the outcome (exact IDs and unique names resolve globally). Exactly one of obligor / to_user / system / component.",
+          },
+          to_user: {
+            type: "boolean",
+            description:
+              "Announce the human operator as the obligor instead of a session. Exactly one of obligor / to_user / system / component.",
+          },
+          system: {
+            type: "string",
+            description:
+              'Name of a wired integration that owes the outcome ("weft", "agent-issues", "claims"). Event-settled: it cannot be contested. Exactly one of obligor / to_user / system / component.',
+          },
+          component: {
+            type: "string",
+            description:
+              "Name of the component whose owner owes the outcome (e.g. agent-mail). Resolves at read time to the one responsible session. Exactly one of obligor / to_user / system / component.",
+          },
+          kind: {
+            type: "string",
+            enum: [
+              "claim_release",
+              "decision",
+              "external_fix",
+              "job_completion",
+              "review",
+            ],
+            description:
+              "claim_release settles automatically when the named claim releases; job_completion, review, and external_fix on system or role obligors settle on their system's events; decision awaits a choice",
+          },
+          subject: {
+            type: "string",
+            description:
+              "A claim id, job id, issue id, or free text identifying the owed outcome",
+          },
+        },
+        required: ["kind", "subject"],
+      },
+    },
+    {
+      name: "obligations_close",
+      description:
+        "Close one of this session's open obligations as satisfied — only the " +
+        "obligee session may close. claim_release subjects settle on their own " +
+        "when the claim releases; use this for decisions and external fixes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Obligation id (ob-…)" },
+          resolution: {
+            type: "string",
+            description: "Optional recorded outcome, never edited afterwards",
+          },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "obligations_withdraw",
+      description:
+        "Withdraw one of this session's open obligations — retract the wait " +
+        "without claiming it was satisfied. Only the obligee session may withdraw.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Obligation id (ob-…)" },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "obligations_contest",
+      description:
+        "As the named session obligor, mark an obligation contested. Contest " +
+        "never closes: the record stays visible and tagged until the obligee " +
+        "withdraws or the operator clears it. Records naming the human " +
+        "operator are refused here; the operator contests them from the CLI " +
+        "with --user.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Obligation id (ob-…)" },
+          reason: {
+            type: "string",
+            description: "Recorded verbatim on the record",
+          },
+        },
+        required: ["id", "reason"],
+      },
+    },
+    {
+      name: "obligations_adopt",
+      description:
+        "Adopt every open obligation of an offline predecessor session — in " +
+        "both roles: what it was owed, and what it owed. The transfer is " +
+        "atomic and all-or-nothing. Exactly one succession proof is required: " +
+        "resume_id (the predecessor's session id, e.g. from the host command " +
+        "line) or authority with reason (a declared operator authorization, " +
+        "recorded, never verified).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          predecessor: {
+            type: "string",
+            description:
+              "Predecessor session name or ID. Offline sessions resolve only by exact ID; a live predecessor is refused.",
+          },
+          resume_id: {
+            type: "string",
+            description:
+              "The predecessor's session id as carried by THIS session's own host command line (--resume <id> at launch). Validated against it: a typed id that the host command line does not carry is refused. Use authority+reason when the session was not launched with --resume. Exactly one of resume_id / authority.",
+          },
+          authority: {
+            type: "string",
+            description:
+              "Succession proof: who authorized this adoption. Requires reason. Exactly one of resume_id / authority.",
+          },
+          reason: {
+            type: "string",
+            description: "Required justification when authority is declared",
+          },
+        },
+      },
+    },
+    {
+      name: "obligations_clear",
+      description:
+        "Clear an open obligation on declared operator authority — recorded, " +
+        "never verified. Use only on explicit user instruction, typically for " +
+        "a contested record the obligee will not withdraw.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Obligation id (ob-…)" },
+          authority: {
+            type: "string",
+            description: "Who authorized clearing this obligation",
+          },
+          reason: {
+            type: "string",
+            description: "Required justification; recorded verbatim",
+          },
+        },
+        required: ["id", "authority", "reason"],
+      },
+    },
+    {
+      name: "obligations_list",
+      description:
+        "List obligations machine-globally. Defaults to open records in any " +
+        "project; owed_filter=human selects the operator's owed view. " +
+        "Contested records stay listed and tagged; liveness of an offline " +
+        "obligee or obligor is a condition on open records, not a status.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          scope: {
+            type: "string",
+            enum: ["open", "all"],
+            description: "Defaults to open",
+          },
+          owed_filter: {
+            type: "string",
+            enum: ["any", "human"],
+            description:
+              "any (default) lists everything; human lists records naming the operator as obligor",
+          },
+        },
+      },
+    },
   ],
 }));
 
@@ -1099,6 +1301,92 @@ function describeWork(lease: WorkLease, registrations = listLive()): string {
     ? ""
     : " [owner offline]";
   return `${lease.id} ${displayName(lease.project)}/${label} — ${lease.owner.label} [${lease.state}]${activity} [updated ${lease.updatedAt}]${orphaned}`;
+}
+
+const OBLIGATION_KINDS: readonly ObligationKind[] = [
+  "claim_release",
+  "decision",
+  "external_fix",
+  "job_completion",
+  "review",
+];
+
+const SESSION_ID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function describeObligation(obligation: Obligation): string {
+  // Role obligors render their resolution provenance ("owner of agent-mail
+  // → <session>"); an unresolvable role renders as unresolvable, and a
+  // session or human obligor renders as its label as before. Kept
+  // text-identical with cli.ts's describeObligation.
+  const obligor = obligations.describeObligor(obligation);
+  const lifecycle =
+    obligation.status === "open"
+      ? ""
+      : ` [${obligation.closedBy}; closed ${obligation.closedAt}]`;
+  const contested = obligation.contested
+    ? ` [contested ${obligation.contestedAt}; ${obligation.contestReason}]`
+    : "";
+  const resolution =
+    obligation.resolution !== undefined
+      ? ` [resolution ${obligation.resolution}]`
+      : "";
+  const adopted = obligation.adoptedFrom
+    ? ` [adopted from ${obligation.adoptedFrom}]`
+    : "";
+  return `${obligation.id} ${obligation.kind} ${obligation.subject} — owed to ${obligation.obligee.label} by ${obligor} [${obligation.status}]${lifecycle}${contested}${resolution}${adopted} [created ${obligation.createdAt}]`;
+}
+
+/** The one creation notice a session obligor gets (CreationNoticePushed in
+ * specs/obligations.allium): ordinary mail through the ordinary delivery
+ * path, naming the obligee, kind, and subject. A human or system obligor
+ * gets none — the owed view and the system's own event feed are theirs.
+ * Role obligors push to the one responsible session, passed as `toSession`. */
+function obligationNotice(
+  obligation: Obligation,
+  project: string,
+  toSession?: string,
+): Message {
+  return {
+    ts: new Date().toISOString(),
+    from: "agent-mail-obligations",
+    project,
+    message: `${obligation.obligee.label} announced obligation ${obligation.id}: you owe a ${obligation.kind} outcome — ${obligation.subject}. Contest it with obligations_contest if it is wrong; the obligee closes it.`,
+    origin: {
+      kind: "automation",
+      transport: "internal",
+      authority: "untrusted",
+    },
+    meta: {
+      toSession:
+        toSession ??
+        (obligation.obligor.kind === "session"
+          ? obligation.obligor.sessionId
+          : ""),
+      obligationId: obligation.id,
+      fromName: obligation.obligee.label,
+    },
+  };
+}
+
+/** Adoption names an offline session, which live-recipient resolution cannot
+ * see. A live name or id resolves; otherwise only an exact UUID-shaped
+ * session id is accepted, because anything else is a typo that would adopt
+ * nothing and report success. */
+function resolveObligationPredecessor(query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed) throw new Error("predecessor must not be empty");
+  try {
+    return resolveRecipient(cwd, trimmed).sessionId;
+  } catch (error) {
+    if (!(error instanceof RecipientError)) throw error;
+  }
+  if (!SESSION_ID_SHAPE.test(trimmed)) {
+    throw new Error(
+      `predecessor "${trimmed}" does not resolve; adoption names an offline session by its exact session id`,
+    );
+  }
+  return trimmed;
 }
 
 function withConflictGuidance<T>(project: string, operation: () => T): T {
@@ -1963,7 +2251,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       .arguments ?? {}) as {
       project?: string;
       all_projects?: boolean;
-      kind?: "work" | "path-claim" | "experiment-claim";
+      kind?: "work" | "path-claim" | "experiment-claim" | "obligation";
       owner?: string;
       condition?: string;
     };
@@ -2090,6 +2378,356 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           text: requests.length
             ? requests.map((request) => JSON.stringify(request)).join("\n")
             : "no coordination transfers",
+        },
+      ],
+    };
+  }
+  if (req.params.name === "obligations_announce") {
+    const { obligor, to_user, system, component, kind, subject } = (req.params
+      .arguments ?? {}) as {
+      obligor?: string;
+      to_user?: boolean;
+      system?: string;
+      component?: string;
+      kind?: ObligationKind;
+      subject?: string;
+    };
+    if (kind === undefined || !OBLIGATION_KINDS.includes(kind)) {
+      throw new Error(
+        "obligations_announce kind must be claim_release, decision, external_fix, job_completion, or review",
+      );
+    }
+    if (typeof subject !== "string" || !subject.trim()) {
+      throw new Error("obligations_announce requires subject");
+    }
+    const obligorForms = [
+      obligor !== undefined,
+      to_user === true,
+      system !== undefined,
+      component !== undefined,
+    ].filter(Boolean).length;
+    if (obligorForms !== 1) {
+      throw new Error(
+        "obligations_announce requires exactly one of obligor, to_user, system, or component",
+      );
+    }
+    const obligee: Party = {
+      kind: "session",
+      sessionId,
+      label: mySessionNames.fullName,
+    };
+    let obligorInput: Party;
+    let obligorProject: string | undefined;
+    if (to_user === true) {
+      obligorInput = { kind: "human", label: "user" };
+    } else if (system !== undefined) {
+      if (typeof system !== "string" || !system.trim()) {
+        throw new Error(
+          'system must name a wired integration, e.g. "weft" or "agent-issues"',
+        );
+      }
+      const wired = system.trim();
+      obligorInput = { kind: "system", system: wired, label: wired };
+    } else if (component !== undefined) {
+      if (typeof component !== "string" || !component.trim()) {
+        throw new Error(
+          "component must name the component whose owner owes the outcome",
+        );
+      }
+      const named = component.trim();
+      obligorInput = {
+        kind: "role",
+        role: { kind: "component_owner", component: named },
+        label: `owner of ${named}`,
+      };
+    } else {
+      try {
+        const recipient = resolveRecipient(cwd, obligor as string);
+        obligorProject = recipient.project;
+        obligorInput = {
+          kind: "session",
+          sessionId: recipient.sessionId,
+          label: sessionNames(
+            recipient.sessionId,
+            claudeSessions().get(recipient.sessionId),
+            recipient.project,
+          ).fullName,
+        };
+      } catch (error) {
+        if (!(error instanceof RecipientError)) throw error;
+        return {
+          isError: true,
+          content: [{ type: "text", text: error.message }],
+        };
+      }
+    }
+    try {
+      const record = obligations.announce({
+        obligee,
+        obligor: obligorInput,
+        kind,
+        subject: subject.trim(),
+      });
+      let notified = "";
+      if (record.obligor.kind === "session" && obligorProject !== undefined) {
+        await deliver(
+          obligationNotice(record, obligorProject),
+          describeAudience(obligorProject, record.obligor.sessionId),
+        );
+        notified = `; notified ${record.obligor.label}`;
+      } else if (record.obligor.kind === "role") {
+        // CreationNoticePushed for a role obligor: one notice, to the
+        // resolved session, in the component's project.
+        const resolution = obligations.resolveParty(record.obligor);
+        const roleProject =
+          record.obligor.role.kind === "component_owner"
+            ? componentProject(record.obligor.role.component)
+            : undefined;
+        if (
+          resolution.state === "resolves" &&
+          resolution.sessionId &&
+          roleProject
+        ) {
+          await deliver(
+            obligationNotice(record, roleProject, resolution.sessionId),
+            describeAudience(roleProject, resolution.sessionId),
+          );
+          notified = `; notified ${record.obligor.label} (${resolution.sessionId})`;
+        }
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `announced ${record.id} — ${record.kind} ${record.subject}${notified}`,
+          },
+        ],
+      };
+    } catch (error) {
+      if (error instanceof ObligationAuthorityError) {
+        // Unresolvable obligee or obligor: a live process, a wired
+        // integration, or a responsible session must answer PartyResolves
+        // before the record exists.
+        return {
+          isError: true,
+          content: [{ type: "text", text: error.message }],
+        };
+      }
+      if (!(error instanceof ObligationDuplicateError)) throw error;
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `${error.message}; close or withdraw ${error.obligation.id} before announcing the same subject again`,
+          },
+        ],
+      };
+    }
+  }
+  if (req.params.name === "obligations_close") {
+    const { id, resolution } = req.params.arguments as {
+      id: string;
+      resolution?: string;
+    };
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("obligations_close requires id");
+    }
+    const record = obligations.close(
+      id.trim(),
+      { kind: "session", sessionId, label: mySessionNames.fullName },
+      typeof resolution === "string" && resolution.trim()
+        ? resolution.trim()
+        : undefined,
+    );
+    return {
+      content: [{ type: "text", text: `closed ${describeObligation(record)}` }],
+    };
+  }
+  if (req.params.name === "obligations_withdraw") {
+    const { id } = req.params.arguments as { id: string };
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("obligations_withdraw requires id");
+    }
+    const record = obligations.withdraw(id.trim(), {
+      kind: "session",
+      sessionId,
+      label: mySessionNames.fullName,
+    });
+    return {
+      content: [
+        { type: "text", text: `withdrew ${describeObligation(record)}` },
+      ],
+    };
+  }
+  if (req.params.name === "obligations_contest") {
+    const { id, reason } = req.params.arguments as {
+      id: string;
+      reason: string;
+    };
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("obligations_contest requires id");
+    }
+    if (typeof reason !== "string" || !reason.trim()) {
+      throw new Error("obligations_contest requires reason");
+    }
+    const existing = obligations.get(id.trim());
+    if (existing?.obligor.kind === "human") {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `obligation ${existing.id} names the human operator as obligor; only the operator can contest it, with "agent-mail obligations contest --id ${existing.id} --reason <text> --user"`,
+          },
+        ],
+      };
+    }
+    if (
+      existing &&
+      (existing.obligor.kind === "system" || existing.obligor.kind === "role")
+    ) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `obligation ${existing.id} names ${existing.obligor.label}, a ${existing.obligor.kind} obligor that cannot contest; it settles by its own evidence or clears by authority`,
+          },
+        ],
+      };
+    }
+    const record = obligations.contest(id.trim(), { sessionId }, reason.trim());
+    return {
+      content: [
+        { type: "text", text: `contested ${describeObligation(record)}` },
+      ],
+    };
+  }
+  if (req.params.name === "obligations_adopt") {
+    const { predecessor, resume_id, authority, reason } = (req.params
+      .arguments ?? {}) as {
+      predecessor?: string;
+      resume_id?: string;
+      authority?: string;
+      reason?: string;
+    };
+    if ((resume_id !== undefined) === (authority !== undefined)) {
+      throw new Error(
+        "obligations_adopt requires exactly one of resume_id or authority",
+      );
+    }
+    if (
+      authority !== undefined &&
+      (typeof reason !== "string" || !reason.trim())
+    ) {
+      throw new Error("obligations_adopt authority requires reason");
+    }
+    if (predecessor === undefined && resume_id === undefined) {
+      throw new Error("obligations_adopt requires predecessor");
+    }
+    const predecessorId = resolveObligationPredecessor(
+      (predecessor ?? resume_id) as string,
+    );
+    let succession: Succession;
+    if (resume_id !== undefined) {
+      // ADR 0011: a resume id proves succession only when it is the one this
+      // server's host command line carried — a string the caller supplies
+      // proves nothing.
+      const observed = resumeIdFromCommand(processCommand(process.ppid));
+      if (observed === undefined || observed !== predecessorId) {
+        throw new Error(
+          "resume_id does not match this session's host command line; adopt by resume_id only after launching the session with --resume <id>, or use authority with reason",
+        );
+      }
+      succession = { kind: "resume-id", resumeId: predecessorId };
+    } else {
+      succession = {
+        kind: "authority",
+        authority: (authority as string).trim(),
+        reason: (reason as string).trim(),
+      };
+    }
+    const moved = obligations.adopt({
+      adopter: {
+        kind: "session",
+        sessionId,
+        label: mySessionNames.fullName,
+      },
+      predecessorSessionId: predecessorId,
+      succession,
+    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: moved.length
+            ? `adopted ${moved.length} obligation(s) from ${predecessorId}:\n${moved.map(describeObligation).join("\n")}`
+            : `adopted 0 obligations from ${predecessorId}; the predecessor had no open obligations`,
+        },
+      ],
+    };
+  }
+  if (req.params.name === "obligations_clear") {
+    const { id, authority, reason } = req.params.arguments as {
+      id: string;
+      authority: string;
+      reason: string;
+    };
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("obligations_clear requires id");
+    }
+    if (typeof authority !== "string" || !authority.trim()) {
+      throw new Error("obligations_clear requires authority");
+    }
+    if (typeof reason !== "string" || !reason.trim()) {
+      throw new Error("obligations_clear requires reason");
+    }
+    const record = obligations.authorityClear(
+      id.trim(),
+      authority.trim(),
+      reason.trim(),
+    );
+    return {
+      content: [
+        {
+          type: "text",
+          text: `cleared ${describeObligation(record)} on declared authority (recorded, not verified)`,
+        },
+      ],
+    };
+  }
+  if (req.params.name === "obligations_list") {
+    const { scope = "open", owed_filter = "any" } = (req.params.arguments ??
+      {}) as {
+      scope?: "open" | "all";
+      owed_filter?: "any" | "human";
+    };
+    if (scope !== "open" && scope !== "all") {
+      throw new Error("obligations_list scope must be open or all");
+    }
+    if (owed_filter !== "any" && owed_filter !== "human") {
+      throw new Error("obligations_list owed_filter must be any or human");
+    }
+    const records =
+      owed_filter === "human"
+        ? scope === "all"
+          ? obligations.list().filter((o) => o.obligor.kind === "human")
+          : obligations.owedToHuman()
+        : scope === "all"
+          ? obligations.list()
+          : obligations.listOpen();
+    return {
+      content: [
+        {
+          type: "text",
+          text: records.length
+            ? records.map(describeObligation).join("\n")
+            : owed_filter === "human"
+              ? "no open obligations owed by you"
+              : scope === "all"
+                ? "no obligations"
+                : "no open obligations",
         },
       ],
     };

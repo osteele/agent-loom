@@ -2446,3 +2446,404 @@ test("status JSON reports unresolved identity as null instead of empty success o
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** Run the obligations CLI as `caller-session` under `home`, cwd `project`. */
+function obligationsRun(
+  cli: string,
+  home: string,
+  project: string,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exit: number }> {
+  const {
+    CLAUDE_CODE_SESSION_ID: _claude,
+    AGENT_SESSION_ID: _agent,
+    AGENT_SESSION_PID: _pid,
+    ...baseEnv
+  } = process.env;
+  const child = Bun.spawn([process.execPath, cli, ...args], {
+    env: {
+      ...baseEnv,
+      HOME: home,
+      CODEX_THREAD_ID: "caller-session",
+      ...extraEnv,
+    },
+    cwd: project,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return (async () => {
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    return { stdout, stderr, exit: await child.exited };
+  })();
+}
+
+test("obligations CLI announces, lists, closes, and contests as the operator", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-obligations-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(project, { recursive: true });
+  registerLiveSession(home, project, "caller-session");
+  const cli = join(import.meta.dir, "cli.ts");
+  const run = (args: string[]) => obligationsRun(cli, home, project, args);
+  try {
+    // Empty state is a line, never silence.
+    const empty = await run(["obligations", "owed"]);
+    expect(empty.exit, empty.stderr).toBe(0);
+    expect(empty.stdout).toContain("no open obligations owed by you");
+
+    const announced = await run([
+      "obligations",
+      "announce",
+      "--user",
+      "--kind",
+      "decision",
+      "--subject",
+      "pick the deploy window",
+    ]);
+    expect(announced.exit, announced.stderr).toBe(0);
+    const id = /announced (ob-[0-9a-f]+)/.exec(announced.stdout)?.[1];
+    if (!id) throw new Error("announce returned no obligation id");
+
+    const owed = await run(["obligations", "owed"]);
+    expect(owed.exit, owed.stderr).toBe(0);
+    expect(owed.stdout).toContain(id);
+    expect(owed.stdout).toContain("pick the deploy window");
+    expect(owed.stdout).toContain("by user");
+
+    // A session may not contest a record that names the operator.
+    const refused = await run([
+      "obligations",
+      "contest",
+      "--id",
+      id,
+      "--reason",
+      "not mine",
+    ]);
+    expect(refused.exit).toBe(1);
+    expect(refused.stderr).toContain("--user");
+
+    const contested = await run([
+      "obligations",
+      "contest",
+      "--id",
+      id,
+      "--reason",
+      "not mine",
+      "--user",
+    ]);
+    expect(contested.exit, contested.stderr).toBe(0);
+    const listed = await run(["obligations", "list"]);
+    expect(listed.exit, listed.stderr).toBe(0);
+    expect(listed.stdout).toContain("[contested");
+    expect(listed.stdout).toContain("not mine");
+
+    const closed = await run([
+      "obligations",
+      "close",
+      "--id",
+      id,
+      "--resolution",
+      "window picked",
+    ]);
+    expect(closed.exit, closed.stderr).toBe(0);
+    const owedAfter = await run(["obligations", "owed"]);
+    expect(owedAfter.stdout).toContain("no open obligations owed by you");
+    const all = await run(["obligations", "list", "--all"]);
+    expect(all.stdout).toContain("[satisfied]");
+    expect(all.stdout).toContain("resolution window picked");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("obligations CLI resolves a session obligor, pushes one notice, and adopts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-obligor-"));
+  const home = join(root, "home");
+  const callerProject = join(root, "caller");
+  const obligorProject = join(root, "obligor");
+  mkdirSync(callerProject, { recursive: true });
+  mkdirSync(obligorProject, { recursive: true });
+  registerLiveSession(home, callerProject, "caller-session");
+  // A live registration in another project: the caller pid is alive with a
+  // matching procStart, which is all registry-backed liveness reads.
+  registerLiveSession(home, obligorProject, "obligor-session");
+  // An offline predecessor with one open obligation, seeded directly. The id
+  // is UUID-shaped: real session ids are, and adoption accepts only
+  // UUID-shaped ids that no live registry or name store can resolve.
+  const predecessorId = "0eedd1a5-0000-4000-8000-00000000dead";
+  const obligationsDir = join(home, ".claude", "agent-mail", "obligations");
+  mkdirSync(obligationsDir, { recursive: true });
+  writeFileSync(
+    join(obligationsDir, "ob-deadbeef.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        id: "ob-deadbeef",
+        createdAt: new Date().toISOString(),
+        obligee: { sessionId: predecessorId, label: "root-brief-owl" },
+        obligor: { kind: "human", label: "user" },
+        kind: "decision",
+        subject: "resume the hunt",
+        status: "open",
+        contested: false,
+        revision: 1,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const cli = join(import.meta.dir, "cli.ts");
+  const run = (args: string[]) =>
+    obligationsRun(cli, home, callerProject, args);
+  try {
+    const announced = await run([
+      "obligations",
+      "announce",
+      "--obligor",
+      "obligor-session",
+      "--kind",
+      "claim_release",
+      "--subject",
+      "EXP-0007",
+    ]);
+    expect(announced.exit, announced.stderr).toBe(0);
+    expect(announced.stdout).toContain("notified");
+
+    // Exactly one notice, in the obligor's project spool, addressed to them.
+    const spoolPath = join(
+      home,
+      ".claude",
+      "agent-mail",
+      "inbox",
+      `${projectSlug(obligorProject)}.jsonl`,
+    );
+    const lines = readFileSync(spoolPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "");
+    expect(lines).toHaveLength(1);
+    const notice = JSON.parse(lines[0]) as {
+      message: string;
+      meta: Record<string, string>;
+    };
+    expect(notice.meta.toSession).toBe("obligor-session");
+    expect(notice.message).toContain("claim_release");
+    expect(notice.message).toContain("EXP-0007");
+
+    // A resume id typed at the CLI proves nothing: only the id this shell's
+    // host command line carried is accepted, and the runner was not launched
+    // with --resume. Declared authority is the other route.
+    const vacuous = await run([
+      "obligations",
+      "adopt",
+      "--predecessor",
+      predecessorId,
+      "--resume-id",
+      predecessorId,
+    ]);
+    expect(vacuous.exit).toBe(1);
+    expect(vacuous.stderr).toContain("host command line");
+
+    // Adoption by declared authority moves the offline obligee's record to
+    // the caller.
+    const adopted = await run([
+      "obligations",
+      "adopt",
+      "--predecessor",
+      predecessorId,
+      "--authority",
+      "operator",
+      "--reason",
+      "resume the hunt",
+    ]);
+    expect(adopted.exit, adopted.stderr).toBe(0);
+    expect(adopted.stdout).toContain(
+      `adopted 1 obligation(s) from ${predecessorId}`,
+    );
+    expect(adopted.stdout).toContain(`adopted from ${predecessorId}`);
+    const listed = await run(["obligations", "list"]);
+    expect(listed.stdout).toContain("ob-deadbeef");
+    expect(listed.stdout).toContain("resume the hunt");
+
+    // Succession proofs and authority clearing are strict about their flags.
+    const proofless = await run([
+      "obligations",
+      "adopt",
+      "--predecessor",
+      predecessorId,
+    ]);
+    expect(proofless.exit).toBe(1);
+    expect(proofless.stderr).toContain("resume-id");
+    const reasonless = await run([
+      "obligations",
+      "adopt",
+      "--predecessor",
+      predecessorId,
+      "--authority",
+      "operator",
+    ]);
+    expect(reasonless.exit).toBe(1);
+    expect(reasonless.stderr).toContain("--reason");
+    const clearMissing = await run([
+      "obligations",
+      "clear",
+      "--id",
+      "ob-deadbeef",
+    ]);
+    expect(clearMissing.exit).toBe(1);
+    expect(clearMissing.stderr).toContain("--authority");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("obligations CLI announces a system obligor and settles the wait on the weft event", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-obligation-system-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(project, { recursive: true });
+  registerLiveSession(home, project, "caller-session");
+  const cli = join(import.meta.dir, "cli.ts");
+  const run = (args: string[], env: Record<string, string> = {}) =>
+    obligationsRun(cli, home, project, args, env);
+  try {
+    const announced = await run([
+      "obligations",
+      "announce",
+      "--system",
+      "weft",
+      "--kind",
+      "job_completion",
+      "--subject",
+      "job-9",
+    ]);
+    expect(announced.exit, announced.stderr).toBe(0);
+    const id = /announced (ob-[0-9a-f]+)/.exec(announced.stdout)?.[1];
+    if (!id) throw new Error("announce returned no obligation id");
+    // A system obligor gets no creation notice: its surface is its own
+    // event feed.
+    expect(announced.stdout).not.toContain("notified");
+
+    // A system with no wired settlement hook is refused outright.
+    const refused = await run([
+      "obligations",
+      "announce",
+      "--system",
+      "not-a-system",
+      "--kind",
+      "job_completion",
+      "--subject",
+      "job-10",
+    ]);
+    expect(refused.exit).toBe(1);
+    expect(refused.stderr).toContain("no wired settlement hook");
+
+    // The weft notify command running with WEFT_JOB_ID set IS the
+    // completion event: the wait settles deterministically, before any
+    // delivery work.
+    const notifyBinary = join(import.meta.dir, "cli.ts");
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        notifyBinary,
+        "notify",
+        "--project",
+        project,
+        "--message",
+        "job finished",
+      ],
+      {
+        env: {
+          ...process.env,
+          CLAUDE_CODE_SESSION_ID: "",
+          AGENT_SESSION_ID: "",
+          HOME: home,
+          WEFT_JOB_ID: "job-9",
+        },
+        cwd: project,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const notifyStderr = await new Response(child.stderr).text();
+    expect(await child.exited, notifyStderr).toBe(0);
+    expect(notifyStderr).toContain(
+      "settled 1 job_completion obligation(s) on weft job job-9",
+    );
+
+    const listed = await run(["obligations", "list", "--all"]);
+    expect(listed.stdout).toContain(`${id} job_completion job-9`);
+    expect(listed.stdout).toContain("[satisfied]");
+    expect(listed.stdout).toContain("[system; closed");
+    expect(listed.stdout).toContain("by weft");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("obligations CLI announces a component owner, notifies the resolved session, and refuses its contest", async () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "agent-mail-cli-obligation-component-"),
+  );
+  const home = join(root, "home");
+  const project = join(root, "resolve-component");
+  mkdirSync(project, { recursive: true });
+  registerLiveSession(home, project, "caller-session");
+  const cli = join(import.meta.dir, "cli.ts");
+  const run = (args: string[]) => obligationsRun(cli, home, project, args);
+  try {
+    const announced = await run([
+      "obligations",
+      "announce",
+      "--component",
+      "resolve-component",
+      "--kind",
+      "external_fix",
+      "--subject",
+      "am42",
+    ]);
+    expect(announced.exit, announced.stderr).toBe(0);
+    const id = /announced (ob-[0-9a-f]+)/.exec(announced.stdout)?.[1];
+    if (!id) throw new Error("announce returned no obligation id");
+    // The creation notice went to the one responsible session: the sole
+    // live session in the component's project.
+    expect(announced.stdout).toContain(
+      "notified owner of resolve-component (caller-session)",
+    );
+    const spoolPath = join(
+      home,
+      ".claude",
+      "agent-mail",
+      "inbox",
+      `${projectSlug(realpathSync(project))}.jsonl`,
+    );
+    const lines = readFileSync(spoolPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "");
+    expect(lines).toHaveLength(1);
+    const notice = JSON.parse(lines[0]) as { meta: Record<string, string> };
+    expect(notice.meta.toSession).toBe("caller-session");
+
+    // The role cannot contest, not even through the session it resolves to;
+    // a system or role obligor settles by evidence or clears by authority.
+    const contested = await run([
+      "obligations",
+      "contest",
+      "--id",
+      id,
+      "--reason",
+      "not mine",
+    ]);
+    expect(contested.exit).toBe(1);
+    expect(contested.stderr).toContain("cannot contest");
+
+    // The listing renders the role's resolution provenance.
+    const listed = await run(["obligations", "list"]);
+    expect(listed.stdout).toContain(
+      "owner of resolve-component → caller-session",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);

@@ -738,6 +738,43 @@ test("OMP resolves the calling session from the registered process tree", () => 
   rmSync(elsewhere, { recursive: true, force: true });
 });
 
+test("a shell under the host agent resolves through the registration's parentPid", () => {
+  const project = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
+  const started = new Date().toISOString();
+  // The channel server's pid is a sibling of the tool shell, never an
+  // ancestor; the host agent (parentPid) is the ancestor the shell actually
+  // descends from. Recorded at register time so the link survives
+  // session-id rotation.
+  const registration = {
+    cwd: project,
+    sessionId: "lion",
+    pid: 5001,
+    parentPid: 5000,
+    started,
+  };
+  const parents: Record<number, number> = { 3001: 5000, 5000: 1 };
+  expect(
+    registrationForCallingProcess(
+      [registration],
+      project,
+      (pid) => parents[pid],
+      3001,
+    )?.sessionId,
+  ).toBe("lion");
+  // A caller not under the host agent still resolves to nothing: the
+  // parentPid join is exact, not a project-membership heuristic.
+  const strangers: Record<number, number> = { 3002: 1 };
+  expect(
+    registrationForCallingProcess(
+      [registration],
+      project,
+      (pid) => strangers[pid],
+      3002,
+    ),
+  ).toBeUndefined();
+  rmSync(project, { recursive: true, force: true });
+});
+
 test("name shortening is supplied by the generated model and preserves custom names", () => {
   const generated = {
     scheme: "adjective-noun" as const,
@@ -754,4 +791,40 @@ test("name shortening is supplied by the generated model and preserves custom na
   expect(sessionNames(SID, undefined, CWD, LEGACY).nameNoun).toBe(
     LEGACY.displayName,
   );
+});
+
+test("a host pid shared by two registrations is not an identification", () => {
+  const project = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
+  const started = new Date().toISOString();
+  const first = {
+    cwd: project,
+    sessionId: "first",
+    pid: 5001,
+    parentPid: 5000,
+    started,
+  };
+  const second = {
+    cwd: project,
+    sessionId: "second",
+    pid: 5002,
+    parentPid: 5000,
+    started,
+  };
+  const parents: Record<number, number> = { 3001: 5000, 5000: 1 };
+  // Two channel servers under one host agent: the parentPid link is not an
+  // identification, and the walk must not guess.
+  expect(
+    registrationForCallingProcess(
+      [first, second],
+      project,
+      (pid) => parents[pid],
+      3001,
+    ),
+  ).toBeUndefined();
+  // A single channel server under the host resolves through parentPid.
+  expect(
+    registrationForCallingProcess([first], project, (pid) => parents[pid], 3001)
+      ?.sessionId,
+  ).toBe("first");
+  rmSync(project, { recursive: true, force: true });
 });

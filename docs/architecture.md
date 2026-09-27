@@ -461,6 +461,32 @@ agent-mail coordination respond-transfer --id <request-id> --decision accept|dec
 agent-mail coordination transfers [--project <dir> | --all] [--json]
 ```
 
+## Obligations
+
+Obligations are the fourth coordination primitive: machine-global records of
+who owes whom a specific outcome, spanning projects. Each end is a party —
+a session, the human operator, a wired system (`weft`, `agent-issues`), or
+a role (component owner, plan executor, experiment claimer) that resolves
+exactly to one responsible session. The model is announced, not negotiated:
+the obligee creates the record and closes it, the obligor can contest but
+never confirm, and records whose obligor cannot act settle by evidence — a
+claim release settles inside the release transaction, a system event
+settles through its versioned surface. There is no time-based expiry, only
+liveness and reference health; a dead session's waits move to a successor
+by adoption, proven by the host resume id or declared operator authority.
+
+`coordination list --all` joins them, `state --json` and the status line
+carry per-session `waiting`/`owed` counts, and `agent-mail obligations`
+is the CLI. The full contract — party constraints, settlement rules, and
+the duplicate and visibility invariants — is `specs/obligations.allium`;
+the decisions are in `docs/decisions/log.md`.
+
+Obligations track actor accountability, not artifact dependencies: an issue
+tracker records what feeds what, while an obligation records who owes whom,
+and exists so a wait is visible, closeable, and auditable rather than
+folklore. Research artifact chains (paper → claim → experiment) live in
+CLAIMS.md and the claims-spec declaration, which obligations cite by id.
+
 ## A delivery, end to end
 
 Quiet Lantern (Claude Code) and Silver Otter (Codex) share a project. The

@@ -396,6 +396,28 @@ flags preserves the prior report; supplying `--step` replaces it in full.
 See [work command details](docs/cli.md#work-tui) for source-reading limits
 and the equivalent MCP metadata.
 
+### Obligations
+
+An obligation is a session's public record that someone owes it a specific
+outcome: another session, or you, the human operator. They are announced, not
+negotiated — the announcing session creates the record, the obligee closes it,
+and the obligor can contest it (a tag, never a closure) but cannot confirm or
+delete it. Announcing to a session sends exactly one notice; your records are
+never pushed anywhere, because the owed view is how you see them.
+
+The `obligations` tools (MCP) and `agent-mail obligations` subcommands
+(announce, close, withdraw, contest, adopt, clear, list, owed) share one store:
+
+- `--kind claim_release` records settle automatically when the referenced
+  claim releases — deterministic evidence, no confirmation needed. `decision`
+  and `external_fix` records close when the obligee reports the outcome.
+- `owed` lists everything open that names you as obligor, across every
+  project. That view is the feature: what you owe, in one place.
+- `adopt` moves an offline session's open obligations to its successor, proven
+  by the host resume id or by declared operator authority.
+- `clear` withdraws a record on declared operator authority — recorded, never
+  verified — typically for a contested record the obligee will not withdraw.
+
 ## Configuration
 
 `~/.config/agent-mail/config.toml` holds the port, the Slack echo and

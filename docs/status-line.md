@@ -72,6 +72,13 @@ shows there as an `attached` record followed by a `pruned` record with no
 Work is always present, independent of `--work`. No resolved identity prints
 JSON `null`; collection errors print a diagnostic to stderr and exit nonzero.
 
+`obligations` carries this session's open-wait summary: `waiting` counts
+records the session is the obligee of, `owed` counts records naming it as
+session obligor, `roleOwed` counts records whose obligor role resolves to
+it, `unresolvedOwed` counts obligor roles that resolve to nothing, and
+`humanOwed` carries the operator's global owed count. All are additive and
+may be absent in older snapshots.
+
 `nameNoun` is supplied by the naming model. Generated adjective-noun names
 expose the full noun portion; custom and legacy names retain their full display
 name. Consumers need not split arbitrary names into words.

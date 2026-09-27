@@ -25,6 +25,7 @@ import {
   sep,
 } from "node:path";
 import { type LockOwner, withFileLock } from "./lock.ts";
+import { obligations } from "./obligations.ts";
 import { CLAIMS_DIR, canonicalProject, projectSlug } from "./paths.ts";
 
 export const PATH_CLAIM_SESSION_GRACE_MS = 15 * 60 * 1000;
@@ -401,9 +402,17 @@ function releaseToken(): string {
 
 export class ClaimStore {
   private readonly root: string;
+  private readonly onReleased: (claimId: string, releasedAt: string) => void;
 
-  constructor(root = CLAIMS_DIR) {
+  constructor(
+    root = CLAIMS_DIR,
+    onReleased: (claimId: string, releasedAt: string) => void = (
+      claimId,
+      releasedAt,
+    ) => obligations.settleReleasedClaim(claimId, { now: releasedAt }),
+  ) {
     this.root = root;
+    this.onReleased = onReleased;
   }
 
   private projectDir(project: string): string {
@@ -588,6 +597,11 @@ export class ClaimStore {
     renameSync(temporary, destination);
     const activePath = join(this.projectDir(claim.project), `${claim.id}.json`);
     if (existsSync(activePath)) unlinkSync(activePath);
+    // A release settles open claim-release obligations on this claim inside
+    // the releasing transaction (specs/obligations.allium; ADR 0021). Every
+    // release reason funnels through here, so settlement covers owner
+    // requests, forced recovery, expiry, and lost plan leases alike.
+    this.onReleased(claim.id, releasedAt);
     return released;
   }
 
@@ -906,6 +920,7 @@ export class ClaimStore {
           unlinkSync(
             join(this.projectDir(current.project), `${current.id}.json`),
           );
+          this.onReleased(current.id, requestNow.toISOString());
           return { claim: current, disposition: "released" };
         }
 

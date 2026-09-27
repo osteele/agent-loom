@@ -1504,3 +1504,315 @@ test("owner addressing refuses ambiguity and pins delivery across an accepted ha
     await Promise.all(clients.map((client) => client.close()));
   }
 }, 45_000);
+
+test("obligations can be announced, listed, contested, and closed over MCP", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-obligations-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const clients: Client[] = [];
+  async function connect(sessionId: string) {
+    const client = new Client({ name: "agent-mail-test", version: "1" });
+    clients.push(client);
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [join(import.meta.dir, "channel.ts")],
+        cwd: project,
+        env: {
+          ...environment,
+          HOME: home,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: sessionId,
+          AGENT_SESSION_ID: "",
+          AGENT_SESSION_PID: "",
+        },
+        stderr: "pipe",
+      }),
+    );
+    return client;
+  }
+
+  try {
+    const obligee = await connect("obligee-session");
+    const obligorSession = await connect("obligor-session");
+
+    const tools = await obligee.listTools();
+    for (const expected of [
+      "obligations_announce",
+      "obligations_close",
+      "obligations_withdraw",
+      "obligations_contest",
+      "obligations_adopt",
+      "obligations_clear",
+      "obligations_list",
+    ]) {
+      expect(tools.tools.map((tool) => tool.name)).toContain(expected);
+    }
+
+    const announced = textContent(
+      await obligee.callTool({
+        name: "obligations_announce",
+        arguments: {
+          obligor: "obligor-session",
+          kind: "decision",
+          subject: "approve the retry budget",
+        },
+      }),
+    );
+    const obligationId = /announced (ob-[0-9a-f]+)/.exec(announced)?.[1];
+    if (!obligationId) throw new Error("announce returned no obligation id");
+    expect(obligationId).toBeDefined();
+    expect(announced).toContain("notified");
+
+    // Exactly one creation notice, addressed to the obligor only.
+    const obligorInbox = textContent(
+      await obligorSession.callTool({
+        name: "check_inbox",
+        arguments: { peek: true },
+      }),
+    );
+    expect(obligorInbox).toContain(obligationId);
+    expect([...obligorInbox.matchAll(/announced obligation/g)]).toHaveLength(1);
+    const obligeeInbox = textContent(
+      await obligee.callTool({
+        name: "check_inbox",
+        arguments: { peek: true },
+      }),
+    );
+    expect(obligeeInbox).not.toContain("approve the retry budget");
+
+    const listed = textContent(
+      await obligee.callTool({ name: "obligations_list", arguments: {} }),
+    );
+    expect(listed).toContain(obligationId);
+    expect(listed).toContain("decision approve the retry budget");
+    expect(listed).toContain("owed to");
+    expect(listed).toContain("[open]");
+
+    const duplicate = await obligee.callTool({
+      name: "obligations_announce",
+      arguments: {
+        obligor: "obligor-session",
+        kind: "decision",
+        subject: "approve the retry budget",
+      },
+    });
+    expect(duplicate.isError).toBe(true);
+    expect(textContent(duplicate)).toContain(obligationId);
+
+    // The operator owes one too; a session cannot contest on their behalf.
+    const userAnnounced = textContent(
+      await obligee.callTool({
+        name: "obligations_announce",
+        arguments: {
+          to_user: true,
+          kind: "decision",
+          subject: "pick the venue",
+        },
+      }),
+    );
+    const userObligationId = /announced (ob-[0-9a-f]+)/.exec(
+      userAnnounced,
+    )?.[1];
+    if (!userObligationId) {
+      throw new Error("user announce returned no obligation id");
+    }
+    const userContest = await obligee.callTool({
+      name: "obligations_contest",
+      arguments: { id: userObligationId, reason: "not mine" },
+    });
+    expect(userContest.isError).toBe(true);
+    expect(textContent(userContest)).toContain("--user");
+
+    // Contest by the named obligor: tagged, never closed.
+    const contested = textContent(
+      await obligorSession.callTool({
+        name: "obligations_contest",
+        arguments: { id: obligationId, reason: "already decided last week" },
+      }),
+    );
+    expect(contested).toContain("already decided last week");
+
+    const closed = textContent(
+      await obligee.callTool({
+        name: "obligations_close",
+        arguments: { id: obligationId, resolution: "budget approved" },
+      }),
+    );
+    expect(closed).toContain("budget approved");
+    const all = textContent(
+      await obligee.callTool({
+        name: "obligations_list",
+        arguments: { scope: "all" },
+      }),
+    );
+    expect(all).toContain(obligationId);
+    expect(all).toContain("[satisfied]");
+    expect(all).toContain("resolution budget approved");
+    const owedToUser = textContent(
+      await obligee.callTool({
+        name: "obligations_list",
+        arguments: { owed_filter: "human" },
+      }),
+    );
+    expect(owedToUser).toContain(userObligationId);
+
+    // Adoption requires exactly one succession proof.
+    const predecessor = "0eedd1a5-0000-4000-8000-000000000001";
+    await expect(
+      obligee.callTool({
+        name: "obligations_adopt",
+        arguments: {
+          predecessor,
+          resume_id: predecessor,
+          authority: "operator",
+          reason: "operator said so",
+        },
+      }),
+    ).rejects.toThrow("exactly one of resume_id or authority");
+    await expect(
+      obligee.callTool({
+        name: "obligations_adopt",
+        arguments: { predecessor, authority: "operator" },
+      }),
+    ).rejects.toThrow("authority requires reason");
+  } finally {
+    await Promise.all(clients.map((client) => client.close()));
+  }
+}, 45_000);
+
+test("obligations announce accepts system and component obligors over MCP", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-party-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const clients: Client[] = [];
+  async function connect(sessionId: string) {
+    const client = new Client({ name: "agent-mail-test", version: "1" });
+    clients.push(client);
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [join(import.meta.dir, "channel.ts")],
+        cwd: project,
+        env: {
+          ...environment,
+          HOME: home,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: sessionId,
+          AGENT_SESSION_ID: "",
+          AGENT_SESSION_PID: "",
+        },
+        stderr: "pipe",
+      }),
+    );
+    return client;
+  }
+
+  try {
+    const obligee = await connect("obligee-session");
+
+    // A system obligor announces against its wired settlement hook and
+    // gets no creation notice: its surface is its own event feed.
+    const systemAnnounced = textContent(
+      await obligee.callTool({
+        name: "obligations_announce",
+        arguments: {
+          system: "weft",
+          kind: "job_completion",
+          subject: "job-7",
+        },
+      }),
+    );
+    expect(systemAnnounced).toContain("announced ob-");
+    expect(systemAnnounced).not.toContain("notified");
+    const systemId = /announced (ob-[0-9a-f]+)/.exec(systemAnnounced)?.[1];
+    if (!systemId) throw new Error("system announce returned no id");
+
+    const unwired = await obligee.callTool({
+      name: "obligations_announce",
+      arguments: {
+        system: "not-a-system",
+        kind: "job_completion",
+        subject: "job-8",
+      },
+    });
+    expect(unwired.isError).toBe(true);
+    expect(textContent(unwired)).toContain("no wired settlement hook");
+
+    const refusedContest = await obligee.callTool({
+      name: "obligations_contest",
+      arguments: { id: systemId, reason: "not mine" },
+    });
+    expect(refusedContest.isError).toBe(true);
+    expect(textContent(refusedContest)).toContain("cannot contest");
+
+    // The component owner resolves to the sole live session in the
+    // component's project — here, this very session — and the creation
+    // notice is delivered to it.
+    const componentAnnounced = textContent(
+      await obligee.callTool({
+        name: "obligations_announce",
+        arguments: {
+          component: "project",
+          kind: "external_fix",
+          subject: "am31",
+        },
+      }),
+    );
+    expect(componentAnnounced).toContain(
+      "notified owner of project (obligee-session)",
+    );
+    const inbox = textContent(
+      await obligee.callTool({
+        name: "check_inbox",
+        arguments: { peek: true },
+      }),
+    );
+    expect(inbox).toContain("announced obligation");
+    expect(inbox).toContain("external_fix");
+
+    // The listing renders the role's resolution provenance and the system
+    // obligor by its name.
+    const listed = textContent(
+      await obligee.callTool({ name: "obligations_list", arguments: {} }),
+    );
+    expect(listed).toContain("owner of project → obligee-session");
+    expect(listed).toContain("by weft");
+
+    // An ambiguous component (no sole live session) resolves to nobody and
+    // the announce is refused rather than guessed.
+    const obligorSession = await connect("second-session");
+    const ambiguous = await obligee.callTool({
+      name: "obligations_announce",
+      arguments: {
+        component: "project",
+        kind: "external_fix",
+        subject: "am32",
+      },
+    });
+    expect(ambiguous.isError).toBe(true);
+    expect(textContent(ambiguous)).toContain("does not resolve");
+    await obligorSession.close();
+    clients.splice(clients.indexOf(obligorSession), 1);
+  } finally {
+    await Promise.all(clients.map((client) => client.close()));
+  }
+}, 45_000);

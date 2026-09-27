@@ -19,6 +19,13 @@
  *   agent-mail work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]
  *   agent-mail coordination list [--project <dir> | --all]
  *   agent-mail coordination recover --id <coordination-id> [--authority <text> --reason <text>]
+ *   agent-mail obligations announce (--obligor <name-or-id> | --user |
+ *                                  --system <name> | --component <name>)
+ *                                  --kind <kind> --subject <text>
+ *   agent-mail obligations close|withdraw --id <obligation-id>
+ *   agent-mail obligations contest --id <obligation-id> --reason <text> [--user]
+ *   agent-mail obligations adopt --predecessor <id> (--resume-id <id> | --authority <text> --reason <text>)
+ *   agent-mail obligations owed
  *
  * Dashboards:
  *   agent-mail dashboard [--port N] [--open] [--no-tui]
@@ -117,6 +124,20 @@ import { readSessionMailHistory } from "./mailHistory.ts";
 import { selectTriageCandidates } from "./mailTriage.ts";
 import { runMailTui } from "./mailTui.ts";
 import { installMcpStartupDiagnostics } from "./mcpDiagnostics.ts";
+// Late-bound role resolution for the process-wide store, plus
+// componentProject for creation-notice delivery. Importing this module is
+// what wires the singleton in the CLI process; see its own comment for the
+// import-cycle reasoning.
+import { componentProject } from "./obligationResolution.ts";
+import {
+  type Obligation,
+  ObligationDuplicateError,
+  type ObligationKind,
+  type Party,
+  type SessionParty,
+  type Succession,
+  obligations,
+} from "./obligations.ts";
 import {
   CHANNEL_LIFECYCLE_LOG_PATH,
   CONFIG_PATH,
@@ -140,7 +161,7 @@ import {
   statusLineName,
   unaddressedCause,
 } from "./presence.ts";
-import { resolveRecipient } from "./recipients.ts";
+import { RecipientError, resolveRecipient } from "./recipients.ts";
 import {
   type InboundPolicy,
   type Registration,
@@ -148,6 +169,7 @@ import {
   coalesceRegistrations,
   listLive,
   listLiveInProject,
+  processCommand,
   processInfo,
   setInboundPolicy,
   setMuted,
@@ -174,6 +196,7 @@ import {
   claudeSessions,
   lastActivityMs,
   registrationForCallingProcess,
+  resumeIdFromCommand,
   sessionIdFromEnv,
   sessionNames,
 } from "./sessions.ts";
@@ -184,6 +207,8 @@ import {
 import {
   type AdmissionResult,
   type DeliveryReceipt,
+  type Message,
+  appendMessage,
   appendMessageGuarded,
   appendReceipt,
   knownProjects,
@@ -745,6 +770,22 @@ function callingSession(project?: string): NamedSession | undefined {
 async function cmdNotify(
   flags: Record<string, string | boolean>,
 ): Promise<void> {
+  // EventSettles (specs/obligations.allium): weft's configured notification
+  // command runs once per finished job with the WEFT_JOB_* variables
+  // exported. That command running IS the completion event, so the wait
+  // settles here — deterministically, before anything about mail delivery
+  // can fail, and without trusting the job's exit status: a job that
+  // finished unsuccessfully still completed, and the wait was for the
+  // event, not for a good outcome.
+  const weftJobId = process.env.WEFT_JOB_ID?.trim();
+  if (weftJobId) {
+    const settled = obligations.settleByEvent("weft", weftJobId);
+    if (settled.length > 0) {
+      console.error(
+        `settled ${settled.length} job_completion obligation(s) on weft job ${weftJobId}`,
+      );
+    }
+  }
   const project = flags.project;
   const message = flags.message;
   if (typeof project !== "string" || typeof message !== "string") {
@@ -1460,6 +1501,7 @@ async function cmdStatusLine(
             leases: work.list(project),
             jobs: readWeftJobsSnapshot(now),
             running: readRunningJobsSnapshot(now),
+            openObligations: obligations.listOpen(),
             nowMs: now,
           }),
         ),
@@ -2255,6 +2297,398 @@ function cmdCoordination(
   }
   throw new Error(
     "usage: agent-mail coordination list|recover|request-transfer|respond-transfer|transfers [options]",
+  );
+}
+
+const OBLIGATION_KINDS: readonly ObligationKind[] = [
+  "claim_release",
+  "decision",
+  "external_fix",
+  "job_completion",
+  "review",
+];
+
+const SESSION_ID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function describeObligation(obligation: Obligation): string {
+  // Role obligors render their resolution provenance ("owner of agent-mail
+  // → <session>"); an unresolvable role renders as unresolvable, and a
+  // session or human obligor renders as its label as before.
+  const obligor = obligations.describeObligor(obligation);
+  const lifecycle =
+    obligation.status === "open"
+      ? ""
+      : ` [${obligation.closedBy}; closed ${obligation.closedAt}]`;
+  const contested = obligation.contested
+    ? ` [contested ${obligation.contestedAt}; ${obligation.contestReason}]`
+    : "";
+  const resolution =
+    obligation.resolution !== undefined
+      ? ` [resolution ${obligation.resolution}]`
+      : "";
+  const adopted = obligation.adoptedFrom
+    ? ` [adopted from ${obligation.adoptedFrom}]`
+    : "";
+  return `${obligation.id} ${obligation.kind} ${obligation.subject} — owed to ${obligation.obligee.label} by ${obligor} [${obligation.status}]${lifecycle}${contested}${resolution}${adopted} [created ${obligation.createdAt}]`;
+}
+
+/** The one creation notice a session obligor gets (CreationNoticePushed in
+ * specs/obligations.allium): ordinary mail appended directly to the obligor's
+ * spool, the way transfer notices travel; the recipient's channel poll turns
+ * it into the ordinary push. A human or system obligor gets none — the owed
+ * view and the system's own event feed are theirs. Role obligors push to the
+ * one responsible session, passed as `toSession`. Kept text-identical with
+ * channel.ts's obligationNotice. */
+function obligationNotice(
+  obligation: Obligation,
+  project: string,
+  toSession?: string,
+): Message {
+  return {
+    ts: new Date().toISOString(),
+    from: "agent-mail-obligations",
+    project,
+    message: `${obligation.obligee.label} announced obligation ${obligation.id}: you owe a ${obligation.kind} outcome — ${obligation.subject}. Contest it with obligations_contest if it is wrong; the obligee closes it.`,
+    origin: {
+      kind: "automation",
+      transport: "internal",
+      authority: "untrusted",
+    },
+    meta: {
+      toSession:
+        toSession ??
+        (obligation.obligor.kind === "session"
+          ? obligation.obligor.sessionId
+          : ""),
+      obligationId: obligation.id,
+      fromName: obligation.obligee.label,
+    },
+  };
+}
+
+/** Obligations act for a live registered session — the same identity
+ * claim_path and work acquisitions use. A manual --owner label cannot act:
+ * the store proves the obligee's and contesting obligor's liveness against
+ * the registry, and a label has no process to prove. */
+function obligationActor(
+  flags: Record<string, string | boolean>,
+): SessionParty {
+  const owner = resolvedCliOwner(flags, canonicalProject(process.cwd()), false);
+  if (!owner || owner.kind !== "session" || !owner.sessionId) {
+    throw new Error(
+      "obligations act for a registered live session; run from inside an agent session (contest --user is the operator's form)",
+    );
+  }
+  return {
+    kind: "session",
+    sessionId: owner.sessionId,
+    label: sessionNames(
+      owner.sessionId,
+      claudeSessions().get(owner.sessionId),
+      canonicalProject(process.cwd()),
+    ).fullName,
+  };
+}
+
+/** Adoption names an offline session, which live-recipient resolution cannot
+ * see. A live name or id resolves; otherwise only an exact UUID-shaped
+ * session id is accepted, because anything else is a typo that would adopt
+ * nothing and report success. */
+function resolveObligationPredecessor(project: string, query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed) throw new Error("predecessor must not be empty");
+  try {
+    return resolveRecipient(project, trimmed).sessionId;
+  } catch (error) {
+    if (!(error instanceof RecipientError)) throw error;
+  }
+  if (!SESSION_ID_SHAPE.test(trimmed)) {
+    throw new Error(
+      `predecessor "${trimmed}" does not resolve; adoption names an offline session by its exact session id`,
+    );
+  }
+  return trimmed;
+}
+
+function cmdObligations(
+  flags: Record<string, string | boolean>,
+  args: string[],
+): void {
+  const subcommand = args[0];
+  if (subcommand === "announce") {
+    const kind = flags.kind as ObligationKind;
+    if (!kind || !OBLIGATION_KINDS.includes(kind)) {
+      throw new Error(
+        "obligations announce requires --kind claim_release|decision|external_fix|job_completion|review",
+      );
+    }
+    if (typeof flags.subject !== "string" || !flags.subject.trim()) {
+      throw new Error("obligations announce requires --subject <text>");
+    }
+    const obligorForms = [
+      flags.obligor !== undefined,
+      flags.user === true,
+      flags.system !== undefined,
+      flags.component !== undefined,
+    ].filter(Boolean).length;
+    if (obligorForms !== 1) {
+      throw new Error(
+        "obligations announce requires exactly one of --obligor <name-or-id>, --user, --system <name>, or --component <name>",
+      );
+    }
+    const actor = obligationActor(flags);
+    let obligor: Party;
+    let obligorProject: string | undefined;
+    if (flags.user === true) {
+      obligor = { kind: "human", label: "user" };
+    } else if (flags.system !== undefined) {
+      if (typeof flags.system !== "string" || !flags.system.trim()) {
+        throw new Error("--system requires the integration's name, e.g. weft");
+      }
+      const system = flags.system.trim();
+      obligor = { kind: "system", system, label: system };
+    } else if (flags.component !== undefined) {
+      if (typeof flags.component !== "string" || !flags.component.trim()) {
+        throw new Error(
+          "--component requires the component's name, e.g. agent-mail",
+        );
+      }
+      const component = flags.component.trim();
+      obligor = {
+        kind: "role",
+        role: { kind: "component_owner", component },
+        label: `owner of ${component}`,
+      };
+    } else {
+      if (typeof flags.obligor !== "string" || !flags.obligor.trim()) {
+        throw new Error("--obligor requires a session name or ID");
+      }
+      const recipient = resolveRecipient(claimProject(flags), flags.obligor);
+      obligorProject = recipient.project;
+      obligor = {
+        kind: "session",
+        sessionId: recipient.sessionId,
+        label: sessionNames(
+          recipient.sessionId,
+          claudeSessions().get(recipient.sessionId),
+          recipient.project,
+        ).fullName,
+      };
+    }
+    let record: Obligation;
+    try {
+      record = obligations.announce({
+        obligee: actor,
+        obligor,
+        kind,
+        subject: flags.subject.trim(),
+      });
+    } catch (error) {
+      if (!(error instanceof ObligationDuplicateError)) throw error;
+      console.error(
+        `${error.message}; close or withdraw ${error.obligation.id} before announcing the same subject again`,
+      );
+      process.exit(1);
+    }
+    let notified = "";
+    if (record.obligor.kind === "session" && obligorProject !== undefined) {
+      appendMessage(obligationNotice(record, obligorProject));
+      notified = `; notified ${record.obligor.label}`;
+    } else if (record.obligor.kind === "role") {
+      // CreationNoticePushed for a role obligor: one notice, to the
+      // resolved session, in the component's project.
+      const resolution = obligations.resolveParty(record.obligor);
+      const roleProject =
+        record.obligor.role.kind === "component_owner"
+          ? componentProject(record.obligor.role.component)
+          : undefined;
+      if (
+        resolution.state === "resolves" &&
+        resolution.sessionId &&
+        roleProject
+      ) {
+        appendMessage(
+          obligationNotice(record, roleProject, resolution.sessionId),
+        );
+        notified = `; notified ${record.obligor.label} (${resolution.sessionId})`;
+      }
+    }
+    console.log(
+      `announced ${record.id} — ${record.kind} ${record.subject}${notified}`,
+    );
+    return;
+  }
+  if (subcommand === "close") {
+    if (typeof flags.id !== "string" || !flags.id.trim()) {
+      throw new Error(
+        "usage: agent-mail obligations close --id <obligation-id> [--resolution <text>]",
+      );
+    }
+    const record = obligations.close(
+      flags.id.trim(),
+      obligationActor(flags),
+      typeof flags.resolution === "string" && flags.resolution.trim()
+        ? flags.resolution.trim()
+        : undefined,
+    );
+    console.log(`closed ${describeObligation(record)}`);
+    return;
+  }
+  if (subcommand === "withdraw") {
+    if (typeof flags.id !== "string" || !flags.id.trim()) {
+      throw new Error(
+        "usage: agent-mail obligations withdraw --id <obligation-id>",
+      );
+    }
+    const record = obligations.withdraw(
+      flags.id.trim(),
+      obligationActor(flags),
+    );
+    console.log(`withdrew ${describeObligation(record)}`);
+    return;
+  }
+  if (subcommand === "contest") {
+    if (typeof flags.id !== "string" || !flags.id.trim()) {
+      throw new Error(
+        "usage: agent-mail obligations contest --id <obligation-id> --reason <text> [--user]",
+      );
+    }
+    if (typeof flags.reason !== "string" || !flags.reason.trim()) {
+      throw new Error("obligations contest requires --reason <text>");
+    }
+    if (flags.user === true) {
+      const record = obligations.contest(
+        flags.id.trim(),
+        "user",
+        flags.reason.trim(),
+      );
+      console.log(`contested ${describeObligation(record)}`);
+      return;
+    }
+    const existing = obligations.get(flags.id.trim());
+    if (existing?.obligor.kind === "human") {
+      throw new Error(
+        `obligation ${existing.id} names you, the operator, as obligor; contest it with --user`,
+      );
+    }
+    const record = obligations.contest(
+      flags.id.trim(),
+      { sessionId: obligationActor(flags).sessionId },
+      flags.reason.trim(),
+    );
+    console.log(`contested ${describeObligation(record)}`);
+    return;
+  }
+  if (subcommand === "adopt") {
+    const resumeId =
+      typeof flags["resume-id"] === "string" ? flags["resume-id"] : undefined;
+    const authority =
+      typeof flags.authority === "string" ? flags.authority : undefined;
+    const reason = typeof flags.reason === "string" ? flags.reason : undefined;
+    if ((resumeId !== undefined) === (authority !== undefined)) {
+      throw new Error(
+        "obligations adopt requires exactly one of --resume-id <id> or --authority <text> --reason <text>",
+      );
+    }
+    if (authority !== undefined && !reason?.trim()) {
+      throw new Error("obligations adopt --authority requires --reason <text>");
+    }
+    const predecessorFlag =
+      typeof flags.predecessor === "string" ? flags.predecessor : undefined;
+    if (predecessorFlag === undefined && resumeId === undefined) {
+      throw new Error("obligations adopt requires --predecessor <id>");
+    }
+    const predecessorId = resolveObligationPredecessor(
+      claimProject(flags),
+      (predecessorFlag ?? resumeId) as string,
+    );
+    let succession: Succession;
+    if (resumeId !== undefined) {
+      // ADR 0011: a resume id is succession evidence only when it is the one
+      // this shell's host command line carried — a string the caller types
+      // proves nothing, so it is checked against the observed host line and
+      // otherwise refused.
+      const observed = resumeIdFromCommand(processCommand(process.ppid));
+      if (observed === undefined || observed !== predecessorId) {
+        throw new Error(
+          "adoption by --resume-id requires this shell's host command line to carry the predecessor's session id (launch with --resume <id>); adopt by --authority with --reason instead",
+        );
+      }
+      succession = { kind: "resume-id", resumeId: predecessorId };
+    } else {
+      succession = {
+        kind: "authority",
+        authority: authority?.trim() ?? "",
+        reason: reason?.trim() ?? "",
+      };
+    }
+    const moved = obligations.adopt({
+      adopter: obligationActor(flags),
+      predecessorSessionId: predecessorId,
+      succession,
+    });
+    console.log(
+      moved.length
+        ? `adopted ${moved.length} obligation(s) from ${predecessorId}\n${moved.map(describeObligation).join("\n")}`
+        : `adopted 0 obligations from ${predecessorId}; the predecessor had no open obligations`,
+    );
+    return;
+  }
+  if (subcommand === "clear") {
+    if (
+      typeof flags.id !== "string" ||
+      !flags.id.trim() ||
+      typeof flags.authority !== "string" ||
+      !flags.authority.trim() ||
+      typeof flags.reason !== "string" ||
+      !flags.reason.trim()
+    ) {
+      throw new Error(
+        "usage: agent-mail obligations clear --id <obligation-id> --authority <text> --reason <text>",
+      );
+    }
+    const record = obligations.authorityClear(
+      flags.id.trim(),
+      flags.authority.trim(),
+      flags.reason.trim(),
+    );
+    console.log(
+      `cleared ${describeObligation(record)} on declared authority (recorded, not verified)`,
+    );
+    return;
+  }
+  if (subcommand === "list" || subcommand === "owed") {
+    const owed = subcommand === "owed" || flags.owed === true;
+    const scopeAll = subcommand !== "owed" && flags.all === true;
+    if (typeof flags.project === "string") {
+      throw new Error(
+        "obligations are machine-global; list and owed take no --project",
+      );
+    }
+    if (subcommand === "list" && flags.all && flags.owed === true) {
+      throw new Error("obligations list accepts --all or --owed, not both");
+    }
+    const records = owed
+      ? obligations.owedToHuman()
+      : scopeAll
+        ? obligations.list()
+        : obligations.listOpen();
+    if (records.length === 0) {
+      console.log(
+        owed
+          ? "no open obligations owed by you"
+          : scopeAll
+            ? "no obligations"
+            : "no open obligations",
+      );
+      return;
+    }
+    for (const record of records) console.log(describeObligation(record));
+    return;
+  }
+  throw new Error(
+    "usage: agent-mail obligations announce|close|withdraw|contest|adopt|clear|list|owed [options]",
   );
 }
 
@@ -3421,6 +3855,43 @@ Coordination:
                         Answer a transfer request as the exact lease owner
   coordination transfers [--project <dir> | --all] [--json]
                         List transfer requests and dispositions
+  obligations announce (--obligor <name-or-id> | --user |
+                        --system <name> | --component <name>)
+                       --kind claim_release|decision|external_fix|
+                              job_completion|review
+                       --subject <text> [--project <dir>]
+                        Announce that another session, the operator, a
+                        system, or a component's owner owes
+                        your session an outcome. Announced, not negotiated:
+                        you create and close the record; the obligor may
+                        contest but never confirms. A session obligor is
+                        resolved like --session recipients and gets one
+                        notice; --system names a wired integration (claims,
+                        weft, agent-issues) and settles by its own events;
+                        --component names the component whose owner owes
+                        the repair, and its notice goes to the resolved
+                        owner. A role or system obligor cannot contest.
+  obligations close --id <obligation-id> [--resolution <text>]
+                        Close your record as satisfied; only the obligee
+                        session closes. claim_release records settle on their
+                        own when the claim releases; job_completion, review,
+                        and role-obligor records settle on their system's
+                        events.
+  obligations withdraw --id <obligation-id>
+                        Retract your record without claiming satisfaction
+  obligations contest --id <obligation-id> --reason <text> [--user]
+                        Mark the record disputed; it stays visible and tagged.
+                        --user contests as the operator on records naming you.
+  obligations adopt (--predecessor <id> --resume-id <id> |
+                     --predecessor <id> --authority <text> --reason <text>)
+                        Inherit an offline session's open obligations, in both
+                        roles; exactly one succession proof is required
+  obligations clear --id <obligation-id> --authority <text> --reason <text>
+                        Withdraw on declared operator authority (recorded,
+                        never verified)
+  obligations list [--all] [--owed]
+  obligations owed      Open records naming the operator as obligor, across
+                        every project — what you owe, in one place
 
 Dashboards:
   state [--project <dir>] [--no-sync] [--json]
@@ -3645,6 +4116,9 @@ switch (cmd) {
     break;
   case "coordination":
     cmdCoordination(flags, rest);
+    break;
+  case "obligations":
+    cmdObligations(flags, rest);
     break;
   case "start":
     await cmdStart();

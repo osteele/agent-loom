@@ -531,6 +531,111 @@ Releases responsibility for a lease. Releasing a research-plan lease also
 releases that plan's path claims and records the selected outcome. Omitting the
 outcome records lease loss.
 
+## Obligations
+
+Obligations are machine-global records of who owes whom a specific outcome —
+a claim release, a decision, a referenced fix, a job completion, a review.
+Parties are sessions, the human operator, systems (a wired integration such
+as `weft` or `agent-issues`), and roles (the component owner, the plan's
+current executor, the experiment's claimer of record). The model is
+announced, not negotiated: the obligee creates the record and closes it, the
+obligor can contest but never confirm, and deterministic evidence settles
+its own waits — a claim release settles claim-release obligations, and a
+system event settles records owed by a system or a role. Records span
+projects, so these commands take no `--project`. `--user` addresses the
+operator; the obligor's copy of a session-addressed record arrives as
+exactly one notice.
+
+### `obligations announce`
+
+```
+agent-mail obligations announce (--obligor <name-or-id> | --user |
+                                 --system <name> | --component <name>)
+  --kind <claim_release|decision|external_fix|job_completion|review>
+  --subject <text>
+```
+
+Announces that the obligor owes the calling session a specific outcome. A
+session obligor must resolve to a live session; `--system <name>` names a
+wired integration (`claims`, `weft`, `agent-issues`) whose own events settle
+the record; `--component <name>` names the component whose owner owes the
+repair, and resolves at read time to the one responsible session — its
+creation notice goes to that session. A role or system obligor cannot be
+contested. An open record with the same obligee, kind, and subject blocks a
+duplicate and names the existing id.
+
+### `obligations close`
+
+```
+agent-mail obligations close --id <obligation-id> [--resolution <text>]
+```
+
+Satisfies an open obligation. Obligee-only; the resolution text is captured
+at the act and never edited. Closed records are retained for 30 days. Besides
+the obligee's own close, `claim_release` records settle when the claim
+releases, and records owed by a system or a role settle when the owning
+system reports the event (a weft job finishing, an issue reaching fixed).
+
+### `obligations withdraw`
+
+```
+agent-mail obligations withdraw --id <obligation-id>
+```
+
+Withdraws an open obligation. Obligee-only, like `close`.
+
+### `obligations contest`
+
+```
+agent-mail obligations contest --id <obligation-id> --reason <text> [--user]
+```
+
+The named obligor marks the record contested — visible everywhere, tagged,
+never closing. `--user` is the operator's form for records naming the human.
+A second contest is refused. Records owed by a system or a role have no
+contest path: those obligors cannot act, so the record settles by its own
+evidence or clears by authority.
+
+### `obligations adopt`
+
+```
+agent-mail obligations adopt --predecessor <id>
+  (--resume-id <id> | --authority <text> --reason <text>)
+```
+
+A successor session adopts every open obligation of an offline predecessor —
+both what it was owed and what it owed. Succession requires the
+predecessor's resume id (from the host command line) or declared authority.
+The transfer is atomic, carries contested flags, and skips terminal records.
+
+### `obligations owed`
+
+```
+agent-mail obligations owed
+```
+
+Lists open obligations naming the operator, across all projects. Records
+naming a session appear in that session's status line and in
+`coordination list --all`.
+
+### `obligations list`
+
+```
+agent-mail obligations list [--all] [--owed]
+```
+
+Lists obligations; `--all` includes satisfied and withdrawn records within
+the 30-day retention window, `--owed` filters to the operator's.
+
+### `obligations clear`
+
+```
+agent-mail obligations clear --id <obligation-id> --authority <text> --reason <text>
+```
+
+Withdraws an open obligation under declared user authority — recorded, never
+verified.
+
 ## Unified coordination
 
 `coordination` presents work leases, path claims, and experiment reservations

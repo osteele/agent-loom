@@ -13,6 +13,13 @@ import {
   pathClaimIsOverdue,
   pathClaimTargets,
 } from "./claims.ts";
+import {
+  type Obligation,
+  type ObligationStore,
+  type Party,
+  type PartyResolution,
+  obligations,
+} from "./obligations.ts";
 import { FORCED_RECOVERY_LOG_PATH, displayName } from "./paths.ts";
 import { coordinationProcessEvidence } from "./processSnapshot.ts";
 import {
@@ -29,7 +36,11 @@ import {
   work,
 } from "./work.ts";
 
-export type CoordinationKind = "work" | "path-claim" | "experiment-claim";
+export type CoordinationKind =
+  | "work"
+  | "path-claim"
+  | "experiment-claim"
+  | "obligation";
 export type OwnerStatus =
   | "live"
   | "offline"
@@ -69,6 +80,7 @@ export type CoordinationCondition =
   | "owner-offline"
   | "owner-expired"
   | "owner-unverifiable"
+  | "owner-unresolved"
   | "source-missing"
   | "awaiting-materialization"
   | "materialized";
@@ -91,6 +103,11 @@ export interface CoordinationEntry {
   state?: string;
   progress?: WorkProgress;
   activity?: string;
+  /** Obligation entries only: who the record waits on. */
+  obligee?: string;
+  /** Obligation entries only: the obligor disputed the record. Contest never
+   * closes it — contested records stay in every view, marked. */
+  contested?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -350,6 +367,102 @@ function workEntry(
   };
 }
 
+/** An open obligation joins the cross-project view with the obligor as its
+ * owner. A session obligor gets the liveness treatment other owners get —
+ * dead means owner-offline, never gone. A human obligor is the operator:
+ * the owner label is theirs ("user"), no liveness check is run (ADR 0001:
+ * the single operator always resolves), and nothing about the record is
+ * displaceable. A system obligor is likewise an owner with no process to
+ * check — its health is its own event feed's, not a registry scan. A role
+ * obligor resolves at read time: resolving renders the responsible session
+ * with the ordinary liveness treatment; unresolvable renders
+ * owner-unresolved — it is never guessed onto a session. Obligations are
+ * machine-global, so they carry no project of their own and only the
+ * cross-project view lists them. */
+function obligationEntry(
+  obligation: Obligation,
+  registrations: Registration[],
+  resolveParty: (party: Party) => PartyResolution,
+): CoordinationEntry {
+  const obligor = obligation.obligor;
+  let owner: ClaimOwner;
+  let status: OwnerStatus;
+  let condition: CoordinationCondition;
+  if (obligor.kind === "session") {
+    owner = {
+      id: obligor.sessionId,
+      label: obligor.label,
+      kind: "session",
+      sessionId: obligor.sessionId,
+    };
+    // A registration join, not a process scan: the record never captured a
+    // pid, so the session id is the only identity a dead obligor can be
+    // checked against.
+    status = registrations.some(
+      (registration) => registration.sessionId === obligor.sessionId,
+    )
+      ? "live"
+      : "offline";
+    condition = status === "offline" ? "owner-offline" : "healthy";
+  } else if (obligor.kind === "role") {
+    const resolution = resolveParty(obligor);
+    if (resolution.state === "resolves" && resolution.sessionId) {
+      owner = {
+        id: resolution.sessionId,
+        label: obligor.label,
+        kind: "session",
+        sessionId: resolution.sessionId,
+      };
+      status = registrations.some(
+        (registration) => registration.sessionId === resolution.sessionId,
+      )
+        ? "live"
+        : "offline";
+      condition = status === "offline" ? "owner-offline" : "healthy";
+    } else {
+      // The role resolves to nobody right now: visible and tagged, with no
+      // session guessed as a stand-in.
+      owner = { id: obligor.label, label: obligor.label, kind: "manual" };
+      status = "manual";
+      condition = "owner-unresolved";
+    }
+  } else {
+    // Human or system: deliberate non-process ownership, outside registry
+    // liveness — the same classification a `--owner` acquisition gets.
+    owner = {
+      id: obligor.kind === "system" ? obligor.system : obligor.label,
+      label: obligor.label,
+      kind: "manual",
+    };
+    status = "manual";
+    condition = "healthy";
+  }
+  return {
+    id: obligation.id,
+    kind: "obligation",
+    project: "",
+    projectLabel: "all projects",
+    resourceType: "obligation",
+    resourceKey: `${obligation.kind}:${obligation.subject}`,
+    resourceLabel: `${obligation.kind}:${obligation.subject}`,
+    sourcePaths: [],
+    owner,
+    ownerStatus: status,
+    condition,
+    recoverable: false,
+    state: obligation.status,
+    obligee: obligation.obligee.label,
+    contested: obligation.contested,
+    // Contest never removes a record from view; the reason rides the one
+    // free-text slot every surface already renders.
+    ...(obligation.contested && obligation.contestReason
+      ? { activity: `contested: ${obligation.contestReason}` }
+      : {}),
+    createdAt: obligation.createdAt,
+    updatedAt: obligation.contestedAt ?? obligation.createdAt,
+  };
+}
+
 export function listCoordination(
   options: {
     project?: string;
@@ -359,12 +472,14 @@ export function listCoordination(
     processes?: Map<number, ProcessInfo> | ProcessScan;
     claimStore?: ClaimStore;
     workStore?: WorkStore;
+    obligationsStore?: ObligationStore;
   } = {},
 ): CoordinationEntry[] {
   const registrations = options.registrations ?? listLive();
   const registrationsReliable = options.registrationsReliable ?? true;
   const claimStore = options.claimStore ?? claims;
   const workStore = options.workStore ?? work;
+  const obligationStore = options.obligationsStore ?? obligations;
   const workRecords = options.allProjects
     ? workStore.listAll()
     : options.project
@@ -403,6 +518,9 @@ export function listCoordination(
     options.processes instanceof Map
       ? { processes: options.processes, reliable: true }
       : (options.processes ?? coordinationProcessEvidence(ownerPids));
+  const obligationRecords = options.allProjects
+    ? obligationStore.listOpen()
+    : [];
   return [
     ...workRecords.map((lease) =>
       workEntry(lease, registrations, processes, registrationsReliable),
@@ -414,6 +532,11 @@ export function listCoordination(
         processes,
         registrationsReliable,
         claimWorkRecords,
+      ),
+    ),
+    ...obligationRecords.map((obligation) =>
+      obligationEntry(obligation, registrations, (party) =>
+        obligationStore.resolveParty(party),
       ),
     ),
   ].sort(
@@ -442,6 +565,11 @@ export function describeCoordination(entry: CoordinationEntry): string {
 }
 
 export function coordinationConflictAdvice(entry: CoordinationEntry): string {
+  // Checked before liveness: even a dead obligor must not be advised into
+  // recovery — obligations have no recovery, only settlement.
+  if (entry.kind === "obligation") {
+    return `obligations are settled by their obligee: ask ${entry.obligee ?? "the obligee"} to close ${entry.id}, or the operator to clear it with declared authority`;
+  }
   if (entry.condition === "restart-grace") {
     return "wait for the restart-grace deadline";
   }
@@ -520,6 +648,14 @@ export function recoverCoordination(
     throw new Error(`coordination id is ambiguous: ${coordinationId}`);
   }
   const entry = matches[0];
+  // Obligations are never recovered: they leave the view only by their
+  // obligee closing them or by operator authority clearing them, and both
+  // live in the obligations store, not in a claim release.
+  if (entry.kind === "obligation") {
+    throw new Error(
+      `${coordinationId} is an obligation, not a claim or lease; obligations are closed by their obligee, or cleared by the operator with declared authority`,
+    );
+  }
   const authority = options.authority?.trim();
   const forced = authority !== undefined && authority.length > 0;
   const reason = options.reason?.trim();

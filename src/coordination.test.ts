@@ -14,13 +14,18 @@ import { ClaimStore } from "./claims.ts";
 import {
   MANUAL_OWNER_TTL_MS,
   coordinationConflictAdvice,
+  describeCoordination,
   isDisplaceable,
   listCoordination,
   ownerStatus,
   recordForcedRecovery,
+  recoverCoordination,
 } from "./coordination.ts";
-import type { Registration } from "./registry.ts";
+import { ObligationStore, obligations } from "./obligations.ts";
+import { type Registration, register } from "./registry.ts";
 import { WorkStore } from "./work.ts";
+
+const PROJECT = "/project";
 
 const temporaryDirectories: string[] = [];
 
@@ -577,4 +582,232 @@ test("an expired manual owner is reported as recoverable", () => {
   expect(entry.ownerStatus).toBe("expired");
   expect(entry.condition).toBe("owner-expired");
   expect(entry.recoverable).toBe(true);
+});
+
+// --- obligations in the join ---------------------------------------------------
+//
+// Open obligations join the cross-project coordination view with the obligor
+// as owner. Records are machine-global: they carry no project, so only the
+// --all view lists them, and their store is injected the way the claim and
+// work stores are.
+
+function obligationStore(root: string): ObligationStore {
+  // Announce and contest consult this predicate; the join's own liveness
+  // verdict comes from the registrations handed to listCoordination.
+  return new ObligationStore({
+    root: join(root, "obligations"),
+    isLive: () => true,
+  });
+}
+
+const OBLIGATION_CREATED = "2026-09-27T00:00:00.000Z";
+
+function seedDecision(store: ObligationStore): { id: string } {
+  return store.announce(
+    {
+      obligee: {
+        kind: "session" as const,
+        sessionId: "session-a",
+        label: "Quiet Lantern",
+      },
+      obligor: {
+        kind: "session",
+        sessionId: "session-b",
+        label: "Nimble Cloud",
+      },
+      kind: "decision",
+      subject: "pick the release name",
+    },
+    { now: OBLIGATION_CREATED },
+  );
+}
+
+function joinEntries(
+  root: string,
+  store: ObligationStore,
+  registrations: Registration[],
+) {
+  return listCoordination({
+    allProjects: true,
+    registrations,
+    claimStore: new ClaimStore(join(root, "claims")),
+    workStore: new WorkStore(join(root, "work")),
+    obligationsStore: store,
+  });
+}
+
+test("an open obligation joins the cross-project view with the obligor as owner", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-join-"));
+  temporaryDirectories.push(root);
+  const store = obligationStore(root);
+  const decision = seedDecision(store);
+  const obligor: Registration = {
+    cwd: "/project",
+    pid: 42,
+    sessionId: "session-b",
+    started: OBLIGATION_CREATED,
+  };
+
+  const entry = joinEntries(root, store, [obligor]).find(
+    (candidate) => candidate.id === decision.id,
+  );
+  expect(entry).toMatchObject({
+    kind: "obligation",
+    resourceType: "obligation",
+    resourceKey: "decision:pick the release name",
+    obligee: "Quiet Lantern",
+    ownerStatus: "live",
+    condition: "healthy",
+    contested: false,
+    state: "open",
+    recoverable: false,
+    createdAt: OBLIGATION_CREATED,
+  });
+  expect(entry?.owner.label).toBe("Nimble Cloud");
+});
+
+test("a dead session obligor surfaces owner-offline and never recovery advice", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-dead-"));
+  temporaryDirectories.push(root);
+  const store = obligationStore(root);
+  const decision = seedDecision(store);
+
+  const entry = joinEntries(root, store, []).find(
+    (candidate) => candidate.id === decision.id,
+  );
+  if (!entry) throw new Error("obligation missing from the join");
+  expect(entry).toMatchObject({
+    ownerStatus: "offline",
+    condition: "owner-offline",
+    recoverable: false,
+  });
+  const advice = coordinationConflictAdvice(entry);
+  expect(advice).toContain("Quiet Lantern");
+  expect(advice).not.toContain("recover");
+});
+
+test("a contested obligation stays visible and carries its reason", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-contest-"));
+  temporaryDirectories.push(root);
+  const store = obligationStore(root);
+  const decision = seedDecision(store);
+  store.contest(
+    decision.id,
+    { sessionId: "session-b" },
+    "the decision was already made",
+  );
+  const obligor: Registration = {
+    cwd: "/project",
+    pid: 42,
+    sessionId: "session-b",
+    started: OBLIGATION_CREATED,
+  };
+
+  const entry = joinEntries(root, store, [obligor]).find(
+    (candidate) => candidate.id === decision.id,
+  );
+  if (!entry) throw new Error("obligation missing from the join");
+  expect(entry).toMatchObject({
+    ownerStatus: "live",
+    contested: true,
+    state: "open",
+  });
+  expect(entry.activity).toBe("contested: the decision was already made");
+  expect(describeCoordination(entry)).toContain(
+    "the decision was already made",
+  );
+});
+
+test("a human obligor is owned by the operator without a liveness check", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-human-"));
+  temporaryDirectories.push(root);
+  const store = obligationStore(root);
+  const owed = store.announce(
+    {
+      obligee: {
+        kind: "session" as const,
+        sessionId: "session-a",
+        label: "Quiet Lantern",
+      },
+      obligor: { kind: "human", label: "user" },
+      kind: "external_fix",
+      subject: "am17",
+    },
+    { now: OBLIGATION_CREATED },
+  );
+
+  // Empty registrations: a session obligor would read offline here; the
+  // operator is never liveness-checked.
+  const entry = joinEntries(root, store, []).find(
+    (candidate) => candidate.id === owed.id,
+  );
+  if (!entry) throw new Error("obligation missing from the join");
+  expect(entry).toMatchObject({
+    resourceKey: "external_fix:am17",
+    ownerStatus: "manual",
+    condition: "healthy",
+    recoverable: false,
+  });
+  expect(entry.owner.label).toBe("user");
+});
+
+test("obligations list only in the cross-project view and leave it when settled", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-scope-"));
+  temporaryDirectories.push(root);
+  const store = obligationStore(root);
+  const decision = seedDecision(store);
+  const project = join(root, "project");
+  mkdirSync(project);
+
+  const scoped = listCoordination({
+    project,
+    registrations: [],
+    claimStore: new ClaimStore(join(root, "claims")),
+    workStore: new WorkStore(join(root, "work")),
+    obligationsStore: store,
+  });
+  expect(scoped.some((entry) => entry.kind === "obligation")).toBe(false);
+
+  store.close(
+    decision.id,
+    { kind: "session", sessionId: "session-a", label: "Quiet Lantern" },
+    "picked",
+    { now: "2026-09-27T01:00:00.000Z" },
+  );
+  const joined = joinEntries(root, store, []);
+  expect(joined.some((entry) => entry.id === decision.id)).toBe(false);
+});
+
+test("coordination recovery refuses obligation records", () => {
+  // recoverCoordination reads the process-wide stores, so this record is
+  // seeded through the singleton — which requires the sessions it names to
+  // be registered live.
+  register(PROJECT, process.pid, "session-a");
+  // A distinct, certainly-live pid: registry entries are keyed by project and
+  // pid, so a second register under process.pid would overwrite the first.
+  register(PROJECT, process.ppid, "session-b");
+  const decision = obligations.announce(
+    {
+      obligee: {
+        kind: "session" as const,
+        sessionId: "session-a",
+        label: "Quiet Lantern",
+      },
+      obligor: {
+        kind: "session",
+        sessionId: "session-b",
+        label: "Nimble Cloud",
+      },
+      kind: "decision",
+      subject: "not recoverable",
+    },
+    { now: OBLIGATION_CREATED },
+  );
+
+  expect(() =>
+    recoverCoordination(decision.id, [], {
+      authority: "operator",
+      reason: "not how obligations leave the view",
+    }),
+  ).toThrow(/obligation, not a claim or lease/);
 });

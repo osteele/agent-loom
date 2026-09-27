@@ -1,0 +1,445 @@
+-- allium: 3
+-- obligations.allium
+--
+-- Authority: the intended obligation contract, to be exposed through MCP and
+-- CLI. A draft pending review, elicited with Oliver on 2026-09-27; the party
+-- model below was generalized with Oliver the same day. Decisions from both
+-- rounds are recorded in docs/decisions/log.md.
+--
+-- Scope:
+--   - a waiting party (obligee) announcing that a named obligor owes it a
+--     specific outcome; parties are sessions, the human operator, systems,
+--     and roles
+--   - subject kinds: claim-release, decision, external-fix, job-completion,
+--     review
+--   - closure by a session obligee, by withdrawal, by user authority, or
+--     deterministically: claim releases settle in the release transaction,
+--     and system events (weft job completion, review completion, issue
+--     state) settle their own waits
+--   - contest by a session or human obligor; user-authority clearing
+--   - adoption: a successor session inheriting an offline predecessor's open
+--     obligations, in both roles
+--   - component-owner role as the creditor of record for bug fixes when no
+--     specific session is blocked
+--   - project-scoped and cross-project inspection, including the human
+--     owed view
+-- Excludes:
+--   - presentation surfaces (status line, dashboards, menu bar); they consume
+--     aggregates and are specified nowhere here
+--   - the owning systems' own queues and ledgers: an obligation references a
+--     weft job, review, or issue; it never duplicates its record
+--   - mail and push delivery mechanics (the existing delivery contract)
+--   - reminders and escalation beyond the single creation push
+--   - filesystem locking and persistence format
+--
+-- The model is announced, not negotiated: the obligee creates the record,
+-- the obligee closes it, the obligor can contest but never confirm. A
+-- closed-by-obligee record states belief, not agreement. Every party must
+-- resolve exactly: a session to a live process, a role to one responsible
+-- session, a system to a wired integration, the human to the operator. A
+-- party that resolves to nobody renders as nothing — it is never guessed.
+-- Liveness and reference health are conditions on open records, never
+-- status, and there is no time-based expiry.
+--
+-- Prior art within this repo: owner conditions and in-transaction settlement
+-- (ADR 0007, 0021); declared authority that is recorded, never verified
+-- (ADR 0004); the resume id from the host command line (ADR 0011) as
+-- adoption evidence; plans as claim owners (ADR 0019) for artifact parties;
+-- project ownership for component-owner resolution. `Session` and
+-- `PathClaim` are defined in path-claims.allium.
+
+use "./path-claims.allium" as claims
+
+config {
+    terminal_retention: Duration = 30.days   -- matches released_claim_retention
+}
+
+------------------------------------------------------------
+-- Domain model
+------------------------------------------------------------
+
+enum PartyKind { session | human | system | role }
+enum RoleKind { component_owner | plan_executor | experiment_claimer }
+enum ObligationKind { claim_release | decision | external_fix | job_completion | review }
+enum ObligationStatus { open | satisfied | withdrawn }
+enum ClosedBy { obligee | system | user_authority }
+enum RefState { unverified | resolves | unresolvable }
+
+-- The human is a single principal on this machine (ADR 0001): the operator.
+-- A system is a local integration with a versioned event or CLI surface
+-- ("weft", "agent-review", "agent-issues", "claims"). A role names a
+-- responsibility whose holder is resolved exactly at read and act time:
+-- component_owner via project ownership, plan_executor via the plan's
+-- current executor (ADR 0019), experiment_claimer via the experiment's
+-- claimer of record.
+value Party {
+    kind: PartyKind
+    session: claims/Session? when kind = session
+    system: String? when kind = system
+    role: Role? when kind = role
+    label: String   -- full name, "user", the system name, or the role's name
+}
+
+value Role {
+    kind: RoleKind
+    component: String? when kind = component_owner
+    plan: String? when kind = plan_executor            -- "<project>/<stem>"
+    experiment: String? when kind = experiment_claimer -- experiment id
+}
+
+-- id is public: listings, the owed view, and contest name it. resolution and
+-- contest_reason are captured at the act and are not edited afterwards.
+entity Obligation {
+    id: String
+    created_at: Timestamp
+    obligee: Party
+    obligor: Party
+    kind: ObligationKind
+    subject: String    -- a claim id, job id, review id, issue id, or free text
+    status: ObligationStatus
+    contested: Boolean
+    contested_at: Timestamp when contested
+    contest_reason: String when contested
+    resolution: String? when status = satisfied
+    closed_by: ClosedBy? when status != open
+    closed_at: Timestamp when status != open
+    retained_until: Timestamp when status != open
+
+    -- Set only when the record entered its current obligee/obligor by
+    -- adoption; succession provenance otherwise lives in the audit log.
+    adopted_from: String?
+    adopted_at: Timestamp? when adopted_from != null
+    -- For an authority-based adoption: who declared it. Recorded, never
+    -- verified (ADR 0004).
+    adopted_authority: String? when adopted_authority != null
+    -- For an authority clear: who declared it and why. Recorded, never
+    -- verified.
+    authority: String? when closed_by = user_authority
+    authority_reason: String? when closed_by = user_authority
+
+    transitions status {
+        open -> satisfied
+        open -> withdrawn
+        terminal: satisfied, withdrawn
+    }
+}
+
+-- Observed health of an external reference, re-observed by the daemon for
+-- every open obligation that cites an external record. Observation never
+-- mutates the obligation.
+entity RefObservation {
+    obligation: Obligation
+    issue: LedgerIssue?
+    state: RefState
+    observed_at: Timestamp
+}
+
+external entity LedgerIssue {
+    id: String
+    state: String
+}
+
+surface RefObservationInputs {
+    context observation: RefObservation
+    provides: RefObserved(observation)
+}
+
+------------------------------------------------------------
+-- Predicates
+--
+-- Black-box predicates used by the rules below, with their meaning. Each is
+-- evaluated inside the serialized transaction that uses it, against the
+-- session observations the claims system already makes (ADR 0021).
+------------------------------------------------------------
+
+-- Live(session): the session's registered process identity is currently
+--   verifiably alive. Offline(session): not Live.
+-- PartyResolves(party): a session party resolves when Live; the human always
+--   resolves (ADR 0001: single operator); a system resolves when its
+--   integration's settlement hook is configured; a role resolves when
+--   exactly one responsible session holds it — component_owner from project
+--   ownership, plan_executor from the plan's executor, experiment_claimer
+--   from the claimer of record. A role held by nobody or contested between
+--   claimants resolves to nothing and renders as nothing.
+-- ObligorMayContest(party): party.kind in {session, human}. A system or role
+--   obligor cannot act, so event-settled records have no contest path —
+--   only authority clearing.
+-- OpenDuplicateExists(obligee, kind, subject): some open Obligation with the
+--   same obligee party, kind, and subject.
+-- OpenDuplicateFor(o): OpenDuplicateExists for o's own triple, excluding o.
+-- ObligeeIdentified(obligation, actor): the actor proves it may act for the
+--   obligee: a session party by its own identity (MCP session identity or
+--   the CLI's host-process proof, ADR 0014); a role party by the resolved
+--   session proving itself against that role; a system party never closes by
+--   belief — its records settle by evidence only.
+-- ObligorIdentified(obligation, actor): the actor proves it is the named
+--   session obligor; the human obligor acts as operator, which needs no
+--   proof.
+-- SuccessionProven(adopter, predecessor): the adopter's resume id (ADR 0011)
+--   names the predecessor, or the operator declared authority for this
+--   adoption. An unrelated session is refused: adoption is the one act that
+--   can silence another session's debts, so it requires evidence or
+--   authority.
+-- SessionNamedCandidates(predecessor): every open Obligation where the
+--   predecessor is the obligee session, or is the session obligor. Records
+--   whose ends are roles or systems never name a session, so they are never
+--   candidates: roles re-resolve on their own.
+-- ObligationsAdopted(adopter, predecessor, at): every record in
+--   SessionNamedCandidates(predecessor) transfers atomically — all or none.
+--   Where the predecessor is obligee it becomes the adopter; where it is
+--   the session obligor the obligor becomes the adopter. adopted_from is
+--   the predecessor and adopted_at is at; an authority-based adoption also
+--   records adopted_authority. Contested flags and reasons carry
+--   over unchanged: adoption transfers the wait and the debt, not the
+--   dispute. Terminal records never transfer.
+-- CreationNoticePushed(obligation): for a session obligor, exactly one mail
+--   is pushed naming the obligee, kind, and subject — to the resolved
+--   session when the obligor is a role. Human and system obligors get no
+--   push; their surfaces are the owed view and their own event feeds.
+
+------------------------------------------------------------
+-- Surfaces
+------------------------------------------------------------
+
+-- The same verbs, exposed through MCP tools and CLI subcommands.
+value ObligationRequest {
+    obligee: Party?
+    obligor: Party?
+    kind: ObligationKind?
+    subject: String?
+    obligation: Obligation?
+    resolution: String?
+    reason: String?
+    authority: String?
+    adopter: Party?
+    predecessor: Party?
+}
+
+surface MCPObligations {
+    context request: ObligationRequest
+
+    provides:
+        ObligeeAnnounces(request)
+        ObligeeCloses(request)
+        ObligeeWithdraws(request)
+        ObligorContests(request)
+        AuthorityClears(request)
+        SessionAdopts(request)
+}
+
+surface CLIObligations {
+    context request: ObligationRequest
+
+    provides:
+        ObligeeAnnounces(request)
+        ObligeeCloses(request)
+        ObligeeWithdraws(request)
+        ObligorContests(request)
+        AuthorityClears(request)
+        SessionAdopts(request)
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+rule Announce {
+    when: ObligeeAnnounces(obligee, obligor, kind, subject)
+
+    requires: PartyResolves(obligee)
+    requires: PartyResolves(obligor)
+    requires: not OpenDuplicateExists(obligee, kind, subject)
+
+    ensures: Obligation.created(
+        obligee: obligee,
+        obligor: obligor,
+        kind: kind,
+        subject: subject,
+        status: open,
+        contested: false,
+    )
+    ensures: CreationNoticePushed(Obligation.lastCreated)
+
+    -- A record whose ends are a role or a system is announced through the
+    -- owning integration's path (the daemon for ledger-derived repairs, the
+    -- submitter for job waits); the resolution rule, not the announcer's
+    -- session, is what makes the record addressable.
+}
+
+rule ObligeeCloses {
+    when: ObligeeCloses(obligee, obligation, resolution)
+
+    requires: obligation.status = open
+    requires: ObligeeIdentified(obligation, obligee)
+
+    ensures: obligation.status = satisfied
+    ensures: obligation.resolution = resolution
+    ensures: obligation.closed_by = obligee
+    ensures: obligation.closed_at = now
+    ensures: obligation.retained_until = now + config.terminal_retention
+}
+
+rule ObligeeWithdraws {
+    when: ObligeeWithdraws(obligee, obligation)
+
+    requires: obligation.status = open
+    requires: ObligeeIdentified(obligation, obligee)
+
+    ensures: obligation.status = withdrawn
+    ensures: obligation.closed_by = obligee
+    ensures: obligation.closed_at = now
+    ensures: obligation.retained_until = now + config.terminal_retention
+}
+
+rule ClaimReleaseSettles {
+    when: claims/PathClaim.released(claim, reason, at)
+
+    ensures:
+        for o in Obligations where o.status = open
+            and o.kind = claim_release
+            and o.subject = claim.id:
+            o.status = satisfied
+            o.closed_by = system
+            o.closed_at = at
+            o.retained_until = at + config.terminal_retention
+
+    -- Settled inside the release transaction, for every ReleaseReason,
+    -- including forced recovery and expiry: the transaction observes for
+    -- itself (ADR 0021). Settlement does not acquire the claim for the
+    -- obligee; acquisition stays a deliberate act.
+}
+
+rule EventSettles {
+    when: SystemEventObserved(system, subject, at)
+        -- a weft job completing, a review finishing, an issue reaching its
+        -- fixed or closed state, observed through that system's versioned
+        -- event or CLI output
+
+    ensures:
+        for o in Obligations where o.status = open
+            and o.obligor.kind in {system, role}
+            and o.subject = subject
+            and (o.obligor.kind = role or o.obligor.system = system):
+            o.status = satisfied
+            o.closed_by = system
+            o.closed_at = at
+            o.retained_until = at + config.terminal_retention
+
+    -- The general form of ClaimReleaseSettles: deterministic evidence from
+    -- the owning system settles the wait without belief. It covers every
+    -- obligor that cannot close by belief — a system, or a role such as a
+    -- component owner whose repair the ledger reports fixed. Observation is
+    -- consumed from the system's versioned interface, never its private
+    -- state; a system that goes unreachable leaves waits open and stale
+    -- with age rather than silently satisfied.
+}
+
+rule ObligorContests {
+    when: ObligorContests(obligor, obligation, reason)
+
+    requires: obligation.status = open
+    requires: not obligation.contested
+    requires: ObligorMayContest(obligation.obligor)
+    requires: ObligorIdentified(obligation, obligor)
+
+    ensures: obligation.contested = true
+    ensures: obligation.contested_at = now
+    ensures: obligation.contest_reason = reason
+
+    -- Contest never closes. The record stays in every view, tagged, until
+    -- the obligee withdraws or authority clears it.
+}
+
+rule AuthorityClears {
+    when: AuthorityClears(authority, obligation, reason)
+
+    requires: obligation.status = open
+
+    ensures: obligation.status = withdrawn
+    ensures: obligation.closed_by = user_authority
+    ensures: obligation.authority = authority
+    ensures: obligation.authority_reason = reason
+    ensures: obligation.closed_at = now
+    ensures: obligation.retained_until = now + config.terminal_retention
+
+    -- Recorded, never verified (ADR 0004).
+}
+
+rule SessionAdoptsObligations {
+    when: SessionAdopts(adopter, predecessor)
+
+    requires: Live(adopter)
+    requires: Offline(predecessor)
+    requires: adopter != predecessor
+    requires: SuccessionProven(adopter, predecessor)
+
+    ensures: ObligationsAdopted(adopter, predecessor, now)
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+invariant OneOpenPerSubject {
+    for o in Obligations where o.status = open:
+        not OpenDuplicateFor(o)
+}
+
+invariant PartySidesAreConstrained {
+    -- The human appears only as an obligor: the operator owes, and is never
+    -- the recorded creditor of a wait. A role appears as component_owner
+    -- only on the obligor side (the owner owes the repair) and as
+    -- plan_executor or experiment_claimer only on the obligee side (the
+    -- artifact is owed its review or repair). A system appears on either
+    -- side. These constraints are what keep every arc's accountability
+    -- meaningful.
+}
+
+invariant AdoptionIsAtomic {
+    -- An adoption act moves every SessionNamedCandidates(predecessor), never
+    -- a subset. A partial transfer would strand obligations with an offline
+    -- obligee or obligor while their siblings moved — a silent skip.
+}
+
+invariant ContestedStaysVisible {
+    -- Every listing of open obligations, in any scope, includes contested
+    -- records and shows their contest_reason. Contest removes nothing from
+    -- view; it only marks it.
+}
+
+invariant HumanOwedIsComplete {
+    -- The cross-project owed view shows every open Obligation whose obligor
+    -- is human, whatever project its obligee or subject names. This view is
+    -- the feature: what the operator owes, in one place.
+}
+
+invariant ResolvedOwedIsComplete {
+    -- A session's owed view includes every open Obligation whose obligor is
+    -- a role resolving to that session, rendered with its resolution
+    -- provenance ("owner of agent-mail"). An unresolvable role renders as
+    -- unresolvable — never guessed, never silently dropped.
+}
+
+invariant UnresolvableRefIsVisible {
+    -- Every open obligation citing an external record whose latest
+    -- RefObservation is unresolvable surfaces a diagnostic in inspection
+    -- views. A reference that stops resolving is never silently skipped (a
+    -- silent skip is a bug); neither is creation refused for it —
+    -- validation is asynchronous by design.
+}
+
+------------------------------------------------------------
+-- Open questions
+------------------------------------------------------------
+
+open question "Does an external_fix obligation reopen when the referenced issue reopens, or does the obligee re-announce?"
+
+open question "Should adoption observe a restart grace like claims' fifteen minutes, or is offline-now sufficient? A resumed harness may briefly hold two sessions."
+
+open question "Resume ids exist only where the host command line carries them (ADR 0011). Codex, Kimi, and Gemini resumes fall back to declared authority — acceptable, or is a same-project last-offline-session suggestion (labelled inferred) worth offering?"
+
+open question "Is terminal_retention = 30 days right, or should satisfied resolutions persist longer for the audit story?"
+
+open question "CLI/MCP verb names: announce / close / withdraw / contest / adopt / owed, or align with claim vocabulary (acquire/release/recover)?"
+
+open question "Should stale system waits (an unreachable integration leaving event-settled obligations open) escalate anywhere, or is the unresolvable-ref diagnostic their whole story?"

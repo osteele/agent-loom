@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type Obligation, obligations } from "./obligations.ts";
 import {
   PRESENCE_SNAPSHOT_PATH,
   WEFT_JOBS_SNAPSHOT_PATH,
@@ -19,11 +20,13 @@ import {
   projectSlug,
 } from "./paths.ts";
 import { writePresenceSnapshot } from "./presence.ts";
-import type { Registration } from "./registry.ts";
+import { type Registration, register } from "./registry.ts";
 import {
   SESSION_STATUS_TTL_MS,
   SessionStatusCache,
+  makeSessionStatus,
   statusWorkForSession,
+  summarizeObligations,
 } from "./sessionStatus.ts";
 import { appendMessage } from "./spool.ts";
 import {
@@ -402,4 +405,247 @@ test("source JSON CLI and cached daemon agree on exact-scoped counts, identity a
       else rmSync(paths[index], { force: true });
     }
   }
+});
+
+// --- obligations summary -------------------------------------------------------
+//
+// The summary is the session-sized slice of the machine-global obligation
+// store: what this session waits for, what waits on it, and — identically in
+// every session's status, because the operator is one principal — what the
+// human owes.
+
+function obligation(overrides: Partial<Obligation> = {}): Obligation {
+  return {
+    version: 2,
+    id: "ob-x",
+    createdAt: "2026-09-12T00:00:00.000Z",
+    obligee: {
+      kind: "session",
+      sessionId: "route-a",
+      label: "Route A",
+    },
+    obligor: { kind: "session", sessionId: "route-b", label: "Route B" },
+    kind: "decision",
+    subject: "subject",
+    status: "open",
+    contested: false,
+    revision: 1,
+    ...overrides,
+  };
+}
+
+test("the obligations summary counts waiting, owed, and the global human debt", () => {
+  const waiting = obligation({ id: "ob-1" });
+  const owed = obligation({
+    id: "ob-2",
+    obligee: { kind: "session", sessionId: "route-b", label: "Route B" },
+    obligor: { kind: "session", sessionId: "route-a", label: "Route A" },
+    kind: "claim_release",
+  });
+  const human = obligation({
+    id: "ob-3",
+    obligee: { kind: "session", sessionId: "route-b", label: "Route B" },
+    obligor: { kind: "human", label: "user" },
+    kind: "external_fix",
+  });
+  const open = [waiting, owed, human];
+
+  expect(summarizeObligations(open, "route-a")).toEqual({
+    waiting: 1,
+    owed: 1,
+    humanOwed: 1,
+    roleOwed: 0,
+    unresolvedOwed: 0,
+  });
+  expect(summarizeObligations(open, "route-b")).toEqual({
+    waiting: 2,
+    owed: 1,
+    humanOwed: 1,
+    roleOwed: 0,
+    unresolvedOwed: 0,
+  });
+  // With no session named, the summary is the machine's: every open record
+  // waits on someone, owed by a session or by the operator.
+  expect(summarizeObligations(open)).toEqual({
+    waiting: 3,
+    owed: 2,
+    humanOwed: 1,
+    roleOwed: 0,
+    unresolvedOwed: 0,
+  });
+});
+
+test("a role obligor counts toward the session it resolves to, or as unresolved", () => {
+  const role = {
+    kind: "component_owner",
+    component: "agent-mail",
+  } as const;
+  const owedByRole = obligation({
+    id: "ob-role",
+    obligor: {
+      kind: "role",
+      role,
+      label: "owner of agent-mail",
+    },
+    kind: "external_fix",
+  });
+  const open = [owedByRole];
+  const resolveToA = () => "route-a";
+  expect(summarizeObligations(open, "route-a", resolveToA)).toEqual({
+    waiting: 1,
+    owed: 1,
+    humanOwed: 0,
+    roleOwed: 1,
+    unresolvedOwed: 0,
+  });
+  // Another session does not see the role's debt as its own.
+  expect(summarizeObligations(open, "route-b", resolveToA)).toEqual({
+    waiting: 0,
+    owed: 0,
+    humanOwed: 0,
+    roleOwed: 1,
+    unresolvedOwed: 0,
+  });
+  // Without a resolver the summary never guesses a resolution.
+  expect(summarizeObligations(open, "route-a")).toEqual({
+    waiting: 1,
+    owed: 0,
+    humanOwed: 0,
+    roleOwed: 1,
+    unresolvedOwed: 1,
+  });
+  expect(summarizeObligations(open)).toEqual({
+    waiting: 1,
+    owed: 0,
+    humanOwed: 0,
+    roleOwed: 1,
+    unresolvedOwed: 1,
+  });
+});
+
+test("the obligations summary is absent without records and zeros with an empty store", () => {
+  const owner = registration("summary-absent");
+  const base = {
+    project: owner.cwd,
+    sessionId: "summary-absent",
+    sessions: [owner],
+    meta: new Map(),
+    unread: 0,
+    leases: [],
+    jobs: undefined,
+    running: undefined,
+    nowMs: Date.parse("2026-09-27T00:00:00.000Z"),
+  };
+  expect("obligations" in makeSessionStatus(base)).toBe(false);
+  expect(
+    makeSessionStatus({ ...base, openObligations: [] }).obligations,
+  ).toEqual({
+    waiting: 0,
+    owed: 0,
+    humanOwed: 0,
+    roleOwed: 0,
+    unresolvedOwed: 0,
+  });
+});
+
+test("the cached status carries the session's obligations aggregate", async () => {
+  const holder = registration("obligation-holder");
+  const debtor = registration("obligation-debtor");
+  // The singleton store verifies liveness against the registry, so both
+  // sessions register — under this process's pid, which a live scan verifies.
+  register(holder.cwd, process.pid, "obligation-holder");
+  register(debtor.cwd, process.pid, "obligation-debtor");
+  obligations.announce(
+    {
+      obligee: {
+        kind: "session",
+        sessionId: "obligation-holder",
+        label: "Holder",
+      },
+      obligor: {
+        kind: "session",
+        sessionId: "obligation-debtor",
+        label: "Debtor",
+      },
+      kind: "decision",
+      subject: "pick a name",
+    },
+    { now: "2026-09-27T00:00:00.000Z" },
+  );
+  obligations.announce(
+    {
+      obligee: {
+        kind: "session",
+        sessionId: "obligation-debtor",
+        label: "Debtor",
+      },
+      obligor: {
+        kind: "session",
+        sessionId: "obligation-holder",
+        label: "Holder",
+      },
+      kind: "claim_release",
+      subject: "claim-1",
+    },
+    { now: "2026-09-27T00:01:00.000Z" },
+  );
+  obligations.announce(
+    {
+      obligee: {
+        kind: "session",
+        sessionId: "obligation-holder",
+        label: "Holder",
+      },
+      obligor: { kind: "human", label: "user" },
+      kind: "external_fix",
+      subject: "am17",
+    },
+    { now: "2026-09-27T00:02:00.000Z" },
+  );
+  const settled = obligations.announce(
+    {
+      obligee: {
+        kind: "session",
+        sessionId: "obligation-debtor",
+        label: "Debtor",
+      },
+      obligor: {
+        kind: "session",
+        sessionId: "obligation-holder",
+        label: "Holder",
+      },
+      kind: "decision",
+      subject: "already closed",
+    },
+    { now: "2026-09-27T00:03:00.000Z" },
+  );
+  obligations.close(
+    settled.id,
+    { kind: "session", sessionId: "obligation-debtor", label: "Debtor" },
+    "done",
+    { now: "2026-09-27T00:04:00.000Z" },
+  );
+
+  const cache = new SessionStatusCache();
+  cache.refresh([holder, debtor]);
+  const holderView = await cache
+    .response(holder.cwd, "obligation-holder")
+    .json();
+  expect(holderView.obligations).toEqual({
+    waiting: 2,
+    owed: 1,
+    humanOwed: 1,
+    roleOwed: 0,
+    unresolvedOwed: 0,
+  });
+  const debtorView = await cache
+    .response(debtor.cwd, "obligation-debtor")
+    .json();
+  expect(debtorView.obligations).toEqual({
+    waiting: 1,
+    owed: 1,
+    humanOwed: 1,
+    roleOwed: 0,
+    unresolvedOwed: 0,
+  });
 });

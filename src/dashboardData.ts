@@ -8,6 +8,7 @@ import {
   isDisplaceable,
   listCoordination,
 } from "./coordination.ts";
+import { obligations } from "./obligations.ts";
 import { canonicalProject, displayName } from "./paths.ts";
 import { readListenerSnapshot } from "./presence.ts";
 import { readProcessSnapshot } from "./processSnapshot.ts";
@@ -18,6 +19,10 @@ import {
   coalesceRegistrations,
   listLive,
 } from "./registry.ts";
+import {
+  type ObligationsSummary,
+  summarizeObligations,
+} from "./sessionStatus.ts";
 import {
   activityTag,
   claudeSessions,
@@ -109,6 +114,10 @@ export interface DashboardState {
   presence: PresenceEntry[];
   work: WorkEntry[];
   coordination: CoordinationEntry[];
+  /** Machine-global obligations aggregate (specs/obligations.allium): open
+   * records waiting on someone, owed by sessions, and owed by the operator.
+   * Additive within schemaVersion 1. */
+  obligations: ObligationsSummary;
   routes: FlowRoute[];
   log: LogEntry[];
   volume: VolumeBucket[];
@@ -254,6 +263,9 @@ export function buildState(
     ...(opts.processes ? { processes: opts.processes } : {}),
   });
   const leases = activeWork(coordination);
+  // Machine-global and small: open obligation records live in one directory,
+  // bounded by the thirty-day terminal retention.
+  const openObligations = obligations.listOpen();
   const log: LogEntry[] = msgs
     .slice(-logLimit)
     .reverse()
@@ -289,12 +301,17 @@ export function buildState(
       threads: new Set(msgs.map((m) => m.threadId ?? m.id)).size,
       live: live.length,
       work: leases.length,
-      claims: coordination.filter((entry) => entry.kind !== "work").length,
+      claims: coordination.filter(
+        (entry) => entry.kind !== "work" && entry.kind !== "obligation",
+      ).length,
       coordination: coordination.length,
     },
     presence: presence(live),
     work: leases,
     coordination,
+    obligations: summarizeObligations(openObligations, undefined, (role) =>
+      obligations.sessionResponsibleFor(role),
+    ),
     routes: routes(msgs),
     log,
     volume: volume(msgs, now),

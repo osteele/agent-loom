@@ -664,13 +664,30 @@ export function registrationForCallingProcess(
   const canonical = canonicalProject(project);
   let pid = readParentPid(callerPid);
   for (let hop = 0; pid !== undefined && hop < 8; hop += 1) {
-    const match = registrations.find(
+    // The registration's own process in the ancestry wins outright (an
+    // in-process MCP server); only then does the host-agent link apply.
+    const direct = registrations.find(
       (registration) =>
-        registration.pid === pid &&
         registration.sessionId !== undefined &&
-        canonicalProject(registration.cwd) === canonical,
+        canonicalProject(registration.cwd) === canonical &&
+        registration.pid === pid,
     );
-    if (match) return match as Registration & { sessionId: string };
+    if (direct) return direct as Registration & { sessionId: string };
+    // parentPid is recorded at register time precisely so the host link
+    // survives session-id rotation; see resolveSelf. It is an identification
+    // only when it names one registration: two channel servers under one
+    // host agent is not an identification, and guessing an address is the
+    // bug.
+    const parented = registrations.filter(
+      (registration) =>
+        registration.sessionId !== undefined &&
+        canonicalProject(registration.cwd) === canonical &&
+        registration.parentPid === pid &&
+        registration.pid !== pid,
+    );
+    if (parented.length === 1) {
+      return parented[0] as Registration & { sessionId: string };
+    }
     pid = readParentPid(pid);
   }
   return undefined;
