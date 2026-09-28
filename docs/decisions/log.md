@@ -210,3 +210,16 @@ Q, accepting D.*
   This reverses the obligee half of the sessions-only entry above; the
   adoption half stands, because artifact-party records never name a session
   and so are never orphaned by one.
+
+- **2026-09-28** — In the context of the local install recipe for the
+  installed CLI, facing ADR
+  [0006](0006-bun-checkout-node-distribution.md)'s "Node for distributions"
+  rule against `status-line` startup latency (the status line execs the
+  installed CLI on every render), we decided the locally installed CLI runs
+  its dist under Bun — the `~/.local/bin/agent-mail` shim execs
+  `bun .../dist/cli.js`, and `just install` creates that shim on first
+  install — and neglected switching the local install to the Node runtime
+  the ADR's letter prescribes for the published package, to keep the
+  per-render status-line cost at Bun's startup price, accepting that the
+  local install and the published GitHub/npm distribution run different
+  runtimes over the same dist. The published distribution path is unchanged.
