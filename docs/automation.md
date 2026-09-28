@@ -32,18 +32,32 @@ For a normalized cross-surface view, use
 `GET /api/v1/state?project=<dir>`. Schema version 1 includes normalized
 presence with process identity and freshness, coordination entries with owner
 status and conditions, transfer requests, recent canonical message IDs and read
-state, routes, counts, logs, and source provenance. The CLI without `--no-sync`
+state, routes, counts, logs, open-obligation summaries, and source provenance.
+The CLI without `--no-sync`
 asks the daemon first and falls back to the same filesystem-snapshot reader.
 Consumers must inspect the `freshness` fields rather than treating an old
 snapshot as negative liveness evidence.
 
 Schema-v1 top-level fields are `schemaVersion`, `generatedAt`, `source`,
 `freshness`, `totals`, `presence`, `coordination`, `transfers`, `messages`,
-`routes`, `log`, `volume`, and the compatibility `work` projection. `messages`
+`routes`, `log`, `volume`, `obligations`, `obligationRecords`, and the
+compatibility `work` projection. `messages`
 contains the newest 60 records in newest-first order; totals, routes, and volume
 are computed from the full spool history. Additive fields may appear within
 version 1; removing or changing the meaning of a field requires a new schema
 version and endpoint.
+
+`obligations` summarizes open obligation records: `waiting` counts records
+this session is the obligee of, `owed` counts records naming it as session
+obligor, `roleOwed` counts obligor roles resolving to it, `unresolvedOwed`
+counts obligor roles resolving to nothing, and `humanOwed` is the operator's
+global owed count. `obligationRecords` carries those open records flat, with
+both ends resolved: each party carries `label`, `partyKind`, `roleKind` for
+roles, `resolution` (resolves or unresolvable, with a `reason`), and, where
+the party has a project, `project` with the `projectBasis` that produced it
+(`registered`, `plan`, `ownership`, `claim`; human and system parties have
+none). Sessions also carry `sessionId` and `live`. Grouping by project is the
+consumer's job; the resolution and its provenance are agent-mail's.
 
 ## What presence and receipts prove
 

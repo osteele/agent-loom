@@ -8,7 +8,13 @@ import {
   isDisplaceable,
   listCoordination,
 } from "./coordination.ts";
+import {
+  type PartyView,
+  type PartyViewDeps,
+  partyView,
+} from "./obligationResolution.ts";
 import { obligations } from "./obligations.ts";
+import type { Obligation, RefState } from "./obligations.ts";
 import { canonicalProject, displayName } from "./paths.ts";
 import { readListenerSnapshot } from "./presence.ts";
 import { readProcessSnapshot } from "./processSnapshot.ts";
@@ -118,11 +124,54 @@ export interface DashboardState {
    * records waiting on someone, owed by sessions, and owed by the operator.
    * Additive within schemaVersion 1. */
   obligations: ObligationsSummary;
+  /** The same open records, one flat entry each with both ends resolved to
+   * sessions where possible — grouping by project is the consumer's job.
+   * Additive within schemaVersion 1. */
+  obligationRecords: ObligationRecordView[];
   routes: FlowRoute[];
   log: LogEntry[];
   volume: VolumeBucket[];
   messages: StoredMessage[];
   transfers: WorkTransferRequest[];
+}
+
+export interface ObligationRecordView {
+  id: string;
+  kind: Obligation["kind"];
+  subject: string;
+  createdAt: string;
+  contested: boolean;
+  contestReason?: string;
+  adoptedFrom?: string;
+  adoptedAt?: string;
+  /** Latest reference observation, for records that cite an external record
+   * (open external_fix waits). Absent when nothing has been observed. */
+  ref?: { state: RefState };
+  obligee: PartyView;
+  obligor: PartyView;
+}
+
+function obligationRecords(
+  open: Obligation[],
+  deps: PartyViewDeps,
+  latestRef: (id: string) => { state: RefState } | undefined,
+): ObligationRecordView[] {
+  return open.map((record) => {
+    const observation = latestRef(record.id);
+    return {
+      id: record.id,
+      kind: record.kind,
+      subject: record.subject,
+      createdAt: record.createdAt,
+      contested: record.contested,
+      ...(record.contestReason ? { contestReason: record.contestReason } : {}),
+      ...(record.adoptedFrom ? { adoptedFrom: record.adoptedFrom } : {}),
+      ...(record.adoptedAt ? { adoptedAt: record.adoptedAt } : {}),
+      ...(observation ? { ref: { state: observation.state } } : {}),
+      obligee: partyView(record.obligee, deps),
+      obligor: partyView(record.obligor, deps),
+    };
+  });
 }
 
 function activeWork(entries: CoordinationEntry[]): WorkEntry[] {
@@ -253,7 +302,11 @@ export function buildState(
     (message) => !opts.project || message.project === opts.project,
   );
   const now = new Date();
-  const live = (opts.registrations ?? listLive()).filter(
+  // Obligation party resolution is machine-global — records span projects, so
+  // a project-scoped query must not report cross-project parties as offline.
+  // The project filter below scopes presence and coordination only.
+  const liveAll = opts.registrations ?? listLive();
+  const live = liveAll.filter(
     (registration) => !opts.project || registration.cwd === opts.project,
   );
   const coordination = listCoordination({
@@ -266,6 +319,15 @@ export function buildState(
   // Machine-global and small: open obligation records live in one directory,
   // bounded by the thirty-day terminal retention.
   const openObligations = obligations.listOpen();
+  const liveSessionIds = new Set(
+    liveAll
+      .map((registration) => registration.sessionId)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  );
+  const partyDeps: PartyViewDeps = {
+    isLive: (sessionId) => liveSessionIds.has(sessionId),
+    roleSessionId: (role) => obligations.sessionResponsibleFor(role),
+  };
   const log: LogEntry[] = msgs
     .slice(-logLimit)
     .reverse()
@@ -312,6 +374,10 @@ export function buildState(
     obligations: summarizeObligations(openObligations, undefined, (role) =>
       obligations.sessionResponsibleFor(role),
     ),
+    obligationRecords: obligationRecords(openObligations, partyDeps, (id) => {
+      const observation = obligations.latestRef(id);
+      return observation ? { state: observation.state } : undefined;
+    }),
     routes: routes(msgs),
     log,
     volume: volume(msgs, now),
@@ -326,7 +392,9 @@ export function buildReadOnlyState(
 ): DashboardState {
   const nowMs = opts.nowMs ?? Date.now();
   const project = opts.project ? canonicalProject(opts.project) : undefined;
-  const listener = readListenerSnapshot(project, nowMs);
+  // Unfiltered: buildState re-applies the project filter to presence and
+  // coordination, while obligation party resolution stays machine-global.
+  const listener = readListenerSnapshot(undefined, nowMs);
   const records = listCoordination({
     ...(project ? { project } : { allProjects: true }),
     registrations: listener.sessions,

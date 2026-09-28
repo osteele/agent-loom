@@ -183,6 +183,12 @@ const KINDS: readonly ObligationKind[] = [
  * refuses it rather than minting a wait nothing can satisfy. */
 const WIRED_SYSTEMS: readonly string[] = ["claims", "weft", "agent-issues"];
 
+/** Whether the named system's settlement hook is one this build configures —
+ * the PartyResolves answer for a system party. */
+export function systemWired(system: string): boolean {
+  return WIRED_SYSTEMS.includes(system);
+}
+
 export interface ObligationStoreOptions {
   root?: string;
   /** Verifies a session's registered process identity is alive. Required:

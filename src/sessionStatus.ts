@@ -193,6 +193,10 @@ export function makeSessionStatus(input: {
    * the caller. Optional so existing callers keep compiling; omitting it
    * omits the summary rather than reporting zeros. */
   openObligations?: Obligation[];
+  /** Role resolver used while summarizing. Refresh supplies a degrading
+   * wrapper: a throw for one foreign record becomes a collected error and
+   * an unresolved role, not a lost session status. */
+  roleSessionId?: (role: Role) => string | undefined;
   nowMs: number;
 }): SessionStatus {
   const {
@@ -205,6 +209,7 @@ export function makeSessionStatus(input: {
     jobs,
     running,
     openObligations,
+    roleSessionId = (role: Role) => obligations.sessionResponsibleFor(role),
     nowMs,
   } = input;
   const identity = sessionNames(sessionId, meta.get(sessionId), project);
@@ -226,7 +231,7 @@ export function makeSessionStatus(input: {
           obligations: summarizeObligations(
             openObligations,
             sessionId,
-            (role: Role) => obligations.sessionResponsibleFor(role),
+            (role: Role) => roleSessionId(role),
           ),
         }
       : {}),
@@ -310,6 +315,20 @@ export class SessionStatusCache {
               jobs,
               running,
               openObligations,
+              // A foreign record citing a since-deleted component or plan
+              // must degrade to a collected error and an unresolved role —
+              // not take the project's unread, work, and peer summary down
+              // with it.
+              roleSessionId: (role: Role) => {
+                try {
+                  return obligations.sessionResponsibleFor(role);
+                } catch (error) {
+                  errors.push(
+                    `session status obligation resolution failed for ${project}: ${String(error)}`,
+                  );
+                  return undefined;
+                }
+              },
               nowMs,
             }),
           );

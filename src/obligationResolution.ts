@@ -15,11 +15,14 @@ import { existsSync } from "node:fs";
 import { claims } from "./claims.ts";
 import {
   type ObligationRoleResolver,
+  type Party,
+  type PartyKind,
   type Role,
+  systemWired,
   wireObligationRoleResolver,
 } from "./obligations.ts";
 import { canonicalProject } from "./paths.ts";
-import { listLive } from "./registry.ts";
+import { listLive, registeredProjectFor } from "./registry.ts";
 import { knownProjects } from "./spool.ts";
 import { work } from "./work.ts";
 import { resolveWorkspaceOwner } from "./workspaceOwner.ts";
@@ -106,3 +109,114 @@ export const resolveObligationRole: ObligationRoleResolver = (
 };
 
 wireObligationRoleResolver(resolveObligationRole);
+
+export interface PartyView {
+  label: string;
+  partyKind: PartyKind;
+  roleKind?: Role["kind"];
+  /** Whether the party can currently be held to account. A session or role
+   * resolves by its process identity, the human always, a system by its
+   * wired integration. */
+  resolution: "resolves" | "unresolvable";
+  reason?: string;
+  sessionId?: string;
+  live?: boolean;
+  /** The party's project, when it has one — a session's registered project,
+   * a role's artifact project (component directory, plan root, experiment
+   * claim project). Human and system parties have none. */
+  project?: string;
+  projectBasis: "registered" | "plan" | "ownership" | "claim" | "none";
+}
+
+export interface PartyViewDeps {
+  isLive(sessionId: string): boolean;
+  roleSessionId(role: Role): string | undefined;
+}
+
+/** Flat, consumer-ready projection of one obligation end for state and
+ * dashboard consumers: grouping by project is the consumer's job; this
+ * supplies the authoritative resolution and its provenance. */
+export function partyView(party: Party, deps: PartyViewDeps): PartyView {
+  switch (party.kind) {
+    case "session": {
+      const live = deps.isLive(party.sessionId);
+      return {
+        label: party.label,
+        partyKind: "session",
+        resolution: live ? "resolves" : "unresolvable",
+        ...(live ? {} : { reason: "session offline" }),
+        sessionId: party.sessionId,
+        live,
+        project: registeredProjectFor(party.sessionId),
+        projectBasis: "registered",
+      };
+    }
+    case "human":
+      return {
+        label: party.label,
+        partyKind: "human",
+        resolution: "resolves",
+        projectBasis: "none",
+      };
+    case "system": {
+      const wired = systemWired(party.system);
+      return {
+        label: party.label,
+        partyKind: "system",
+        resolution: wired ? "resolves" : "unresolvable",
+        ...(wired ? {} : { reason: "integration not wired" }),
+        projectBasis: "none",
+      };
+    }
+    case "role": {
+      const sessionId = deps.roleSessionId(party.role);
+      const project =
+        party.role.kind === "component_owner"
+          ? componentProject(party.role.component)
+          : party.role.kind === "plan_executor"
+            ? projectOfPlan(party.role.plan)
+            : experimentProject(party.role.experiment);
+      return {
+        label: party.label,
+        partyKind: "role",
+        roleKind: party.role.kind,
+        resolution: sessionId ? "resolves" : "unresolvable",
+        ...(sessionId ? {} : { reason: roleUnresolvedReason(party.role.kind) }),
+        ...(sessionId ? { sessionId, live: deps.isLive(sessionId) } : {}),
+        ...(project ? { project } : {}),
+        projectBasis:
+          party.role.kind === "component_owner"
+            ? "ownership"
+            : party.role.kind === "plan_executor"
+              ? "plan"
+              : "claim",
+      };
+    }
+  }
+}
+
+function projectOfPlan(plan: string): string | undefined {
+  const separator = plan.lastIndexOf("/");
+  if (separator <= 0) return undefined;
+  return plan.slice(0, separator) || undefined;
+}
+
+function experimentProject(experiment: string): string | undefined {
+  return claims
+    .peekAll()
+    .find(
+      (claim) =>
+        claim.type === "experiment" && claim.experimentId === experiment,
+    )?.project;
+}
+
+function roleUnresolvedReason(kind: Role["kind"]): string {
+  switch (kind) {
+    case "component_owner":
+      return "no resolvable component owner";
+    case "plan_executor":
+      return "plan lease not held";
+    case "experiment_claimer":
+      return "experiment claim not found";
+  }
+}

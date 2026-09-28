@@ -355,6 +355,20 @@ export function processCommand(pid: number): string {
   return res.stdout ?? "";
 }
 
+/** The project a session last registered under — even when it is offline —
+ * for views that group sessions by project. "As registered" is the routing
+ * truth: the same project the session's spool and claims derive from.
+ * Undefined when the session never registered on this machine. */
+export function registeredProjectFor(sessionId: string): string | undefined {
+  const entries = readEntries((entry) => entry.sessionId === sessionId)
+    .filter(({ entry }) => Boolean(entry.cwd))
+    .sort((a, b) =>
+      (a.entry.started ?? "").localeCompare(b.entry.started ?? ""),
+    );
+  const latest = entries.at(-1)?.entry;
+  return latest ? canonicalProject(latest.cwd) : undefined;
+}
+
 /** One process's controlling terminal as a bare device name ("ttys047"), or
  * undefined when it has none — `ps` renders that as "??". An MCP server
  * inherits its host agent's terminal, so this identifies the terminal the
