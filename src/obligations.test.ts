@@ -16,6 +16,7 @@ import {
   ObligationAuthorityError,
   ObligationDuplicateError,
   type ObligationKind,
+  type ObligationMarker,
   ObligationStateError,
   ObligationStore,
   type ObligationStoreOptions,
@@ -624,6 +625,31 @@ test("close satisfies with resolution, closer, timestamps, and retention", () =>
   );
 });
 
+test("terminal pruning retains open and unexpired records and removes expired evidence", () => {
+  const { store } = makeStore([ALICE.sessionId]);
+  const expired = announce(store, {
+    kind: "external_fix",
+    subject: "issue am22",
+  });
+  store.observeRef(expired.id, "unresolvable", { now: T0 });
+  store.close(expired.id, ALICE, undefined, { now: T1 });
+  const open = announce(store, { subject: "still owed" });
+  const recent = announce(store, { subject: "recently settled" });
+  const expiry = Date.parse(T1) + TERMINAL_RETENTION_MS;
+  store.close(recent.id, ALICE, undefined, {
+    now: new Date(expiry + 1).toISOString(),
+  });
+
+  expect(store.pruneTerminal(expiry - 1)).toBe(0);
+  expect(store.get(expired.id)).toBeDefined();
+  expect(store.pruneTerminal(expiry)).toBe(1);
+  expect(store.get(expired.id)).toBeUndefined();
+  expect(store.latestRef(expired.id)).toBeUndefined();
+  expect(store.get(open.id)?.status).toBe("open");
+  expect(store.get(recent.id)?.status).toBe("satisfied");
+  expect(store.pruneTerminal(expiry + 1)).toBe(0);
+});
+
 test("withdraw closes without a resolution field", () => {
   const { store } = makeStore([ALICE.sessionId]);
   const record = announce(store);
@@ -1143,4 +1169,297 @@ test("releasing a path claim settles the obligation waiting on it", () => {
   expect(settled?.status).toBe("satisfied");
   expect(settled?.closedBy).toBe("system");
   expect(settled?.closedAt).toBe(T1);
+});
+
+test("recovering and cleaning up experiment claims settle their waiting obligations", () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "agent-mail-obligations-experiments-"),
+  );
+  temporaryDirectories.push(root);
+  const project = join(root, "project");
+  const notebook = join(project, "lab-notebook");
+  mkdirSync(join(notebook, "experiments"), { recursive: true });
+  const { store } = makeStore([ALICE.sessionId, BOB.sessionId]);
+  const claimStore = new ClaimStore(join(root, "claims"), (claimId, at) =>
+    store.settleReleasedClaim(claimId, { now: at }),
+  );
+  const owner = { id: "bob", label: "Bob", sessionId: BOB.sessionId };
+  const recoveredClaim = claimStore.claimExperiment(project, notebook, owner);
+  const cleanedClaim = claimStore.claimExperiment(project, notebook, owner);
+  const recoveredWait = announce(store, {
+    kind: "claim_release",
+    subject: recoveredClaim.id,
+    obligor: BOB,
+  });
+  const cleanedWait = announce(store, {
+    kind: "claim_release",
+    subject: cleanedClaim.id,
+    obligor: BOB,
+  });
+
+  claimStore.recover(project, recoveredClaim.id, () => false, { at: T1 });
+  expect(store.get(recoveredWait.id)).toMatchObject({
+    status: "satisfied",
+    closedBy: "system",
+    closedAt: T1,
+  });
+  expect(store.get(cleanedWait.id)?.status).toBe("open");
+
+  expect(claimStore.releaseOwner(project, owner.id)).toBe(1);
+  expect(store.get(cleanedWait.id)).toMatchObject({
+    status: "satisfied",
+    closedBy: "system",
+  });
+  expect(claimStore.list(project)).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// Options, markers, comments, and in-place amendment
+// ---------------------------------------------------------------------------
+
+test("announce stores options and typed markers, canonicalizing paths against the base directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligations-markers-"));
+  temporaryDirectories.push(root);
+  mkdirSync(join(root, "docs"), { recursive: true });
+  const { store } = makeStore([ALICE.sessionId, BOB.sessionId]);
+  const record = store.announce(
+    {
+      obligee: ALICE,
+      obligor: BOB,
+      kind: "decision",
+      subject: "pick the interval qualifier",
+      options: ["alpha-relative", "cluster-aware"],
+      markers: [
+        { type: "path", value: "docs/notes.md", label: "background" },
+        { type: "label", value: "EXP-042:E2" },
+      ],
+    },
+    { now: T0, baseDir: root },
+  );
+  expect(record.options).toEqual(["alpha-relative", "cluster-aware"]);
+  expect(record.markers?.[0].type).toBe("path");
+  expect(record.markers?.[0].value).toBe(join(root, "docs", "notes.md"));
+  expect(record.markers?.[0].label).toBe("background");
+  expect(record.markers?.[1]).toEqual({ type: "label", value: "EXP-042:E2" });
+});
+
+test("updating markers refuses unknown types instead of converting them to paths", () => {
+  const { store } = makeStore([ALICE.sessionId]);
+  const record = announce(store, { subject: "marker type" });
+  const invalid = {
+    type: "url",
+    value: "https://example.com",
+  } as unknown as ObligationMarker;
+  expect(() => store.update(record.id, ALICE, { markers: [invalid] })).toThrow(
+    /marker type must be path or label/,
+  );
+  expect(store.get(record.id)?.markers).toBeUndefined();
+});
+
+test("announce refuses a one-choice options list", () => {
+  const { store } = makeStore([ALICE.sessionId]);
+  expect(() =>
+    store.announce(
+      {
+        obligee: ALICE,
+        obligor: HUMAN,
+        kind: "decision",
+        subject: "pick",
+        options: ["only one"],
+      },
+      { now: T0 },
+    ),
+  ).toThrow(/at least two/);
+});
+
+test("announce normalizes choices and refuses blank choices", () => {
+  const { store } = makeStore([ALICE.sessionId]);
+  expect(() =>
+    store.announce(
+      {
+        obligee: ALICE,
+        obligor: HUMAN,
+        kind: "decision",
+        subject: "choose",
+        options: ["one", "  "],
+      },
+      { now: T0 },
+    ),
+  ).toThrow(/option must not be empty/);
+  expect(store.list()).toEqual([]);
+  const record = store.announce(
+    {
+      obligee: ALICE,
+      obligor: HUMAN,
+      kind: "decision",
+      subject: "choose",
+      options: [" first ", "second"],
+    },
+    { now: T0 },
+  );
+  expect(record.options).toEqual(["first", "second"]);
+});
+
+test("update amends options and markers in place, clearing with null; options stay editable", () => {
+  const { store } = makeStore([ALICE.sessionId]);
+  const record = announce(store, { subject: "amend me" });
+  const first = store.update(record.id, ALICE, {
+    options: ["option one", "option two"],
+  });
+  expect(first.options).toEqual(["option one", "option two"]);
+  const second = store.update(record.id, ALICE, {
+    options: ["option one", "option two", "option three"],
+  });
+  expect(second.options).toEqual(["option one", "option two", "option three"]);
+  const cleared = store.update(record.id, ALICE, { options: null });
+  expect(cleared.options).toBeUndefined();
+  expect(() => store.update(record.id, ALICE, { options: ["solo"] })).toThrow(
+    /at least two/,
+  );
+  const withMarkers = store.update(record.id, ALICE, {
+    markers: [{ type: "label", value: "C041", label: "the claim" }],
+  });
+  expect(withMarkers.markers).toEqual([
+    { type: "label", value: "C041", label: "the claim" },
+  ]);
+});
+
+test("update is obligee-only and refused on terminal records", () => {
+  const { store } = makeStore([ALICE.sessionId, BOB.sessionId]);
+  const record = announce(store, { subject: "guard" });
+  expect(() => store.update(record.id, BOB, { options: ["a", "b"] })).toThrow(
+    ObligationAuthorityError,
+  );
+  store.close(record.id, ALICE, "done", { now: T1 });
+  expect(() =>
+    store.update(record.id, ALICE, {
+      markers: [{ type: "label", value: "C1" }],
+    }),
+  ).toThrow(ObligationStateError);
+});
+
+test("comments append with author and kind, ordered; refused on terminal records", () => {
+  const { store } = makeStore([ALICE.sessionId, BOB.sessionId]);
+  const record = announce(store, { subject: "notes" });
+  const first = store.comment(record.id, ALICE, "recommend option two", {
+    now: T0,
+  });
+  expect(first.comments).toEqual([
+    {
+      author: "Alice",
+      authorKind: "session",
+      at: T0,
+      text: "recommend option two",
+    },
+  ]);
+  const second = store.comment(record.id, "user", "noted", { now: T1 });
+  expect(second.comments?.length).toBe(2);
+  expect(second.comments?.[1].authorKind).toBe("human");
+  expect(second.status).toBe("open");
+  store.close(record.id, ALICE, "done", { now: T1 });
+  expect(() => store.comment(record.id, ALICE, "late", { now: T1 })).toThrow(
+    ObligationStateError,
+  );
+});
+
+test("closing with free-text resolution is not bound to the declared options", () => {
+  const { store } = makeStore([ALICE.sessionId]);
+  const record = announce(store, { subject: "decide" });
+  store.update(record.id, ALICE, { options: ["a", "b"] });
+  const closed = store.close(record.id, ALICE, "a hybrid of both", { now: T1 });
+  expect(closed.resolution).toBe("a hybrid of both");
+});
+
+test("comment is refused for a session that is not a party to the record", () => {
+  const { store } = makeStore([
+    ALICE.sessionId,
+    BOB.sessionId,
+    CAROL.sessionId,
+  ]);
+  const record = announce(store, {
+    obligor: SESSION_OBLIGOR,
+    subject: "notes",
+  });
+  expect(() =>
+    store.comment(record.id, CAROL, "not mine", { now: T0 }),
+  ).toThrow(ObligationAuthorityError);
+  // The obligee and the obligor may comment.
+  store.comment(record.id, ALICE, "obligee note", { now: T0 });
+  store.comment(record.id, BOB, "obligor note", { now: T0 });
+  const after = store.get(record.id);
+  expect(after?.comments?.length).toBe(2);
+});
+
+test("a role obligor's current responsible session may comment after handoff", () => {
+  let holder: string | undefined = BOB.sessionId;
+  const { store } = makeStore(
+    [ALICE.sessionId, BOB.sessionId, CAROL.sessionId],
+    () => holder,
+  );
+  const record = announce(store, {
+    obligor: {
+      kind: "role",
+      role: { kind: "component_owner", component: "agent-mail" },
+      label: "owner of agent-mail",
+    },
+    subject: "fix am22",
+  });
+  expect(() => store.comment(record.id, CAROL, "not the owner")).toThrow(
+    ObligationAuthorityError,
+  );
+  store.comment(record.id, BOB, "investigating");
+  holder = CAROL.sessionId;
+  expect(() => store.comment(record.id, BOB, "former owner")).toThrow(
+    ObligationAuthorityError,
+  );
+  expect(
+    store.comment(record.id, CAROL, "fixed").comments?.at(-1),
+  ).toMatchObject({
+    author: CAROL.label,
+    authorKind: "session",
+    text: "fixed",
+  });
+  holder = undefined;
+  expect(() => store.comment(record.id, CAROL, "unassigned")).toThrow(
+    ObligationAuthorityError,
+  );
+});
+
+test("a role obligee's resolved session may comment", () => {
+  const { store } = makeStore([ALICE.sessionId], () => ALICE.sessionId);
+  const record = store.announce(
+    {
+      obligee: {
+        kind: "role",
+        role: { kind: "experiment_claimer", experiment: "EXP-123" },
+        label: "claimer of EXP-123",
+      },
+      obligor: HUMAN,
+      kind: "decision",
+      subject: "pick a method",
+    },
+    { now: T0 },
+  );
+  expect(
+    store.comment(record.id, ALICE, "context", { now: T1 }).comments,
+  ).toEqual([
+    { author: "Alice", authorKind: "session", at: T1, text: "context" },
+  ]);
+});
+
+test("a tilde path marker expands to the home directory", () => {
+  const { store } = makeStore([ALICE.sessionId, BOB.sessionId]);
+  const record = store.announce(
+    {
+      obligee: ALICE,
+      obligor: BOB,
+      kind: "decision",
+      subject: "tilde marker",
+      markers: [{ type: "path", value: "~/notes/background.md" }],
+    },
+    { now: T0 },
+  );
+  expect(record.markers?.[0].value).toBe(
+    join(process.env.HOME ?? "", "notes", "background.md"),
+  );
 });

@@ -84,6 +84,11 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     const claimTool = tools.tools.find((tool) => tool.name === "claim_path");
     expect(claimTool?.inputSchema.properties).toHaveProperty("paths");
     expect(claimTool?.inputSchema.properties).toHaveProperty("project");
+    const announceTool = tools.tools.find(
+      (tool) => tool.name === "obligations_announce",
+    );
+    expect(announceTool?.inputSchema.properties).toHaveProperty("options");
+    expect(announceTool?.inputSchema.properties).toHaveProperty("markers");
     const inboxTool = tools.tools.find((tool) => tool.name === "check_inbox");
     expect(inboxTool?.description).toContain(
       "asks to check or read mail or an unqualified inbox",
@@ -1816,3 +1821,81 @@ test("obligations announce accepts system and component obligors over MCP", asyn
     await Promise.all(clients.map((client) => client.close()));
   }
 }, 45_000);
+
+test("shutdown unregisters and releases work if experiment settlement fails", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-shutdown-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(join(project, "lab-notebook", "experiments"), {
+    recursive: true,
+  });
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: project,
+    env: {
+      ...environment,
+      HOME: home,
+      AGENT_MAIL_PORT: "0",
+      CLAUDE_CODE_SESSION_ID: "",
+      CODEX_THREAD_ID: "shutdown-test-session",
+      AGENT_SESSION_ID: "",
+      AGENT_SESSION_PID: "",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+    await client.callTool({ name: "claim_experiment", arguments: {} });
+    await client.callTool({ name: "claim_experiment", arguments: {} });
+    await client.callTool({
+      name: "acquire_work",
+      arguments: { resource_type: "pilot", resource_key: "cleanup" },
+    });
+    const stateDir = join(home, ".claude", "agent-mail");
+    const registryDir = join(stateDir, "registry");
+    expect(readdirSync(registryDir)).toHaveLength(1);
+    const claimRoot = join(stateDir, "claims");
+    expect(
+      readdirSync(claimRoot, { recursive: true }).filter((entry) =>
+        String(entry).endsWith(".json"),
+      ),
+    ).toHaveLength(2);
+    const obligationsDir = join(stateDir, "obligations");
+    mkdirSync(obligationsDir, { recursive: true });
+    writeFileSync(join(obligationsDir, "invalid.json"), "{");
+
+    const closed = new Promise<void>((resolve) => {
+      const prior = transport.onclose;
+      transport.onclose = () => {
+        prior?.();
+        resolve();
+      };
+    });
+    if (transport.pid === null)
+      throw new Error("channel process did not start");
+    process.kill(transport.pid, "SIGTERM");
+    await closed;
+    expect(
+      readdirSync(claimRoot, { recursive: true }).filter((entry) =>
+        String(entry).endsWith(".json"),
+      ),
+    ).toHaveLength(0);
+    expect(readdirSync(registryDir)).toHaveLength(0);
+    expect(
+      readdirSync(join(stateDir, "work"), { recursive: true }).filter((entry) =>
+        String(entry).endsWith(".json"),
+      ),
+    ).toHaveLength(0);
+  } finally {
+    await client.close();
+  }
+}, 20_000);

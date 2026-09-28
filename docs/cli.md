@@ -553,6 +553,8 @@ agent-mail obligations announce (--obligor <name-or-id> | --user |
                                  --system <name> | --component <name>)
   --kind <claim_release|decision|external_fix|job_completion|review>
   --subject <text>
+  [--option <text> ...]
+  [--marker <value> [--marker-kind path|label] [--marker-label <text>] ...]
 ```
 
 Announces that the obligor owes the calling session a specific outcome. A
@@ -563,6 +565,41 @@ repair, and resolves at read time to the one responsible session — its
 creation notice goes to that session. A role or system obligor cannot be
 contested. An open record with the same obligee, kind, and subject blocks a
 duplicate and names the existing id.
+
+`--option` declares choices the obligor may pick from; they are plain text,
+no ids, and stay editable via `update`. `--marker` names background
+documentation: kind `path` stores a canonical absolute path (relative values
+resolve against the announcer's working directory); kind `label` stores
+reference text that a consumer resolves against the obligee's lab notebook.
+The record carries the explicit type either way; a missing path renders as
+missing downstream, never as an announce error. `--marker-kind` and
+`--marker-label` apply to the most recent `--marker`.
+
+### `obligations update`
+
+```
+agent-mail obligations update --id <obligation-id>
+  [--option <text> ... | --clear-options]
+  [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]
+```
+
+Amends an open record's presentation fields in place — obligee-only. Options
+are free text and stay editable; markers are typed (path or label) and
+canonicalized at write time against the caller's working directory. `--clear-*`
+empties the field; omitting it preserves it. Subject, kind, and obligor are
+the identity of the ask and never edit — changing them is a withdraw and
+re-announce.
+
+### `obligations comment`
+
+```
+agent-mail obligations comment --id <obligation-id> --text <text> [--user]
+```
+
+Appends a note to an open record. Either end may comment, and `--user` is
+the operator's form for human-obligor records. Comments are append-only,
+timestamped notes, and never move the status.
+
 
 ### `obligations close`
 

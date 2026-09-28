@@ -1041,6 +1041,7 @@ export class ClaimStore {
       }
       if (claim.type === "experiment") {
         unlinkSync(join(this.projectDir(canonical), `${claim.id}.json`));
+        this.onReleased(claim.id, now.toISOString());
         return claim;
       }
       if (
@@ -1139,9 +1140,19 @@ export class ClaimStore {
           claim.owner.id === ownerId &&
           (ownerPid === undefined || claim.owner.pid === ownerPid),
       );
+      const releasedAt = new Date().toISOString();
+      let settlementFailed = false;
+      let firstFailure: unknown;
       for (const claim of releasable) {
         unlinkSync(join(this.projectDir(canonical), `${claim.id}.json`));
+        try {
+          this.onReleased(claim.id, releasedAt);
+        } catch (error) {
+          if (!settlementFailed) firstFailure = error;
+          settlementFailed = true;
+        }
       }
+      if (settlementFailed) throw firstFailure;
       return releasable.length;
     });
   }

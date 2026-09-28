@@ -21,7 +21,7 @@ install:
     bun run build
     cd ~/.bun/install/global && bun add --force {{justfile_directory()}}
     rm -f ~/.bun/bin/agent-mail
-    printf '#!/bin/sh\nexec %s "$HOME/.bun/install/global/node_modules/agent-mail/dist/cli.js" "$@"\n' "$(\command -v bun)" > ~/.bun/bin/agent-mail
+    printf '#!/bin/sh\nexec %s %s "$@"\n' "$(\command -v bun)" "$HOME/.bun/install/global/node_modules/agent-mail/dist/cli.js" > ~/.bun/bin/agent-mail
     chmod +x ~/.bun/bin/agent-mail
     ln -sfn ~/.bun/bin/agent-mail ~/.local/bin/agent-mail
     agent-mail restart

@@ -14,13 +14,53 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { withFileLock } from "./lock.ts";
 import { OBLIGATIONS_DIR } from "./paths.ts";
 import { listLive } from "./registry.ts";
+
+/** Marker shape validation plus canonicalization: a path marker resolves
+ * against the announce/update base directory (the caller's project) to an
+ * absolute path, resolving symlinks when the target exists; a label marker
+ * keeps its reference text verbatim. Shape only — a missing path is a
+ * display concern, never an announce error. */
+function canonicalMarker(
+  marker: ObligationMarker,
+  baseDir: string,
+): ObligationMarker {
+  const label =
+    marker.label !== undefined
+      ? { label: validateText(marker.label, "marker label") }
+      : {};
+  if (marker.type === "label") {
+    return {
+      type: "label",
+      value: validateText(marker.value, "marker reference text"),
+      ...label,
+    };
+  }
+  if (marker.type !== "path") {
+    throw new Error("marker type must be path or label");
+  }
+  const expanded =
+    marker.value === "~" || marker.value.startsWith("~/")
+      ? join(homedir(), marker.value.slice(2))
+      : marker.value;
+  const absolute = expanded.startsWith("/")
+    ? expanded
+    : resolve(baseDir, expanded);
+  return {
+    type: "path",
+    value: existsSync(absolute) ? realpathSync(absolute) : absolute,
+    ...label,
+  };
+}
 
 export type PartyKind = "session" | "human" | "system" | "role";
 export type RoleKind =
@@ -106,7 +146,34 @@ export interface Obligation {
    * verified. */
   authority?: string;
   authorityReason?: string;
+  /** Declared choices for a decision the obligor may pick from; presentation
+   * only — closure stays free-text belief, so membership is never enforced.
+   * A recommendation is a comment, never a privileged option index. */
+  options?: string[];
+  /** Background documentation for the ask: an absolute path marker, or a
+   * label marker whose reference text resolves against the obligee's lab
+   * notebook. Validated for shape, never dereferenced by the store. */
+  markers?: ObligationMarker[];
+  /** Append-only commentary from either end or the operator — never a
+   * lifecycle event. */
+  comments?: ObligationComment[];
   revision: number;
+}
+
+export interface ObligationMarker {
+  type: "path" | "label";
+  /** Canonical absolute path (path markers) or the reference text (label
+   * markers). */
+  value: string;
+  /** Free-form display label; the UI shows the value when absent. */
+  label?: string;
+}
+
+export interface ObligationComment {
+  author: string;
+  authorKind: PartyKind;
+  at: string;
+  text: string;
 }
 
 export interface RefObservation {
@@ -536,13 +603,25 @@ export class ObligationStore {
       obligor: Party;
       kind: ObligationKind;
       subject: string;
+      markers?: ObligationMarker[];
+      options?: string[];
     },
-    options: ObligationNow = {},
+    options: ObligationNow & { baseDir?: string } = {},
   ): Obligation {
     if (!KINDS.includes(input.kind)) {
       throw new Error(`unknown obligation kind: ${String(input.kind)}`);
     }
     const subject = validateText(input.subject, "subject");
+    if (input.options !== undefined && input.options.length < 2) {
+      throw new Error("options requires at least two choices");
+    }
+    const choices = input.options?.map((choice) =>
+      validateText(choice, "option"),
+    );
+    const baseDir = options.baseDir ?? process.cwd();
+    const markers = input.markers?.map((marker) =>
+      canonicalMarker(marker, baseDir),
+    );
     // PartySidesAreConstrained: the human owes but is never the recorded
     // creditor; a component_owner role owes the repair; plan and experiment
     // roles are the artifact creditors. Anything else makes the arc's
@@ -603,6 +682,8 @@ export class ObligationStore {
         status: "open",
         contested: false,
         revision: 0,
+        ...(choices ? { options: choices } : {}),
+        ...(markers?.length ? { markers } : {}),
       };
       const written = this.write(record);
       // CreationNoticePushed: exactly one push, and only for an obligor
@@ -693,6 +774,108 @@ export class ObligationStore {
         `only the obligee session may close ${obligation.id}`,
       );
     }
+  }
+
+  /** Obligee-only in-place amendment of the presentation fields. Subject,
+   * kind, and obligor are the identity of the ask and never edit; changing
+   * them is a withdraw-and-re-announce. */
+  update(
+    id: string,
+    actor: SessionParty,
+    fields: {
+      options?: string[] | null;
+      markers?: ObligationMarker[] | null;
+    },
+    options: ObligationNow & { baseDir?: string } = {},
+  ): Obligation {
+    const baseDir = options.baseDir ?? process.cwd();
+    return this.withLock(() => {
+      const record = this.readRecord(id);
+      if (!record) throw new ObligationStateError(`no such obligation: ${id}`);
+      this.requireObligee(record, actor);
+      if (record.status !== "open") {
+        throw new ObligationStateError(
+          `obligation ${id} is already ${record.status}`,
+        );
+      }
+      const next: Obligation = { ...record };
+      if (fields.options !== undefined) {
+        if (fields.options === null) next.options = undefined;
+        else if (fields.options.length < 2) {
+          throw new Error("options requires at least two choices");
+        } else {
+          next.options = fields.options.map((choice) =>
+            validateText(choice, "option"),
+          );
+        }
+      }
+      if (fields.markers !== undefined) {
+        if (fields.markers === null) next.markers = undefined;
+        else {
+          next.markers = fields.markers.map((marker) =>
+            canonicalMarker(marker, baseDir),
+          );
+        }
+      }
+      return this.write(next);
+    });
+  }
+
+  /** Append-only commentary from either end or the operator. Comments are
+   * notes, not lifecycle events: they never move the status. */
+  comment(
+    id: string,
+    actor: SessionParty | "user",
+    text: string,
+    options: ObligationNow = {},
+  ): Obligation {
+    const at = options.now ?? new Date().toISOString();
+    return this.withLock(() => {
+      const record = this.readRecord(id);
+      if (!record) throw new ObligationStateError(`no such obligation: ${id}`);
+      if (record.status !== "open") {
+        throw new ObligationStateError(
+          `obligation ${id} is already ${record.status}`,
+        );
+      }
+      // Only a named session, the session currently responsible for a role,
+      // or the operator may add a comment to the record's evidence.
+      if (actor !== "user") {
+        const isParty =
+          (record.obligee.kind === "session" &&
+            record.obligee.sessionId === actor.sessionId) ||
+          (record.obligor.kind === "session" &&
+            record.obligor.sessionId === actor.sessionId) ||
+          (record.obligee.kind === "role" &&
+            this.sessionResponsibleFor(record.obligee.role) ===
+              actor.sessionId) ||
+          (record.obligor.kind === "role" &&
+            this.sessionResponsibleFor(record.obligor.role) ===
+              actor.sessionId);
+        if (!isParty) {
+          throw new ObligationAuthorityError(
+            `only a party to the record may comment on ${id}`,
+          );
+        }
+      }
+      const author: { label: string; kind: PartyKind } =
+        actor === "user"
+          ? { label: "user", kind: "human" }
+          : {
+              label: actor.label,
+              kind: "session",
+            };
+      const comments = [
+        ...(record.comments ?? []),
+        {
+          author: author.label,
+          authorKind: author.kind,
+          at,
+          text: validateText(text, "comment"),
+        },
+      ];
+      return this.write({ ...record, comments });
+    });
   }
 
   /** Shared settlement tail: satisfied by deterministic evidence, inside
@@ -973,6 +1156,7 @@ export class ObligationStore {
     options: ObligationNow & { issueId?: string } = {},
   ): RefObservation {
     const record = this.readRecord(obligationId);
+
     if (!record) {
       throw new ObligationStateError(`no such obligation: ${obligationId}`);
     }
@@ -994,6 +1178,28 @@ export class ObligationStore {
     writeFileSync(temporary, `${JSON.stringify(observation, null, 2)}\n`);
     renameSync(temporary, path);
     return observation;
+  }
+
+  /** Remove expired terminal records without racing with a record update. */
+  pruneTerminal(nowMs = Date.now()): number {
+    if (!existsSync(this.root)) return 0;
+    return this.withLock(() => {
+      let removed = 0;
+      for (const record of this.readAll()) {
+        if (
+          record.status === "open" ||
+          !record.retainedUntil ||
+          !(Date.parse(record.retainedUntil) <= nowMs)
+        ) {
+          continue;
+        }
+        unlinkSync(join(this.root, `${record.id}.json`));
+        const ref = join(this.root, "refs", `${record.id}.json`);
+        if (existsSync(ref)) unlinkSync(ref);
+        removed += 1;
+      }
+      return removed;
+    });
   }
 
   latestRef(obligationId: string): RefObservation | undefined {

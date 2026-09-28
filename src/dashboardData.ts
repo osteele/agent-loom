@@ -14,7 +14,12 @@ import {
   partyView,
 } from "./obligationResolution.ts";
 import { obligations } from "./obligations.ts";
-import type { Obligation, RefState } from "./obligations.ts";
+import type {
+  Obligation,
+  ObligationComment,
+  ObligationMarker,
+  RefState,
+} from "./obligations.ts";
 import { canonicalProject, displayName } from "./paths.ts";
 import { readListenerSnapshot } from "./presence.ts";
 import { readProcessSnapshot } from "./processSnapshot.ts";
@@ -144,6 +149,15 @@ export interface ObligationRecordView {
   contestReason?: string;
   adoptedFrom?: string;
   adoptedAt?: string;
+  /** Declared choices for a decision the obligor may pick from; plain
+   * free-text entries, no ids — the chosen text survives renumbering. */
+  options?: string[];
+  /** Typed background markers: path markers are absolute paths, label
+   * markers are reference text resolved against the obligee's lab
+   * notebook. */
+  markers?: ObligationMarker[];
+  /** Append-only commentary from either end or the operator. */
+  comments?: ObligationComment[];
   /** Latest reference observation, for records that cite an external record
    * (open external_fix waits). Absent when nothing has been observed. */
   ref?: { state: RefState };
@@ -164,6 +178,9 @@ function obligationRecords(
       subject: record.subject,
       createdAt: record.createdAt,
       contested: record.contested,
+      ...(record.options ? { options: record.options } : {}),
+      ...(record.markers ? { markers: record.markers } : {}),
+      ...(record.comments?.length ? { comments: record.comments } : {}),
       ...(record.contestReason ? { contestReason: record.contestReason } : {}),
       ...(record.adoptedFrom ? { adoptedFrom: record.adoptedFrom } : {}),
       ...(record.adoptedAt ? { adoptedAt: record.adoptedAt } : {}),

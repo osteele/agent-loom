@@ -400,6 +400,7 @@ function tickPresence(): void {
       lastLiveCount = snapshot.sessions.length;
       log(`presence snapshot: ${lastLiveCount} live`);
     }
+    obligations.pruneTerminal();
   } catch (error) {
     // An interval callback that throws takes the daemon down with it.
     log(`presence snapshot failed: ${error}`);

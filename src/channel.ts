@@ -81,6 +81,7 @@ import {
   ObligationAuthorityError,
   ObligationDuplicateError,
   type ObligationKind,
+  type ObligationMarker,
   type Party,
   type SessionRef,
   type Succession,
@@ -1120,6 +1121,26 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "A claim id, job id, issue id, or free text identifying the owed outcome",
           },
+          options: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Declared choices the obligor may pick from. Presentation only — closure stays free-text belief; a recommendation is a comment, never a privileged index.",
+          },
+          markers: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["path", "label"] },
+                value: { type: "string" },
+                label: { type: "string" },
+              },
+              required: ["type", "value"],
+            },
+            description:
+              "Typed background markers: type path is a canonical absolute path (Open/Reveal/Quick Look), type label is reference text resolved against the obligee's lab notebook. Validated for shape, never dereferenced; a missing path shows as missing downstream.",
+          },
         },
         required: ["kind", "subject"],
       },
@@ -1232,6 +1253,63 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "obligations_update",
+      description:
+        "Amend an open obligation's presentation fields in place — options " +
+        "(declared choices, at least two) and markers (typed: path markers " +
+        "are absolute paths; label markers resolve against the obligee's " +
+        "notebook). Subject, kind, and obligor are the identity of the ask " +
+        "and never change. Only the obligee may amend.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Obligation id (ob-…)" },
+          options: {
+            type: "array",
+            items: { type: "string" },
+            description: "Declared choices. Omitting preserves them.",
+          },
+          clear_options: {
+            type: "boolean",
+            description: "Clear options when true",
+          },
+          markers: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["path", "label"] },
+                value: { type: "string" },
+                label: { type: "string" },
+              },
+              required: ["type", "value"],
+            },
+            description: "Typed background markers. Omitting preserves them.",
+          },
+          clear_markers: {
+            type: "boolean",
+            description: "Clear markers when true",
+          },
+        },
+        required: ["id"],
+      },
+    },
+    {
+      name: "obligations_comment",
+      description:
+        "Append a note to an open obligation — either end or the operator " +
+        "may comment. Comments are notes, never lifecycle events, and are " +
+        "append-only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Obligation id (ob-…)" },
+          text: { type: "string", description: "The comment text" },
+        },
+        required: ["id", "text"],
+      },
+    },
+    {
       name: "obligations_list",
       description:
         "List obligations machine-globally. Defaults to open records in any " +
@@ -1334,7 +1412,15 @@ function describeObligation(obligation: Obligation): string {
   const adopted = obligation.adoptedFrom
     ? ` [adopted from ${obligation.adoptedFrom}]`
     : "";
-  return `${obligation.id} ${obligation.kind} ${obligation.subject} — owed to ${obligation.obligee.label} by ${obligor} [${obligation.status}]${lifecycle}${contested}${resolution}${adopted} [created ${obligation.createdAt}]`;
+  const presentation =
+    (obligation.options
+      ? ` [options: ${obligation.options.join(" | ")}]`
+      : "") +
+    (obligation.markers ? ` [${obligation.markers.length} marker(s)]` : "") +
+    (obligation.comments?.length
+      ? ` [${obligation.comments.length} comment(s)]`
+      : "");
+  return `${obligation.id} ${obligation.kind} ${obligation.subject} — owed to ${obligation.obligee.label} by ${obligor} [${obligation.status}]${lifecycle}${contested}${resolution}${adopted}${presentation} [created ${obligation.createdAt}]`;
 }
 
 /** The one creation notice a session obligor gets (CreationNoticePushed in
@@ -2383,15 +2469,45 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
   }
   if (req.params.name === "obligations_announce") {
-    const { obligor, to_user, system, component, kind, subject } = (req.params
-      .arguments ?? {}) as {
+    const {
+      obligor,
+      to_user,
+      system,
+      component,
+      kind,
+      subject,
+      options,
+      markers,
+    } = (req.params.arguments ?? {}) as {
       obligor?: string;
       to_user?: boolean;
       system?: string;
       component?: string;
       kind?: ObligationKind;
       subject?: string;
+      options?: string[];
+      markers?: ObligationMarker[];
     };
+    if (
+      options !== undefined &&
+      (!Array.isArray(options) || options.length < 2)
+    ) {
+      throw new Error("options must be an array of at least two choices");
+    }
+    if (
+      markers !== undefined &&
+      (!Array.isArray(markers) ||
+        markers.some(
+          (marker) =>
+            typeof marker?.value !== "string" ||
+            !marker.value.trim() ||
+            (marker.type !== "path" && marker.type !== "label"),
+        ))
+    ) {
+      throw new Error(
+        "markers must be an array of { type: path|label, value, label? }",
+      );
+    }
     if (kind === undefined || !OBLIGATION_KINDS.includes(kind)) {
       throw new Error(
         "obligations_announce kind must be claim_release, decision, external_fix, job_completion, or review",
@@ -2467,6 +2583,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         obligor: obligorInput,
         kind,
         subject: subject.trim(),
+        ...(options ? { options } : {}),
+        ...(markers?.length ? { markers } : {}),
       });
       let notified = "";
       if (record.obligor.kind === "session" && obligorProject !== undefined) {
@@ -2694,6 +2812,76 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           type: "text",
           text: `cleared ${describeObligation(record)} on declared authority (recorded, not verified)`,
         },
+      ],
+    };
+  }
+  if (req.params.name === "obligations_update") {
+    const { id, options, clear_options, markers, clear_markers } = (req.params
+      .arguments ?? {}) as {
+      id?: string;
+      options?: string[];
+      clear_options?: boolean;
+      markers?: ObligationMarker[];
+      clear_markers?: boolean;
+    };
+    if (typeof id !== "string" || !id.trim()) {
+      throw new Error("obligations_update requires id");
+    }
+    if (
+      options !== undefined &&
+      (!Array.isArray(options) || options.length < 2)
+    ) {
+      throw new Error("options must be an array of at least two choices");
+    }
+    const fields: {
+      options?: string[] | null;
+      markers?: ObligationMarker[] | null;
+    } = {
+      ...(clear_options === true || options !== undefined
+        ? { options: clear_options === true ? null : options }
+        : {}),
+      ...(clear_markers === true || markers !== undefined
+        ? { markers: clear_markers === true ? null : markers }
+        : {}),
+    };
+    if (!("options" in fields) && !("markers" in fields)) {
+      throw new Error(
+        "obligations_update requires options, markers, clear_options, or clear_markers",
+      );
+    }
+    const record = obligations.update(
+      id.trim(),
+      { kind: "session", sessionId, label: mySessionNames.fullName },
+      fields,
+      { baseDir: cwd },
+    );
+    return {
+      content: [
+        { type: "text", text: `updated ${describeObligation(record)}` },
+      ],
+    };
+  }
+  if (req.params.name === "obligations_comment") {
+    const { id, text } = (req.params.arguments ?? {}) as {
+      id?: string;
+      text?: string;
+    };
+    if (
+      typeof id !== "string" ||
+      !id.trim() ||
+      typeof text !== "string" ||
+      !text.trim()
+    ) {
+      throw new Error("obligations_comment requires id and text");
+    }
+    const record = obligations.comment(
+      id.trim(),
+      { kind: "session", sessionId, label: mySessionNames.fullName },
+      text.trim(),
+    );
+    return {
+      content: [
+        { type: "text", text: `commented on ${describeObligation(record)}` },
       ],
     };
   }
@@ -2963,11 +3151,17 @@ const timer = setInterval(() => void poll(), 1000);
 function shutdown(reason: string): void {
   recordChannelShutdown(reason);
   clearInterval(timer);
-  for (const project of claimedProjects) {
-    claims.releaseOwner(project, sessionId, process.pid);
+  try {
+    for (const project of claimedProjects) {
+      claims.releaseOwner(project, sessionId, process.pid);
+    }
+  } finally {
+    try {
+      work.releaseOwner(cwd, sessionId, process.pid);
+    } finally {
+      unregister(cwd, process.pid, ownerInstanceId);
+    }
   }
-  work.releaseOwner(cwd, sessionId, process.pid);
-  unregister(cwd, process.pid, ownerInstanceId);
   process.exit(0);
 }
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {

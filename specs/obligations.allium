@@ -87,6 +87,21 @@ value Role {
     experiment: String? when kind = experiment_claimer -- experiment id
 }
 
+value ObligationMarker {
+    type: path | label    -- explicit: a path marker is a canonical absolute
+                          -- path; a label marker's value resolves against
+                          -- the obligee's lab notebook
+    value: String
+    label: String?
+}
+
+value ObligationComment {
+    author: String
+    author_kind: PartyKind
+    at: Timestamp
+    text: String
+}
+
 -- id is public: listings, the owed view, and contest name it. resolution and
 -- contest_reason are captured at the act and are not edited afterwards.
 entity Obligation {
@@ -116,6 +131,16 @@ entity Obligation {
     -- verified.
     authority: String? when closed_by = user_authority
     authority_reason: String? when closed_by = user_authority
+
+    -- Presentation fields the obligee may amend in place: options are
+    -- declared choices (membership is never enforced — closure stays
+    -- free-text belief; a recommendation is a comment, never a privileged
+    -- index), links are background documentation (validated for shape,
+    -- never dereferenced), comments are append-only notes from either end
+    -- or the operator and never move the status.
+    options: List<String>?
+    markers: List<ObligationMarker>?
+    comments: List<ObligationComment>?
 
     transitions status {
         open -> satisfied
@@ -175,6 +200,10 @@ surface RefObservationInputs {
 -- ObligorIdentified(obligation, actor): the actor proves it is the named
 --   session obligor; the human obligor acts as operator, which needs no
 --   proof.
+-- CommentatorIsParty(obligation, actor): the actor is the obligee session,
+--   the named session obligor, or the operator (kind human). A role end
+--   comments through its currently resolved session. A system end has no
+--   commenting session.
 -- SuccessionProven(adopter, predecessor): the adopter's resume id (ADR 0011)
 --   names the predecessor, or the operator declared authority for this
 --   adoption. An unrelated session is refused: adoption is the one act that
@@ -365,6 +394,38 @@ rule AuthorityClears {
     -- Recorded, never verified (ADR 0004).
 }
 
+
+rule ObligeeAmends {
+    when: ObligeeAmends(obligee, obligation, options, markers)
+
+    requires: obligation.status = open
+    requires: ObligeeIdentified(obligation, obligee)
+
+    ensures: obligation.options = options
+    ensures: obligation.markers = markers
+
+    -- Presentation fields only: subject, kind, and obligor are the identity
+    -- of the ask and never edit; changing them is a withdraw-and-re-announce.
+    -- Null clears the field; omitting it preserves it.
+}
+
+rule PartyComments {
+    when: PartyComments(actor, obligation, text)
+
+    requires: obligation.status = open
+    requires: CommentatorIsParty(obligation, actor)
+
+    ensures:
+        obligation.comments = obligation.comments + ObligationComment(
+            author: actor.label,
+            author_kind: actor.kind,
+            at: now,
+            text: text,
+        )
+
+    -- Append-only: comments are notes, never lifecycle events. A comment
+    -- never moves the status, and no comment may be edited or removed.
+}
 rule SessionAdoptsObligations {
     when: SessionAdopts(adopter, predecessor)
 

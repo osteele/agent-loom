@@ -22,6 +22,12 @@
  *   agent-mail obligations announce (--obligor <name-or-id> | --user |
  *                                  --system <name> | --component <name>)
  *                                  --kind <kind> --subject <text>
+ *                                  [--option <text> ...]
+ *                                  [--marker <value> [--marker-kind path|label] [--marker-label <text>] ...]
+ *   agent-mail obligations update --id <obligation-id>
+ *                                  [--option <text> ... | --clear-options]
+ *                                  [--marker <value> ... | --clear-markers]
+ *   agent-mail obligations comment --id <obligation-id> --text <text> [--user]
  *   agent-mail obligations close|withdraw --id <obligation-id>
  *   agent-mail obligations contest --id <obligation-id> --reason <text> [--user]
  *   agent-mail obligations adopt --predecessor <id> (--resume-id <id> | --authority <text> --reason <text>)
@@ -133,6 +139,7 @@ import {
   type Obligation,
   ObligationDuplicateError,
   type ObligationKind,
+  type ObligationMarker,
   type Party,
   type SessionParty,
   type Succession,
@@ -2330,7 +2337,15 @@ function describeObligation(obligation: Obligation): string {
   const adopted = obligation.adoptedFrom
     ? ` [adopted from ${obligation.adoptedFrom}]`
     : "";
-  return `${obligation.id} ${obligation.kind} ${obligation.subject} — owed to ${obligation.obligee.label} by ${obligor} [${obligation.status}]${lifecycle}${contested}${resolution}${adopted} [created ${obligation.createdAt}]`;
+  const presentation =
+    (obligation.options
+      ? ` [options: ${obligation.options.join(" | ")}]`
+      : "") +
+    (obligation.markers ? ` [${obligation.markers.length} marker(s)]` : "") +
+    (obligation.comments?.length
+      ? ` [${obligation.comments.length} comment(s)]`
+      : "");
+  return `${obligation.id} ${obligation.kind} ${obligation.subject} — owed to ${obligation.obligee.label} by ${obligor} [${obligation.status}]${lifecycle}${contested}${resolution}${adopted}${presentation} [created ${obligation.createdAt}]`;
 }
 
 /** The one creation notice a session obligor gets (CreationNoticePushed in
@@ -2389,6 +2404,41 @@ function obligationActor(
       canonicalProject(process.cwd()),
     ).fullName,
   };
+}
+
+/** Pairs --marker <value> with --marker-kind <path|label> and --marker-label
+ * <text>, each applying to the most recent --marker. Kind defaults to path
+ * when the value looks like a path, else label; the record always carries
+ * the explicit type either way. Used by announce and update. */
+function parseObligationMarkers(args: string[]): ObligationMarker[] {
+  const markers: ObligationMarker[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--marker") {
+      const value = args[i + 1];
+      if (value !== undefined && !value.startsWith("--")) {
+        markers.push({
+          type:
+            value.startsWith("/") ||
+            value.startsWith("~") ||
+            value.includes("/")
+              ? "path"
+              : "label",
+          value,
+        });
+      }
+    } else if (args[i] === "--marker-kind") {
+      const kind = args[i + 1];
+      const last = markers.at(-1);
+      if (last && (kind === "path" || kind === "label")) last.type = kind;
+    } else if (args[i] === "--marker-label") {
+      const label = args[i + 1];
+      const last = markers.at(-1);
+      if (last && label !== undefined && !label.startsWith("--")) {
+        last.label = label;
+      }
+    }
+  }
+  return markers;
 }
 
 /** Adoption names an offline session, which live-recipient resolution cannot
@@ -2478,11 +2528,15 @@ function cmdObligations(
     }
     let record: Obligation;
     try {
+      const parsedOptions = repeatedFlagValues(args, "option");
+      const parsedMarkers = parseObligationMarkers(args);
       record = obligations.announce({
         obligee: actor,
         obligor,
         kind,
         subject: flags.subject.trim(),
+        ...(parsedOptions.length ? { options: parsedOptions } : {}),
+        ...(parsedMarkers.length ? { markers: parsedMarkers } : {}),
       });
     } catch (error) {
       if (!(error instanceof ObligationDuplicateError)) throw error;
@@ -2517,6 +2571,59 @@ function cmdObligations(
     console.log(
       `announced ${record.id} — ${record.kind} ${record.subject}${notified}`,
     );
+    return;
+  }
+  if (subcommand === "update") {
+    if (typeof flags.id !== "string" || !flags.id.trim()) {
+      throw new Error(
+        "usage: agent-mail obligations update --id <obligation-id> [--option <text> ... | --clear-options] [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]",
+      );
+    }
+    const parsedOptions = repeatedFlagValues(args, "option");
+    const parsedMarkers = parseObligationMarkers(args);
+    const fields: {
+      options?: string[] | null;
+      markers?: ObligationMarker[] | null;
+    } = {
+      ...(flags["clear-options"] === true || parsedOptions.length
+        ? { options: flags["clear-options"] === true ? null : parsedOptions }
+        : {}),
+      ...(flags["clear-markers"] === true || parsedMarkers.length
+        ? { markers: flags["clear-markers"] === true ? null : parsedMarkers }
+        : {}),
+    };
+    if (!("options" in fields) && !("markers" in fields)) {
+      throw new Error(
+        "obligations update requires at least one of --option, --marker, --clear-options, --clear-markers",
+      );
+    }
+    const record = obligations.update(
+      flags.id.trim(),
+      obligationActor(flags),
+      fields,
+    );
+    console.log(`updated ${describeObligation(record)}`);
+    return;
+  }
+  if (subcommand === "comment") {
+    if (
+      typeof flags.id !== "string" ||
+      !flags.id.trim() ||
+      typeof flags.text !== "string" ||
+      !flags.text.trim()
+    ) {
+      throw new Error(
+        "usage: agent-mail obligations comment --id <obligation-id> --text <text> [--user]",
+      );
+    }
+    const actor =
+      flags.user === true ? ("user" as const) : obligationActor(flags);
+    const record = obligations.comment(
+      flags.id.trim(),
+      actor,
+      flags.text.trim(),
+    );
+    console.log(`commented on ${describeObligation(record)}`);
     return;
   }
   if (subcommand === "close") {
@@ -2606,13 +2713,21 @@ function cmdObligations(
     let succession: Succession;
     if (resumeId !== undefined) {
       // ADR 0011: a resume id is succession evidence only when it is the one
-      // this shell's host command line carried — a string the caller types
-      // proves nothing, so it is checked against the observed host line and
-      // otherwise refused.
-      const observed = resumeIdFromCommand(processCommand(process.ppid));
+      // the resolved session's HOST process command line carried — the CLI's
+      // own parent is the shell, which carries nothing. A typed string
+      // proves nothing; authority is the other route.
+      const actor = obligationActor(flags);
+      const registration = listLive().find(
+        (entry) => entry.sessionId === actor.sessionId,
+      );
+      const hostPid = registration?.parentPid ?? registration?.pid;
+      const observed =
+        hostPid !== undefined
+          ? resumeIdFromCommand(processCommand(hostPid))
+          : undefined;
       if (observed === undefined || observed !== predecessorId) {
         throw new Error(
-          "adoption by --resume-id requires this shell's host command line to carry the predecessor's session id (launch with --resume <id>); adopt by --authority with --reason instead",
+          "adoption by --resume-id requires the session's host command line to carry the predecessor's id (launch with --resume <id>); adopt by --authority with --reason instead",
         );
       }
       succession = { kind: "resume-id", resumeId: predecessorId };
@@ -3871,6 +3986,18 @@ Coordination:
                         --component names the component whose owner owes
                         the repair, and its notice goes to the resolved
                         owner. A role or system obligor cannot contest.
+  obligations update --id <obligation-id>
+                       [--option <text> ... | --clear-options]
+                       [--marker <value> [--marker-kind path|label]
+                        [--marker-label <text>] ... | --clear-markers]
+                        Amend an open record's presentation fields in place.
+                        Obligee-only. Options are free text and stay editable;
+                        markers are typed (path or label) and canonicalized
+                        at write time. Subject, kind, and obligor never edit.
+  obligations comment --id <obligation-id> --text <text> [--user]
+                        Append a note to an open record. Either end or the
+                        operator may comment; comments are append-only and
+                        never move the status.
   obligations close --id <obligation-id> [--resolution <text>]
                         Close your record as satisfied; only the obligee
                         session closes. claim_release records settle on their

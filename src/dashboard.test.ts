@@ -189,7 +189,8 @@ test("a project-scoped query still resolves cross-project obligation parties", (
     logLimit: 20,
   });
   const record = state.obligationRecords.find(
-    (entry) => entry.subject === "scoped query keeps cross-project parties live",
+    (entry) =>
+      entry.subject === "scoped query keeps cross-project parties live",
   );
   expect(record?.obligee).toMatchObject({
     partyKind: "session",
