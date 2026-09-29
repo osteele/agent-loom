@@ -4017,18 +4017,22 @@ Coordination:
                         --component names the component whose owner owes
                         the repair, and its notice goes to the resolved
                         owner. A role or system obligor cannot contest.
-                        Keep the subject a short decision name; put findings,
-                        settled constraints, and consequences in description.
+                        Keep the subject a short plain-text decision name; put
+                        findings, settled constraints, and consequences in
+                        description. Description accepts multiline Markdown;
+                        each option accepts inline Markdown and Unicode math
+                        (one line, up to 500 characters).
   obligations update --id <obligation-id>
                        [--description <text> | --clear-description]
                        [--option <text> ... | --clear-options]
                        [--marker <value> [--marker-kind path|label]
                         [--marker-label <text>] ... | --clear-markers]
                         Amend an open record's presentation fields in place.
-                        Obligee-only. Description is multiline decision context;
-                        options are editable free text; markers are typed (path
-                        or label) and canonicalized at write time. Subject,
-                        kind, and obligor never edit.
+                        Obligee-only. Description accepts multiline Markdown;
+                        options accept inline Markdown and Unicode math (one
+                        line each, up to 500 characters). Markers are typed
+                        (path or label) and canonicalized at write time.
+                        Subject, kind, and obligor never edit.
   obligations comment --id <obligation-id> --text <text> [--user]
                         Append a note to an open record. Either end or the
                         operator may comment; comments are append-only and

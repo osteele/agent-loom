@@ -567,19 +567,22 @@ creation notice goes to that session. A role or system obligor cannot be
 contested. An open record with the same obligee, kind, and subject blocks a
 duplicate and names the existing id.
 
-Keep `--subject` a short name for the decision, such as
+Keep `--subject` a short plain-text name for the decision, such as
 `EXP-238: disposition of F1834`. Put the finding that raised it, settled
 constraints, and consequences of each choice in `--description`. The description
-can span lines; no shorter subject-length limit is enforced. Use `--option` for
-the choices themselves and `--marker` for evidence pointers.
+accepts multiline Markdown (up to 10,000 characters); each `--option` accepts
+inline Markdown (one line, up to 500 characters). Unicode math characters such
+as `ρ ∈ [0, 1]` are stored verbatim in both. Agent-mail stores the Markdown
+source and leaves rendering to readers. No shorter subject-length limit is
+enforced. Use `--marker` for evidence pointers.
 
 For example:
 
 ```
 agent-mail obligations announce --user --kind decision \
   --subject "Review packet format" \
-  --description "A PDF export drops table labels. A structured export preserves them but changes the review workflow. Choose a reproducible packet format." \
-  --option "Tagged PDF" --option "Structured export"
+  --description '**Finding:** A PDF export drops table labels. A structured export preserves them but changes the review workflow. Choose a reproducible packet format.' \
+  --option 'Tagged **PDF**' --option 'Structured export (`.json`)'
 ```
 
 `--option` declares choices the obligor may pick from; they are plain text,

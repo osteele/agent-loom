@@ -110,10 +110,12 @@ entity Obligation {
     obligee: Party
     obligor: Party
     kind: ObligationKind
-    subject: String    -- identifying name for the owed outcome; keep decisions
-                       -- concise without a shorter machine-enforced limit
+    subject: String    -- identifying plain-text name for the owed outcome;
+                       -- keep decisions concise without a shorter enforced limit
     description: String?  -- decision context and cited evidence, separate from
-                          -- the short subject; multiline, obligee-editable
+                          -- the short subject; multiline Markdown and Unicode
+                          -- preserved after surrounding whitespace is trimmed,
+                          -- obligee-editable
     status: ObligationStatus
     contested: Boolean
     contested_at: Timestamp when contested
@@ -136,11 +138,12 @@ entity Obligation {
     authority_reason: String? when closed_by = user_authority
 
     -- Presentation fields the obligee may amend in place: description is
-    -- decision context, options are declared choices (membership is never
-    -- enforced -- closure stays free-text belief; a recommendation is a
-    -- comment, never a privileged index), markers are background documentation
-    -- (validated for shape, never dereferenced), and comments are append-only
-    -- notes from either end or the operator that never move the status.
+    -- multiline Markdown decision context, options are one-line choices
+    -- accepting inline Markdown and Unicode (membership is never enforced;
+    -- closure stays free-text belief; a recommendation is a comment, never a
+    -- privileged index). Markers are background documentation (validated
+    -- for shape, never dereferenced); comments are append-only notes from
+    -- either end or the operator and never move the status.
     options: List<String>?
     markers: List<ObligationMarker>?
     comments: List<ObligationComment>?

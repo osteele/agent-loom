@@ -1119,18 +1119,18 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           subject: {
             type: "string",
             description:
-              "Short identifying title, e.g. EXP-238: disposition of F1834. Put findings, settled constraints, and consequences in description; choices in options; evidence pointers in markers.",
+              "Short plain-text title, e.g. EXP-238: disposition of F1834. Put findings, settled constraints, and consequences in description; choices in options; evidence pointers in markers.",
           },
           description: {
             type: "string",
             description:
-              "Optional multiline context: why the decision is open, what is settled, and the consequences of each choice.",
+              "Optional multiline Markdown context (up to 10,000 characters): why the decision is open, what is settled, and the consequences of each choice. Unicode math symbols are stored verbatim.",
           },
           options: {
             type: "array",
             items: { type: "string" },
             description:
-              "Declared choices the obligor may pick from. Presentation only — closure stays free-text belief; a recommendation is a comment, never a privileged index.",
+              "Declared choices, each one line (up to 500 characters). Inline Markdown and Unicode math are accepted. Presentation only: closure stays free-text belief; a recommendation is a comment, never a privileged index.",
           },
           markers: {
             type: "array",
@@ -1272,7 +1272,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           id: { type: "string", description: "Obligation id (ob-…)" },
           description: {
             type: "string",
-            description: "Decision context. Omitting preserves it.",
+            description:
+              "Multiline Markdown decision context, including Unicode math. Omitting preserves it.",
           },
           clear_description: {
             type: "boolean",
@@ -1281,7 +1282,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           options: {
             type: "array",
             items: { type: "string" },
-            description: "Declared choices. Omitting preserves them.",
+            description:
+              "Declared choices, one line each (up to 500 characters); inline Markdown and Unicode math are accepted. Omitting preserves them.",
           },
           clear_options: {
             type: "boolean",
