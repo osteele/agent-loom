@@ -1,13 +1,14 @@
 /** Shared aggregation for the web and Slack dashboards.
  *
- * Reads the spools and the live registry directly — no daemon dependency, so a
- * dashboard works even when the daemon is down. */
+ * Message summaries come from a spool-derived index; coordination and presence
+ * remain readable without the daemon. */
 
 import {
   type CoordinationEntry,
   isDisplaceable,
   listCoordination,
 } from "./coordination.ts";
+import { indexedMessages, messageRecipient } from "./messageIndex.ts";
 import {
   type PartyView,
   type PartyViewDeps,
@@ -40,7 +41,7 @@ import {
   lastActivityMs,
   sessionNames,
 } from "./sessions.ts";
-import { type StoredMessage, readAllMessages } from "./spool.ts";
+import type { StoredMessage } from "./spool.ts";
 import { type WorkTransferRequest, transfers } from "./transfers.ts";
 
 export interface FlowRoute {
@@ -253,53 +254,6 @@ function presence(registrations: Registration[]): PresenceEntry[] {
     .sort((a, b) => a.project.localeCompare(b.project));
 }
 
-function recipient(msg: StoredMessage): string {
-  return msg.delivery === "audit" && msg.meta?.nativeRecipient
-    ? msg.meta.nativeRecipient
-    : displayName(msg.project);
-}
-
-/** Map-key separator for from/to pairs. A control character cannot occur in a
- * project label, so it cannot collide with one; it is written as an escape
- * because a literal NUL in the source makes git treat this file as binary and
- * makes grep skip it entirely. */
-const ROUTE_KEY_SEP = "\u0000";
-
-function routes(msgs: StoredMessage[]): FlowRoute[] {
-  const counts = new Map<string, number>();
-  for (const m of msgs) {
-    const key = `${displayName(m.from)}${ROUTE_KEY_SEP}${recipient(m)}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([key, count]) => {
-      const [from, to] = key.split(ROUTE_KEY_SEP);
-      return { from, to, count };
-    })
-    .sort((a, b) => b.count - a.count);
-}
-
-/** Hourly message counts for the trailing `hours` window, oldest bucket first. */
-function volume(msgs: StoredMessage[], now: Date, hours = 24): VolumeBucket[] {
-  const buckets: VolumeBucket[] = [];
-  const top = new Date(now);
-  top.setMinutes(0, 0, 0);
-  const startMs = top.getTime() - (hours - 1) * 3600_000;
-  for (let i = 0; i < hours; i++) {
-    buckets.push({
-      hour: new Date(startMs + i * 3600_000).toISOString(),
-      count: 0,
-    });
-  }
-  for (const m of msgs) {
-    const t = Date.parse(m.ts);
-    if (!Number.isFinite(t)) continue;
-    const idx = Math.floor((t - startMs) / 3600_000);
-    if (idx >= 0 && idx < hours) buckets[idx].count++;
-  }
-  return buckets;
-}
-
 export function buildState(
   opts: {
     logLimit?: number;
@@ -315,10 +269,8 @@ export function buildState(
   } = {},
 ): DashboardState {
   const logLimit = opts.logLimit ?? 60;
-  const msgs = readAllMessages().filter(
-    (message) => !opts.project || message.project === opts.project,
-  );
   const now = new Date();
+  const indexed = indexedMessages(opts.project, logLimit, now);
   // Obligation party resolution is machine-global — records span projects, so
   // a project-scoped query must not report cross-project parties as offline.
   // The project filter below scopes presence and coordination only.
@@ -345,16 +297,13 @@ export function buildState(
     isLive: (sessionId) => liveSessionIds.has(sessionId),
     roleSessionId: (role) => obligations.sessionResponsibleFor(role),
   };
-  const log: LogEntry[] = msgs
-    .slice(-logLimit)
-    .reverse()
-    .map((m) => ({
-      ts: m.ts,
-      from: displayName(m.from),
-      to: recipient(m),
-      thread: Boolean(m.replyTo),
-      preview: preview(m.message),
-    }));
+  const log: LogEntry[] = indexed.messages.map((m) => ({
+    ts: m.ts,
+    from: displayName(m.from),
+    to: messageRecipient(m),
+    thread: Boolean(m.replyTo),
+    preview: preview(m.message),
+  }));
   return {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
@@ -375,9 +324,9 @@ export function buildState(
     },
     now: now.toISOString(),
     totals: {
-      messages: msgs.length,
-      projects: new Set(msgs.map((m) => m.project)).size,
-      threads: new Set(msgs.map((m) => m.threadId ?? m.id)).size,
+      messages: indexed.totals.messages,
+      projects: indexed.totals.projects,
+      threads: indexed.totals.threads,
       live: live.length,
       work: leases.length,
       claims: coordination.filter(
@@ -395,15 +344,15 @@ export function buildState(
       const observation = obligations.latestRef(id);
       return observation ? { state: observation.state } : undefined;
     }),
-    routes: routes(msgs),
+    routes: indexed.routes,
     log,
-    volume: volume(msgs, now),
-    messages: msgs.slice(-logLimit).reverse(),
+    volume: indexed.volume,
+    messages: indexed.messages,
     transfers: transfers.list(opts.project),
   };
 }
 
-/** Stable, non-mutating state aggregation for automation and the HTTP API. */
+/** Snapshot-based state aggregation for automation and the HTTP API. */
 export function buildReadOnlyState(
   opts: { logLimit?: number; project?: string; nowMs?: number } = {},
 ): DashboardState {

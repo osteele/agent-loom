@@ -8,7 +8,7 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | Endpoint | Description |
 |---|---|
 | `GET /` | persistent read-only web dashboard |
-| `GET /api/v1/state?project=<path>` | schema-v1 non-mutating aggregate state; project is optional |
+| `GET /api/v1/state?project=<path>` | schema-v1 aggregate state; preserves mail and coordination while updating a disposable message index; project is optional |
 | `GET /api/state` | compatibility alias for `/api/v1/state` |
 | `POST /notify` | `{project, message, from?, meta?, idempotencyKey?, ttlSeconds?, slackEcho?}` → guarded spool + optional Slack echo |
 | `POST /read` | `{project, ids}` or `{project, all:true}` → mark messages read |

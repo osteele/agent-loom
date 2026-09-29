@@ -1,8 +1,8 @@
 # Automation and machine-readable state
 
-How scripts and other programs should read agent-mail's state. Every interface
-here is read-only: none of them scan processes, prune registrations, or mutate
-claims or leases.
+These interfaces do not scan processes, prune registrations, or mutate mail,
+claims, or leases. Aggregate state maintains a disposable index; its writes
+change no delivery or coordination records.
 
 ## The presence snapshot
 
@@ -46,6 +46,14 @@ contains the newest 60 records in newest-first order; totals, routes, and volume
 are computed from the full spool history. Additive fields may appear within
 version 1; removing or changing the meaning of a field requires a new schema
 version and endpoint.
+
+Aggregate state reads `~/.claude/agent-mail/message-index.sqlite`, an
+incremental SQLite projection of the project JSONL spools and append-only read
+markers. The spools remain authoritative. Each state request indexes newly
+appended complete lines before returning; a missing index is built from the
+spools, and a truncated, replaced, or removed spool rebuilds the projection.
+The first build can take longer than subsequent requests. This cache is shared
+by the CLI and daemon, so `--no-sync` stays current without an HTTP request.
 
 `obligations` summarizes open obligation records: `waiting` counts records
 this session is the obligee of, `owed` counts records naming it as session

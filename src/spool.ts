@@ -521,7 +521,7 @@ export function knownProjects(): string[] {
   return [...projects];
 }
 
-function fallbackMessageId(line: string): string {
+export function fallbackMessageId(line: string): string {
   return createHash("sha256").update(line).digest("hex").slice(0, 16);
 }
 

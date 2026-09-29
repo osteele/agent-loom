@@ -31,6 +31,8 @@ import { join, resolve } from "node:path";
 export const STATE_DIR = join(homedir(), ".claude", "agent-mail");
 export const INBOX_DIR = join(STATE_DIR, "inbox");
 export const READ_DIR = join(STATE_DIR, "read");
+/** Disposable projection of the append-only message and read-marker logs. */
+export const MESSAGE_INDEX_PATH = join(STATE_DIR, "message-index.sqlite");
 export const RECEIPTS_DIR = join(STATE_DIR, "receipts");
 export const REGISTRY_DIR = join(STATE_DIR, "registry");
 export const SESSION_NAMES_DIR = join(STATE_DIR, "session-names");

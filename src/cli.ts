@@ -3837,7 +3837,7 @@ async function cmdState(
         return;
       }
     } catch {
-      // The snapshot-only filesystem fallback below is deliberately read-only.
+      // The filesystem fallback updates only the disposable message index.
     }
   }
   console.log(JSON.stringify(buildReadOnlyState({ project }), null, 2));
@@ -4022,8 +4022,9 @@ Coordination:
 
 Dashboards:
   state [--project <dir>] [--no-sync] [--json]
-                        Versioned, non-mutating aggregate state. Uses the daemon
-                        when available; --no-sync reads filesystem snapshots.
+                        Versioned aggregate state; does not change mail or
+                        coordination. Uses the daemon when available; --no-sync
+                        reads snapshots and updates the disposable message index.
   dashboard [--port N] [--open] [--no-tui]
                         Show the persistent daemon dashboard, or serve a
                         direct-filesystem fallback when the daemon is down.

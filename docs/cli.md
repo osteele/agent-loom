@@ -745,10 +745,11 @@ Lists transfer requests with status and deadline, settling expired ones first.
 agent-mail state [--project <dir>] [--no-sync] [--json]
 ```
 
-Prints versioned, non-mutating aggregate state: presence, coordination,
-transfers, recent messages, routes, counts, and provenance. The command asks
-the daemon first and falls back to a read-only filesystem snapshot reader;
-`--no-sync` uses the snapshot directly. The output is JSON either way, so
+Prints versioned aggregate state: presence, coordination, transfers, recent
+messages, routes, counts, and provenance. It does not change mail, claims, or
+leases, but maintains a disposable SQLite message index derived from the spool.
+The command asks the daemon first and falls back to the filesystem snapshot
+reader; `--no-sync` uses that reader directly. The output is JSON either way, so
 `--json` is accepted for symmetry but changes nothing.
 [automation.md](automation.md#aggregate-state) specifies the schema.
 
