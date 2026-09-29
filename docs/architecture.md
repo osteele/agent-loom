@@ -51,6 +51,21 @@ use; this is the reference behind it.
   to render a local web page or an editable Slack message. They do not depend
   on the daemon.
 
+## MCP byte-bridge prototype
+
+`examples/mcp-bridge.c` is a transport-only prototype: a per-session native
+process copies stdio bytes to a Unix-domain socket and copies socket bytes back
+to stdout. Build it with
+`clang -O2 -std=c11 -Wall -Wextra -Werror -pthread -o /tmp/mcp-bridge examples/mcp-bridge.c`
+and pass a socket path owned by the receiving server. It forwards complete MCP
+traffic without parsing JSON or polling a spool.
+
+This bridge is not installed or selected by any client. The current MCP server
+in `src/channel.ts` remains responsible for session identity, tool handling,
+registration, and channel push. A shared socket server would have to preserve
+those per-session semantics and authenticate its clients before this transport
+could replace it.
+
 ## Addressing
 
 Mail is addressed to a **project directory**. Every session running in that
