@@ -1119,7 +1119,12 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           subject: {
             type: "string",
             description:
-              "A claim id, job id, issue id, or free text identifying the owed outcome",
+              "Short identifying title, e.g. EXP-238: disposition of F1834. Put findings, settled constraints, and consequences in description; choices in options; evidence pointers in markers.",
+          },
+          description: {
+            type: "string",
+            description:
+              "Optional multiline context: why the decision is open, what is settled, and the consequences of each choice.",
           },
           options: {
             type: "array",
@@ -1255,15 +1260,24 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "obligations_update",
       description:
-        "Amend an open obligation's presentation fields in place — options " +
-        "(declared choices, at least two) and markers (typed: path markers " +
-        "are absolute paths; label markers resolve against the obligee's " +
-        "notebook). Subject, kind, and obligor are the identity of the ask " +
-        "and never change. Only the obligee may amend.",
+        "Amend an open obligation's presentation fields in place — description " +
+        "(multiline decision context), options (declared choices, at least " +
+        "two), and markers (typed: path markers are absolute paths; label " +
+        "markers resolve against the obligee's notebook). Subject, kind, " +
+        "and obligor are the identity of the ask and never change. Only " +
+        "the obligee may amend.",
       inputSchema: {
         type: "object",
         properties: {
           id: { type: "string", description: "Obligation id (ob-…)" },
+          description: {
+            type: "string",
+            description: "Decision context. Omitting preserves it.",
+          },
+          clear_description: {
+            type: "boolean",
+            description: "Clear the description when true",
+          },
           options: {
             type: "array",
             items: { type: "string" },
@@ -1413,6 +1427,7 @@ function describeObligation(obligation: Obligation): string {
     ? ` [adopted from ${obligation.adoptedFrom}]`
     : "";
   const presentation =
+    (obligation.description ? " [description]" : "") +
     (obligation.options
       ? ` [options: ${obligation.options.join(" | ")}]`
       : "") +
@@ -2476,6 +2491,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       component,
       kind,
       subject,
+      description,
       options,
       markers,
     } = (req.params.arguments ?? {}) as {
@@ -2485,6 +2501,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       component?: string;
       kind?: ObligationKind;
       subject?: string;
+      description?: string;
       options?: string[];
       markers?: ObligationMarker[];
     };
@@ -2515,6 +2532,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
     if (typeof subject !== "string" || !subject.trim()) {
       throw new Error("obligations_announce requires subject");
+    }
+    if (description !== undefined && typeof description !== "string") {
+      throw new Error("description must be text");
     }
     const obligorForms = [
       obligor !== undefined,
@@ -2583,6 +2603,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         obligor: obligorInput,
         kind,
         subject: subject.trim(),
+        ...(description !== undefined ? { description } : {}),
         ...(options ? { options } : {}),
         ...(markers?.length ? { markers } : {}),
       });
@@ -2816,9 +2837,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
   }
   if (req.params.name === "obligations_update") {
-    const { id, options, clear_options, markers, clear_markers } = (req.params
-      .arguments ?? {}) as {
+    const {
+      id,
+      description,
+      clear_description,
+      options,
+      clear_options,
+      markers,
+      clear_markers,
+    } = (req.params.arguments ?? {}) as {
       id?: string;
+      description?: string;
+      clear_description?: boolean;
       options?: string[];
       clear_options?: boolean;
       markers?: ObligationMarker[];
@@ -2833,10 +2863,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     ) {
       throw new Error("options must be an array of at least two choices");
     }
+    if (description !== undefined && typeof description !== "string") {
+      throw new Error("description must be text");
+    }
     const fields: {
+      description?: string | null;
       options?: string[] | null;
       markers?: ObligationMarker[] | null;
     } = {
+      ...(clear_description === true || description !== undefined
+        ? { description: clear_description === true ? null : description }
+        : {}),
       ...(clear_options === true || options !== undefined
         ? { options: clear_options === true ? null : options }
         : {}),
@@ -2844,9 +2881,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         ? { markers: clear_markers === true ? null : markers }
         : {}),
     };
-    if (!("options" in fields) && !("markers" in fields)) {
+    if (
+      !("description" in fields) &&
+      !("options" in fields) &&
+      !("markers" in fields)
+    ) {
       throw new Error(
-        "obligations_update requires options, markers, clear_options, or clear_markers",
+        "obligations_update requires description, options, markers, clear_description, clear_options, or clear_markers",
       );
     }
     const record = obligations.update(

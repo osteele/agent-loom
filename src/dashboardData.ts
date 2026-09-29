@@ -145,6 +145,7 @@ export interface ObligationRecordView {
   id: string;
   kind: Obligation["kind"];
   subject: string;
+  description?: string;
   createdAt: string;
   contested: boolean;
   contestReason?: string;
@@ -177,6 +178,7 @@ function obligationRecords(
       id: record.id,
       kind: record.kind,
       subject: record.subject,
+      ...(record.description ? { description: record.description } : {}),
       createdAt: record.createdAt,
       contested: record.contested,
       ...(record.options ? { options: record.options } : {}),

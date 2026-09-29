@@ -67,6 +67,12 @@ the party has a project, `project` with the `projectBasis` that produced it
 none). Sessions also carry `sessionId` and `live`. Grouping by project is the
 consumer's job; the resolution and its provenance are agent-mail's.
 
+Each `obligationRecords` entry has a short identifying `subject` and, when
+provided, an optional `description` containing multiline decision context.
+`options` names declared choices, `markers` holds typed path or label evidence
+pointers, and `comments` holds appended discussion. `description` is additive
+within schema version 1 and is absent on records without context.
+
 ## What presence and receipts prove
 
 For poll-only sessions, `lastSeen` means only that some agent-mail tool ran; it

@@ -537,6 +537,14 @@ test("legacy on-disk records normalize to parties and keep loading", () => {
     label: "Alice",
   });
   expect(loaded?.obligor).toEqual({ kind: "human", label: "user" });
+  expect(loaded?.description).toBeUndefined();
+  const describedLegacy = store.update("ob-legacy1", ALICE, {
+    description: "The release freeze prevents a routine deploy.",
+  });
+  expect(describedLegacy.subject).toBe(legacy.subject);
+  expect(store.get("ob-legacy1")?.description).toBe(
+    "The release freeze prevents a routine deploy.",
+  );
   // The duplicate key sees the normalized party, so re-announcing the same
   // triple is still refused after the migration read.
   expect(() =>
@@ -1322,6 +1330,42 @@ test("update amends options and markers in place, clearing with null; options st
   expect(withMarkers.markers).toEqual([
     { type: "label", value: "C041", label: "the claim" },
   ]);
+});
+
+test("decision descriptions retain multiline context and amend without changing identity", () => {
+  const { store } = makeStore([ALICE.sessionId, BOB.sessionId]);
+  const description = `Finding: ${"the evidence differs by condition. ".repeat(20)}\nSettled: the registered claim stays fixed.`;
+  expect(description.length).toBeGreaterThan(500);
+  const record = store.announce(
+    {
+      obligee: ALICE,
+      obligor: BOB,
+      kind: "decision",
+      subject: "Disposition of F1834",
+      description: `  ${description}  `,
+    },
+    { now: T0 },
+  );
+  expect(record.description).toBe(description);
+  expect(store.get(record.id)?.description).toBe(description);
+
+  const revised = store.update(record.id, ALICE, {
+    description:
+      "Finding: corrected evidence.\nSettled: the claim stays fixed.",
+  });
+  expect(revised.subject).toBe(record.subject);
+  expect(revised.id).toBe(record.id);
+  expect(store.get(record.id)?.description).toBe(revised.description);
+  expect(() =>
+    store.update(record.id, BOB, { description: "not the obligee" }),
+  ).toThrow(ObligationAuthorityError);
+  expect(() => store.update(record.id, ALICE, { description: " \n " })).toThrow(
+    /description must not be empty/,
+  );
+  expect(store.get(record.id)?.description).toBe(revised.description);
+
+  store.update(record.id, ALICE, { description: null });
+  expect(store.get(record.id)?.description).toBeUndefined();
 });
 
 test("update is obligee-only and refused on terminal records", () => {

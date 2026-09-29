@@ -2493,6 +2493,8 @@ test("obligations CLI announces, lists, closes, and contests as the operator", a
     expect(empty.exit, empty.stderr).toBe(0);
     expect(empty.stdout).toContain("no open obligations owed by you");
 
+    const context =
+      "Finding: the requested deploy window conflicts with the release freeze.\nConstraint: only the user can approve an exception.";
     const announced = await run([
       "obligations",
       "announce",
@@ -2501,10 +2503,81 @@ test("obligations CLI announces, lists, closes, and contests as the operator", a
       "decision",
       "--subject",
       "pick the deploy window",
+      "--description",
+      context,
     ]);
     expect(announced.exit, announced.stderr).toBe(0);
     const id = /announced (ob-[0-9a-f]+)/.exec(announced.stdout)?.[1];
     if (!id) throw new Error("announce returned no obligation id");
+    const state = await run([
+      "state",
+      "--project",
+      project,
+      "--no-sync",
+      "--json",
+    ]);
+    expect(state.exit, state.stderr).toBe(0);
+    const records = (
+      JSON.parse(state.stdout) as {
+        obligationRecords: {
+          id: string;
+          subject: string;
+          description?: string;
+        }[];
+      }
+    ).obligationRecords;
+    expect(records.find((record) => record.id === id)).toMatchObject({
+      subject: "pick the deploy window",
+      description: context,
+    });
+
+    const changedContext =
+      "Finding: the release freeze has moved.\nConstraint: sign-off remains required.";
+    const updated = await run([
+      "obligations",
+      "update",
+      "--id",
+      id,
+      "--description",
+      changedContext,
+    ]);
+    expect(updated.exit, updated.stderr).toBe(0);
+    const changedState = await run([
+      "state",
+      "--project",
+      project,
+      "--no-sync",
+      "--json",
+    ]);
+    expect(
+      (
+        JSON.parse(changedState.stdout) as {
+          obligationRecords: { id: string; description?: string }[];
+        }
+      ).obligationRecords.find((record) => record.id === id)?.description,
+    ).toBe(changedContext);
+    const cleared = await run([
+      "obligations",
+      "update",
+      "--id",
+      id,
+      "--clear-description",
+    ]);
+    expect(cleared.exit, cleared.stderr).toBe(0);
+    const clearedState = await run([
+      "state",
+      "--project",
+      project,
+      "--no-sync",
+      "--json",
+    ]);
+    expect(
+      (
+        JSON.parse(clearedState.stdout) as {
+          obligationRecords: { id: string; description?: string }[];
+        }
+      ).obligationRecords.find((record) => record.id === id)?.description,
+    ).toBeUndefined();
 
     const owed = await run(["obligations", "owed"]);
     expect(owed.exit, owed.stderr).toBe(0);

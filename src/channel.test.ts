@@ -1553,6 +1553,7 @@ test("obligations can be announced, listed, contested, and closed over MCP", asy
     const tools = await obligee.listTools();
     for (const expected of [
       "obligations_announce",
+      "obligations_update",
       "obligations_close",
       "obligations_withdraw",
       "obligations_contest",
@@ -1570,6 +1571,8 @@ test("obligations can be announced, listed, contested, and closed over MCP", asy
           obligor: "obligor-session",
           kind: "decision",
           subject: "approve the retry budget",
+          description:
+            "Finding: the retry rate rose.\nConstraint: a fixed budget keeps the rollout bounded.",
         },
       }),
     );
@@ -1602,6 +1605,34 @@ test("obligations can be announced, listed, contested, and closed over MCP", asy
     expect(listed).toContain("decision approve the retry budget");
     expect(listed).toContain("owed to");
     expect(listed).toContain("[open]");
+    expect(listed).toContain("[description]");
+    const revisedContext =
+      "Finding: the retry rate is stable.\nConstraint: preserve the rollout cap.";
+    const revised = await obligee.callTool({
+      name: "obligations_update",
+      arguments: { id: obligationId, description: revisedContext },
+    });
+    expect(revised.isError).not.toBe(true);
+    const recordPath = join(
+      home,
+      ".claude",
+      "agent-mail",
+      "obligations",
+      `${obligationId}.json`,
+    );
+    expect(
+      (JSON.parse(readFileSync(recordPath, "utf8")) as { description?: string })
+        .description,
+    ).toBe(revisedContext);
+    const clearedContext = await obligee.callTool({
+      name: "obligations_update",
+      arguments: { id: obligationId, clear_description: true },
+    });
+    expect(clearedContext.isError).not.toBe(true);
+    expect(
+      (JSON.parse(readFileSync(recordPath, "utf8")) as { description?: string })
+        .description,
+    ).toBeUndefined();
 
     const duplicate = await obligee.callTool({
       name: "obligations_announce",

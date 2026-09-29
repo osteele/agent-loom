@@ -553,6 +553,7 @@ agent-mail obligations announce (--obligor <name-or-id> | --user |
                                  --system <name> | --component <name>)
   --kind <claim_release|decision|external_fix|job_completion|review>
   --subject <text>
+  [--description <text>]
   [--option <text> ...]
   [--marker <value> [--marker-kind path|label] [--marker-label <text>] ...]
 ```
@@ -565,6 +566,21 @@ repair, and resolves at read time to the one responsible session — its
 creation notice goes to that session. A role or system obligor cannot be
 contested. An open record with the same obligee, kind, and subject blocks a
 duplicate and names the existing id.
+
+Keep `--subject` a short name for the decision, such as
+`EXP-238: disposition of F1834`. Put the finding that raised it, settled
+constraints, and consequences of each choice in `--description`. The description
+can span lines; no shorter subject-length limit is enforced. Use `--option` for
+the choices themselves and `--marker` for evidence pointers.
+
+For example:
+
+```
+agent-mail obligations announce --user --kind decision \
+  --subject "Review packet format" \
+  --description "A PDF export drops table labels. A structured export preserves them but changes the review workflow. Choose a reproducible packet format." \
+  --option "Tagged PDF" --option "Structured export"
+```
 
 `--option` declares choices the obligor may pick from; they are plain text,
 no ids, and stay editable via `update`. `--marker` names background
@@ -579,16 +595,18 @@ missing downstream, never as an announce error. `--marker-kind` and
 
 ```
 agent-mail obligations update --id <obligation-id>
+  [--description <text> | --clear-description]
   [--option <text> ... | --clear-options]
   [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]
 ```
 
-Amends an open record's presentation fields in place — obligee-only. Options
-are free text and stay editable; markers are typed (path or label) and
-canonicalized at write time against the caller's working directory. `--clear-*`
-empties the field; omitting it preserves it. Subject, kind, and obligor are
-the identity of the ask and never edit — changing them is a withdraw and
-re-announce.
+Amends an open record's presentation fields in place, obligee-only. Description
+is editable multiline context (up to 10,000 characters); `--clear-description`
+removes it. Options remain editable free text; markers are typed (path or label)
+and canonicalized at write time against the caller's working directory.
+`--clear-*` removes the selected field; omitting it preserves it. Subject, kind,
+and obligor identify the ask and never edit; changing them requires withdrawal
+and re-announcement.
 
 ### `obligations comment`
 

@@ -129,6 +129,8 @@ export interface Obligation {
   obligor: Party;
   kind: ObligationKind;
   subject: string;
+  /** Decision context and evidence, separate from the short identifying subject. */
+  description?: string;
   status: ObligationStatus;
   contested: boolean;
   contestedAt?: string;
@@ -276,6 +278,19 @@ function validateText(value: string, name: string): string {
   if (trimmed.length > 500) throw new Error(`${name} is too long`);
   if ([...trimmed].some((character) => character.charCodeAt(0) < 32)) {
     throw new Error(`${name} must not contain control characters`);
+  }
+  return trimmed;
+}
+
+function validateDescription(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("description must not be empty");
+  if (trimmed.length > 10_000) throw new Error("description is too long");
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+    if (code < 32 && code !== 9 && code !== 10) {
+      throw new Error("description must not contain control characters");
+    }
   }
   return trimmed;
 }
@@ -603,6 +618,7 @@ export class ObligationStore {
       obligor: Party;
       kind: ObligationKind;
       subject: string;
+      description?: string;
       markers?: ObligationMarker[];
       options?: string[];
     },
@@ -612,6 +628,10 @@ export class ObligationStore {
       throw new Error(`unknown obligation kind: ${String(input.kind)}`);
     }
     const subject = validateText(input.subject, "subject");
+    const description =
+      input.description === undefined
+        ? undefined
+        : validateDescription(input.description);
     if (input.options !== undefined && input.options.length < 2) {
       throw new Error("options requires at least two choices");
     }
@@ -679,6 +699,7 @@ export class ObligationStore {
         obligor,
         kind: input.kind,
         subject,
+        ...(description ? { description } : {}),
         status: "open",
         contested: false,
         revision: 0,
@@ -783,6 +804,7 @@ export class ObligationStore {
     id: string,
     actor: SessionParty,
     fields: {
+      description?: string | null;
       options?: string[] | null;
       markers?: ObligationMarker[] | null;
     },
@@ -799,6 +821,12 @@ export class ObligationStore {
         );
       }
       const next: Obligation = { ...record };
+      if (fields.description !== undefined) {
+        next.description =
+          fields.description === null
+            ? undefined
+            : validateDescription(fields.description);
+      }
       if (fields.options !== undefined) {
         if (fields.options === null) next.options = undefined;
         else if (fields.options.length < 2) {

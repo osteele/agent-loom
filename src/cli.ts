@@ -22,9 +22,11 @@
  *   agent-mail obligations announce (--obligor <name-or-id> | --user |
  *                                  --system <name> | --component <name>)
  *                                  --kind <kind> --subject <text>
+ *                                  [--description <text>]
  *                                  [--option <text> ...]
  *                                  [--marker <value> [--marker-kind path|label] [--marker-label <text>] ...]
  *   agent-mail obligations update --id <obligation-id>
+ *                                  [--description <text> | --clear-description]
  *                                  [--option <text> ... | --clear-options]
  *                                  [--marker <value> ... | --clear-markers]
  *   agent-mail obligations comment --id <obligation-id> --text <text> [--user]
@@ -2338,6 +2340,7 @@ function describeObligation(obligation: Obligation): string {
     ? ` [adopted from ${obligation.adoptedFrom}]`
     : "";
   const presentation =
+    (obligation.description ? " [description]" : "") +
     (obligation.options
       ? ` [options: ${obligation.options.join(" | ")}]`
       : "") +
@@ -2476,6 +2479,12 @@ function cmdObligations(
     if (typeof flags.subject !== "string" || !flags.subject.trim()) {
       throw new Error("obligations announce requires --subject <text>");
     }
+    if (
+      flags.description !== undefined &&
+      typeof flags.description !== "string"
+    ) {
+      throw new Error("--description requires text");
+    }
     const obligorForms = [
       flags.obligor !== undefined,
       flags.user === true,
@@ -2535,6 +2544,9 @@ function cmdObligations(
         obligor,
         kind,
         subject: flags.subject.trim(),
+        ...(typeof flags.description === "string"
+          ? { description: flags.description }
+          : {}),
         ...(parsedOptions.length ? { options: parsedOptions } : {}),
         ...(parsedMarkers.length ? { markers: parsedMarkers } : {}),
       });
@@ -2576,15 +2588,30 @@ function cmdObligations(
   if (subcommand === "update") {
     if (typeof flags.id !== "string" || !flags.id.trim()) {
       throw new Error(
-        "usage: agent-mail obligations update --id <obligation-id> [--option <text> ... | --clear-options] [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]",
+        "usage: agent-mail obligations update --id <obligation-id> [--description <text> | --clear-description] [--option <text> ... | --clear-options] [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]",
       );
+    }
+    if (
+      flags.description !== undefined &&
+      typeof flags.description !== "string"
+    ) {
+      throw new Error("--description requires text");
     }
     const parsedOptions = repeatedFlagValues(args, "option");
     const parsedMarkers = parseObligationMarkers(args);
     const fields: {
+      description?: string | null;
       options?: string[] | null;
       markers?: ObligationMarker[] | null;
     } = {
+      ...(flags["clear-description"] === true || flags.description !== undefined
+        ? {
+            description:
+              flags["clear-description"] === true
+                ? null
+                : (flags.description as string),
+          }
+        : {}),
       ...(flags["clear-options"] === true || parsedOptions.length
         ? { options: flags["clear-options"] === true ? null : parsedOptions }
         : {}),
@@ -2592,9 +2619,13 @@ function cmdObligations(
         ? { markers: flags["clear-markers"] === true ? null : parsedMarkers }
         : {}),
     };
-    if (!("options" in fields) && !("markers" in fields)) {
+    if (
+      !("description" in fields) &&
+      !("options" in fields) &&
+      !("markers" in fields)
+    ) {
       throw new Error(
-        "obligations update requires at least one of --option, --marker, --clear-options, --clear-markers",
+        "obligations update requires --description, --clear-description, --option, --marker, --clear-options, or --clear-markers",
       );
     }
     const record = obligations.update(
@@ -3974,7 +4005,7 @@ Coordination:
                         --system <name> | --component <name>)
                        --kind claim_release|decision|external_fix|
                               job_completion|review
-                       --subject <text> [--project <dir>]
+                       --subject <text> [--description <text>]
                         Announce that another session, the operator, a
                         system, or a component's owner owes
                         your session an outcome. Announced, not negotiated:
@@ -3986,14 +4017,18 @@ Coordination:
                         --component names the component whose owner owes
                         the repair, and its notice goes to the resolved
                         owner. A role or system obligor cannot contest.
+                        Keep the subject a short decision name; put findings,
+                        settled constraints, and consequences in description.
   obligations update --id <obligation-id>
+                       [--description <text> | --clear-description]
                        [--option <text> ... | --clear-options]
                        [--marker <value> [--marker-kind path|label]
                         [--marker-label <text>] ... | --clear-markers]
                         Amend an open record's presentation fields in place.
-                        Obligee-only. Options are free text and stay editable;
-                        markers are typed (path or label) and canonicalized
-                        at write time. Subject, kind, and obligor never edit.
+                        Obligee-only. Description is multiline decision context;
+                        options are editable free text; markers are typed (path
+                        or label) and canonicalized at write time. Subject,
+                        kind, and obligor never edit.
   obligations comment --id <obligation-id> --text <text> [--user]
                         Append a note to an open record. Either end or the
                         operator may comment; comments are append-only and
