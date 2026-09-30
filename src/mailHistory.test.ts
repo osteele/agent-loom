@@ -12,7 +12,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { projectSessionMail } from "./mailHistory.ts";
+import {
+  type SessionMailHistory,
+  mailHistoryPoller,
+  projectSessionMail,
+} from "./mailHistory.ts";
 import { projectSlug } from "./paths.ts";
 import type { DeliveryReceipt, StoredMessage } from "./spool.ts";
 
@@ -318,4 +322,63 @@ test("viewing an empty home creates no mail state and refuses implicit selectors
       .status,
   ).toBe(1);
   expect(diskState(home)).toEqual(before);
+});
+
+test("the history poller reads the archive only when its inputs change", () => {
+  let stamp = "a";
+  let reads = 0;
+  const history = (): SessionMailHistory => {
+    reads++;
+    return {
+      kind: "session_mail_history",
+      version: 1,
+      project: "/projects/a",
+      sessionId: "owner",
+      generatedAt: reads,
+      messages: [],
+    };
+  };
+  const poll = mailHistoryPoller("/projects/a", "owner", history, () => stamp);
+  expect(poll()?.generatedAt).toBe(1);
+  for (let tick = 0; tick < 5; tick++) expect(poll()).toBeUndefined();
+  expect(reads).toBe(1);
+  stamp = "b";
+  expect(poll()?.generatedAt).toBe(2);
+  expect(poll()).toBeUndefined();
+  expect(reads).toBe(2);
+});
+
+test("history input stamps change on a spool or receipt append and not otherwise", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-stamps-")));
+  roots.push(root);
+  const home = join(root, "home");
+  const state = join(home, ".claude", "agent-mail");
+  for (const name of ["inbox", "receipts"])
+    mkdirSync(join(state, name), { recursive: true });
+  const code = `
+    import { appendFileSync, writeFileSync } from "node:fs";
+    import { join } from "node:path";
+    import { mailHistoryInputs } from ${JSON.stringify(join(import.meta.dir, "mailHistory.ts"))};
+    const state = ${JSON.stringify(state)};
+    const inbox = join(state, "inbox", "p.jsonl");
+    const receipts = join(state, "receipts", "p.jsonl");
+    writeFileSync(inbox, "{}\\n");
+    writeFileSync(receipts, "{}\\n");
+    const a = mailHistoryInputs();
+    const b = mailHistoryInputs();
+    appendFileSync(inbox, "{}\\n");
+    const c = mailHistoryInputs();
+    appendFileSync(receipts, "{}\\n");
+    const d = mailHistoryInputs();
+    writeFileSync(join(state, "unrelated.json"), "{}");
+    const e = mailHistoryInputs();
+    console.log(JSON.stringify([a === b, b === c, c === d, d === e]));
+  `;
+  const result = spawnSync(process.execPath, ["-e", code], {
+    env: { ...process.env, HOME: home },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toEqual([true, false, false, true]);
 });

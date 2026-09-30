@@ -2,6 +2,7 @@ import type { Key } from "node:readline";
 import {
   type SessionMailHistory,
   type SessionMailMessage,
+  mailHistoryPoller,
   readSessionMailHistory,
 } from "./mailHistory.ts";
 import {
@@ -143,18 +144,25 @@ export class MailTimeline {
 }
 
 export function runMailTui(options: WorkTuiOptions): void {
-  const history = readSessionMailHistory(options.project, options.sessionId);
   if (options.once || !process.stdin.isTTY || !process.stdout.isTTY) {
+    const history = readSessionMailHistory(options.project, options.sessionId);
     process.stdout.write(`${formatMailHistory(history)}\n`);
     return;
   }
-  const timeline = new MailTimeline(history);
+  // The pane stays open for the life of every agent session, so an idle tick
+  // must cost a directory stat, not an archive read.
+  const poll = mailHistoryPoller(options.project, options.sessionId);
+  const initial = poll();
+  if (!initial)
+    throw new Error("mail history poller returned no first snapshot");
+  const timeline = new MailTimeline(initial);
   runReadOnlyTerminal({
     label: "mail tui",
     refresh() {
-      timeline.replace(
-        readSessionMailHistory(options.project, options.sessionId),
-      );
+      const history = poll();
+      if (!history) return false;
+      timeline.replace(history);
+      return true;
     },
     render: (columns, height) => timeline.render(columns, height),
     key: (key, height) => timeline.key(key, height),

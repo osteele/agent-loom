@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop `mail tui` from burning about half a core while idle. It re-read and
+  re-parsed the whole message archive and receipt log every 2 seconds; it now
+  rebuilds only when a spool or receipt log changed, and a rebuild resolves each
+  project path once instead of once per message and receipt.
 - Stop the status line naming a session that has no registered channel server.
   Peers sending to such a name got "no live recipient" while the status line
   showed the session as reachable. It now prints nothing (`--json`: `null`), and

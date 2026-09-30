@@ -347,7 +347,8 @@ export function wrapWorkLines(lines: string[], columns: number): string[] {
 /** Shared read-only terminal lifecycle. Views own their projection and viewport. */
 export function runReadOnlyTerminal(view: {
   label: string;
-  refresh: () => void;
+  /** Returns false when nothing changed, so the timer skips the redraw. */
+  refresh: () => boolean;
   render: (
     columns: number,
     height: number,
@@ -440,7 +441,7 @@ export function runReadOnlyTerminal(view: {
     if (cleaned) return;
     timer = setInterval(() => {
       try {
-        view.refresh();
+        if (!view.refresh()) return;
         redraw();
       } catch (error) {
         fail(error);
@@ -491,6 +492,7 @@ export function runWorkTui(options: WorkTuiOptions): void {
           ? Math.min(selected, Math.max(0, snapshot.items.length - 1))
           : retained;
       if (snapshot.items[selected]?.lease.id !== id) offset = 0;
+      return true;
     },
     render(columns, height) {
       const content = snapshotHeader(snapshot);

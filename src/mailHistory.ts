@@ -1,6 +1,7 @@
 /** Historical attribution uses persisted sender, target and receipt evidence only. */
-import { isAbsolute } from "node:path";
-import { canonicalProject } from "./paths.ts";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import { INBOX_DIR, RECEIPTS_DIR, canonicalProject } from "./paths.ts";
 import {
   type DeliveryReceipt,
   type StoredMessage,
@@ -32,8 +33,28 @@ export interface SessionMailHistory {
   messages: SessionMailMessage[];
 }
 
-function sameProject(value: string | undefined, project: string): boolean {
-  return !!value && isAbsolute(value) && canonicalProject(value) === project;
+type Canonicalize = (project: string) => string;
+
+/** canonicalProject is a realpath syscall. A history pass asks about the same
+ * dozen paths once per message and receipt, so it resolves each path once. */
+function memoCanonical(): Canonicalize {
+  const cache = new Map<string, string>();
+  return (project) => {
+    let canonical = cache.get(project);
+    if (canonical === undefined) {
+      canonical = canonicalProject(project);
+      cache.set(project, canonical);
+    }
+    return canonical;
+  };
+}
+
+function sameProject(
+  canon: Canonicalize,
+  value: string | undefined,
+  project: string,
+): boolean {
+  return !!value && isAbsolute(value) && canon(value) === project;
 }
 
 /** Directed intent is enough. Broadcasts require exact per-session receipt evidence,
@@ -49,7 +70,8 @@ export function projectSessionMail(
     throw new Error(
       "Mail history requires an exact session and absolute project",
     );
-  const canonical = canonicalProject(project);
+  const canon = memoCanonical();
+  const canonical = canon(project);
   const recipientsByMessage = new Map<string, Set<string>>();
   for (const [mailbox, receipts] of receiptsByProject) {
     for (const receipt of receipts) {
@@ -62,7 +84,7 @@ export function projectSessionMail(
           typeof receipt.sessionId !== "string")
       )
         throw new Error(`Invalid receipt in ${mailbox}`);
-      if (receipt.sessionId && sameProject(receipt.project, mailbox)) {
+      if (receipt.sessionId && sameProject(canon, receipt.project, mailbox)) {
         const key = JSON.stringify([mailbox, receipt.messageId]);
         const recipients = recipientsByMessage.get(key) ?? new Set<string>();
         recipients.add(receipt.sessionId);
@@ -92,7 +114,7 @@ export function projectSessionMail(
     )
       throw new Error("Invalid message in mail history");
     if (message.delivery === "audit") continue;
-    const mailbox = canonicalProject(message.project);
+    const mailbox = canon(message.project);
     const senderSessionId =
       message.origin?.sessionId ?? message.meta?.sessionId ?? null;
     if (senderSessionId !== null && typeof senderSessionId !== "string")
@@ -104,7 +126,7 @@ export function projectSessionMail(
     if (directed) recipients.add(directed);
     const outgoing =
       senderSessionId === sessionId &&
-      sameProject(message.meta?.fromProject ?? message.from, canonical);
+      sameProject(canon, message.meta?.fromProject ?? message.from, canonical);
     const incoming =
       mailbox === canonical &&
       (directed
@@ -155,10 +177,11 @@ export function readSessionMailHistory(
 ): SessionMailHistory {
   const messages = readAllMessages(true);
   const receipts = new Map<string, DeliveryReceipt[]>();
+  const canon = memoCanonical();
   for (const message of messages) {
     if (typeof message.project !== "string" || !isAbsolute(message.project))
       throw new Error("Invalid project in mail history");
-    const mailbox = canonicalProject(message.project);
+    const mailbox = canon(message.project);
     if (!receipts.has(mailbox))
       receipts.set(mailbox, readReceipts(mailbox, undefined, true));
   }
@@ -169,4 +192,40 @@ export function readSessionMailHistory(
     receipts,
     generatedAt,
   );
+}
+
+function fileStamps(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort()
+    .map((name) => {
+      const stat = statSync(join(dir, name));
+      return `${name}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    });
+}
+
+/** Identity of every file readSessionMailHistory derives from: the message
+ * spools and the receipt logs. Equal stamps mean an identical history, so a
+ * viewer that polls can skip the rebuild, which reads the whole archive. */
+export function mailHistoryInputs(): string {
+  return JSON.stringify([fileStamps(INBOX_DIR), fileStamps(RECEIPTS_DIR)]);
+}
+
+/** A poller that rebuilds the history only when its inputs changed, and
+ * returns undefined otherwise. */
+export function mailHistoryPoller(
+  project: string,
+  sessionId: string,
+  read: typeof readSessionMailHistory = readSessionMailHistory,
+  inputs: () => string = mailHistoryInputs,
+): () => SessionMailHistory | undefined {
+  let last: string | undefined;
+  return () => {
+    const current = inputs();
+    if (current === last) return undefined;
+    const history = read(project, sessionId);
+    last = current;
+    return history;
+  };
 }
