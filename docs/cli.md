@@ -531,6 +531,37 @@ Releases responsibility for a lease. Releasing a research-plan lease also
 releases that plan's path claims and records the selected outcome. Omitting the
 outcome records lease loss.
 
+## Issue-ledger hooks
+
+### `issues watcher-token`
+
+```
+agent-mail issues watcher-token
+```
+
+Configure with `issues hook set watcher 'agent-mail issues watcher-token'`.
+Prints `agent-mail:<session-id>` and exits 0 when the caller has a live
+registration whose host process is an ancestor (ADR 0014). Otherwise prints
+nothing and exits 0; an inherited environment ID alone is not proof.
+
+### `issues event`
+
+```
+agent-mail issues event
+```
+
+Configure with `issues hook set event 'agent-mail issues event'`. Reads one
+`issue-ledger-event/v1` JSON document from stdin. Invalid JSON or schema exits
+2 with a diagnostic. Reported, recurred, and reopened issues notify the
+component owner resolved from `component_path` (or the component name), with
+id, title, severity, and `issues show <id>`. Closed issues notify each
+`agent-mail:` watcher with the close reason; recurred and reopened also notify
+watchers. Sighted, noted, watched, and unwatched send no notices. Other token
+prefixes are ignored. Unresolved owners and non-live watchers are diagnosed,
+never replaced by a broadcast. Valid events exit 0 even when recipients or the
+daemon are unavailable. Every valid event requests an early ledger snapshot
+refresh from the daemon; a stopped daemon will refresh on its next start.
+
 ## Obligations
 
 Obligations are machine-global records of who owes whom a specific outcome —

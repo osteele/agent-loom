@@ -34,6 +34,7 @@
  *   agent-mail obligations contest --id <obligation-id> --reason <text> [--user]
  *   agent-mail obligations adopt --predecessor <id> (--resume-id <id> | --authority <text> --reason <text>)
  *   agent-mail obligations owed
+ *   agent-mail issues watcher-token | event
  *
  * Dashboards:
  *   agent-mail dashboard [--port N] [--open] [--no-tui]
@@ -128,9 +129,12 @@ import {
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
 } from "./integrations.ts";
+import { issueWatcherSessions, parseIssueLedgerEvent } from "./issueEvents.ts";
 import {
+  AGENT_MAIL_WATCHER_PREFIX,
   currentLedgerObligations,
   describeLedgerObligation,
+  ledgerIssueOwnerRole,
   ledgerObligationRefusal,
 } from "./ledgerIssues.ts";
 import { readSessionMailHistory } from "./mailHistory.ts";
@@ -141,7 +145,10 @@ import { installMcpStartupDiagnostics } from "./mcpDiagnostics.ts";
 // componentProject for creation-notice delivery. Importing this module is
 // what wires the singleton in the CLI process; see its own comment for the
 // import-cycle reasoning.
-import { componentProject } from "./obligationResolution.ts";
+import {
+  componentProject,
+  resolveObligationRole,
+} from "./obligationResolution.ts";
 import {
   type Obligation,
   ObligationDuplicateError,
@@ -1023,6 +1030,153 @@ async function cmdNotify(
         );
         break;
     }
+  }
+}
+
+/** The watcher command runs under issues' shell, not under a daemon identity.
+ * Only the CLI host-process proof can mint a token for that shell. */
+function cmdIssuesWatcherToken(): void {
+  const caller = callingSession();
+  if (caller) console.log(`${AGENT_MAIL_WATCHER_PREFIX}${caller.sessionId}`);
+}
+
+/** Keep issue-ledger messages on the same guarded daemon/direct-spool delivery
+ * path as notify. Resolve an exact live mailbox before either route: unlike a
+ * general notify, losing this recipient must never become a broadcast. */
+async function sendIssueNotice(
+  sessionId: string,
+  message: string,
+): Promise<void> {
+  let recipient: ReturnType<typeof resolveRecipient>;
+  try {
+    recipient = resolveRecipient(process.cwd(), sessionId, true);
+  } catch (error) {
+    console.error(
+      `issue-ledger: watcher/owner session ${sessionId} skipped: ${String(error)}`,
+    );
+    return;
+  }
+  const config = loadConfig();
+  const attempt = withAttemptKey({
+    ts: new Date().toISOString(),
+    from: "issue-ledger",
+    project: recipient.project,
+    message,
+    origin: { kind: "automation", transport: "cli", authority: "untrusted" },
+    meta: {
+      toSession: sessionId,
+      sourceProject: recipient.project,
+      fromProject: recipient.project,
+      fromCwd: canonicalProject(process.cwd()),
+    },
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${config.port}/notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(attempt),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (response.ok) {
+      const outcome = classifyFallback(
+        (await response.json()) as AdmissionResult,
+      );
+      if (outcome.kind === "rate_limited")
+        console.error(`issue-ledger: notice to ${sessionId} rate limited`);
+      return;
+    }
+    // A live recipient can go away between local resolution and daemon
+    // admission. Never fall back after the daemon has refused that address.
+    if (response.status < 500) {
+      console.error(
+        `issue-ledger: notice to ${sessionId} skipped: HTTP ${response.status}`,
+      );
+      return;
+    }
+  } catch {
+    // No usable daemon answer; the attempt key deduplicates a lost reply.
+  }
+  try {
+    const stillLive = resolveRecipient(process.cwd(), sessionId, true);
+    if (stillLive.project !== recipient.project) {
+      console.error(
+        `issue-ledger: session ${sessionId} moved mailboxes; notice skipped`,
+      );
+      return;
+    }
+    const outcome = classifyFallback(
+      appendMessageGuarded(attempt, {
+        duplicateWindowSeconds: config.duplicateWindowSeconds,
+        messageRateLimitPerMinute: config.messageRateLimitPerMinute,
+        defaultMessageTtlSeconds: config.defaultMessageTtlSeconds,
+      }),
+    );
+    if (outcome.kind === "rate_limited")
+      console.error(`issue-ledger: notice to ${sessionId} rate limited`);
+  } catch (error) {
+    console.error(
+      `issue-ledger: session ${sessionId} skipped: ${String(error)}`,
+    );
+  }
+}
+
+async function cmdIssuesEvent(): Promise<void> {
+  let event: ReturnType<typeof parseIssueLedgerEvent>;
+  try {
+    event = parseIssueLedgerEvent(await readStdinText());
+  } catch (error) {
+    console.error(`issue-ledger: ${String(error)}`);
+    process.exitCode = 2;
+    return;
+  }
+  const { issue } = event;
+  const ownerEvents = ["reported", "recurred", "reopened"];
+  if (ownerEvents.includes(event.event)) {
+    const role = ledgerIssueOwnerRole({
+      component: issue.component,
+      componentPath: issue.component_path,
+    });
+    const owner = resolveObligationRole(role);
+    if (owner) {
+      await sendIssueNotice(
+        owner,
+        `Issue ${issue.id}: ${issue.title} (severity: ${issue.severity ?? "unspecified"}). Fix needed; see issues show ${issue.id}`,
+      );
+    } else {
+      const project = componentProject(role.component);
+      const reason = project
+        ? describeWorkspaceOwner(resolveWorkspaceOwner(project))
+        : issue.component_path
+          ? `no resolvable project for component path ${issue.component_path}`
+          : `no component path and component "${issue.component}" has no unique project (missing or ambiguous)`;
+      console.error(
+        `issue-ledger: issue ${issue.id} owner unresolved: ${reason}`,
+      );
+    }
+  }
+  if (["closed", "recurred", "reopened"].includes(event.event)) {
+    const reason = issue.close_reason ?? "unspecified";
+    for (const sessionId of issueWatcherSessions(issue.watchers)) {
+      await sendIssueNotice(
+        sessionId,
+        event.event === "closed"
+          ? `Issue ${issue.id}: ${issue.title} closed (reason: ${reason}). See issues show ${issue.id}`
+          : `Issue ${issue.id}: ${issue.title} ${event.event}. See issues show ${issue.id}`,
+      );
+    }
+  }
+  // Event changes are committed before this hook. The daemon owns the snapshot
+  // writer; request an early tick without delaying or failing an offline hook.
+  try {
+    await fetch(
+      `http://127.0.0.1:${loadConfig().port}/api/v1/ledger-issues/refresh`,
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(500),
+      },
+    );
+  } catch {
+    // The daemon is optional; the periodic refresh will cover a later start.
   }
 }
 
@@ -4117,6 +4271,12 @@ Coordination:
   obligations owed      Open records naming the operator as obligor, across
                         every project — what you owe, in one place
 
+Issue-ledger hooks:
+  issues watcher-token    Print the caller's agent-mail: watcher token, or
+                          nothing without a proved host-process match
+  issues event            Read one issue-ledger-event/v1 JSON document from
+                          stdin, notify exact recipients, and refresh the daemon
+
 Dashboards:
   state [--project <dir>] [--no-sync] [--json]
                         Versioned aggregate state; does not change mail or
@@ -4344,6 +4504,16 @@ switch (cmd) {
     break;
   case "obligations":
     cmdObligations(flags, rest);
+    break;
+  case "issues":
+    if (rest.length === 1 && rest[0] === "watcher-token") {
+      cmdIssuesWatcherToken();
+    } else if (rest.length === 1 && rest[0] === "event") {
+      await cmdIssuesEvent();
+    } else {
+      console.error("usage: agent-mail issues watcher-token | event");
+      process.exitCode = 1;
+    }
     break;
   case "start":
     await cmdStart();

@@ -11,6 +11,7 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | `GET /api/v1/state?project=<path>` | schema-v1 aggregate state; preserves mail and coordination while updating a disposable message index; project is optional |
 | `GET /api/state` | compatibility alias for `/api/v1/state` |
 | `POST /notify` | `{project, message, from?, meta?, idempotencyKey?, ttlSeconds?, slackEcho?}` → guarded spool + optional Slack echo |
+| `POST /api/v1/ledger-issues/refresh` | Request an early `issues list --json` snapshot tick; responds immediately, does not wait for the subprocess. Concurrent refreshes coalesce. |
 | `POST /read` | `{project, ids}` or `{project, all:true}` → mark messages read |
 | `GET /health` | liveness + config summary |
 | `GET /registry` | live channel-server registrations |

@@ -450,6 +450,9 @@ close, note, or unwatch the issue with `issues` instead. The rows are as
 fresh as the last daemon refresh and absent (with a diagnostic line) when the
 daemon or `issues` is unavailable.
 
+Configure issue-ledger's watcher hook with `issues hook set watcher 'agent-mail issues watcher-token'` to record the reporting session when its host identity is proved.
+Configure its event hook with `issues hook set event 'agent-mail issues event'` to notify the component owner and watchers and request an early daemon snapshot refresh.
+
 The `obligations_*` MCP tools and the `agent-mail obligations` subcommands
 share one store. `announce` creates a record with a short subject; a
 Markdown `--description` carries the context, `--option` declares the choices

@@ -3,10 +3,11 @@
  *
  * Every open issue in the ledger IS an obligation — the owner of the issue's
  * component owes the fix — so agent-mail stores nothing for it: the ledger is
- * the record, and this module holds only the daemon's raw read of it. One
- * `issues list --json` per minute lands here; views, the status line, and
- * `state --json` read this file and never spawn `issues` (the status line's
- * budget is 300ms — see docs/status-line.md).
+ * the record, and this module holds only the daemon's raw read of it. The
+ * daemon's periodic `issues list --json` refresh lands here, as does an early
+ * refresh an event hook requests; views, the status line, and `state --json`
+ * read this file and never spawn `issues` (the status line's budget is
+ * 300ms — see docs/status-line.md).
  *
  * The same two invariants as `weftJobs.ts`, for the same reasons:
  *
@@ -23,7 +24,7 @@
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import type { ObligationRoleResolver } from "./obligations.ts";
+import type { ObligationRoleResolver, Role } from "./obligations.ts";
 import { LEDGER_ISSUES_SNAPSHOT_PATH } from "./paths.ts";
 import { formatAge } from "./sessions.ts";
 
@@ -224,6 +225,18 @@ export interface LedgerObligation {
   stale: boolean;
 }
 
+/** The component-owner role used by both the read-only projection and the
+ * ledger event hook. A path takes precedence over a component name. */
+export function ledgerIssueOwnerRole(issue: {
+  component: string;
+  componentPath?: string;
+}): Extract<Role, { kind: "component_owner" }> {
+  return {
+    kind: "component_owner",
+    component: issue.componentPath ?? issue.component,
+  };
+}
+
 /** The projection, a pure function of (snapshot, now, role resolver) so it
  * is unit-testable from fixtures. */
 export function projectLedgerObligations(
@@ -234,10 +247,7 @@ export function projectLedgerObligations(
   const stale = nowMs - snapshot.observedAt > LEDGER_ISSUES_SNAPSHOT_TTL_MS;
   return snapshot.issues
     .map((issue) => {
-      const role = {
-        kind: "component_owner" as const,
-        component: issue.componentPath ?? issue.component,
-      };
+      const role = ledgerIssueOwnerRole(issue);
       const obligees = [
         ...new Set(
           issue.watchers

@@ -164,8 +164,18 @@ entity Obligation {
 -- the ledger is the record, and agent-mail holds only the raw rows of its
 -- last read. The projection is a pure function of (snapshot, now, role
 -- resolution); it re-derives on every read, so a reopened issue reappears
--- because the ledger lists it as open again — there is nothing to
--- re-announce.
+-- because the ledger lists it as open again — there is no stored record to
+-- re-announce. Event notices are separate from that projection:
+-- The watcher hook prints agent-mail:<session-id> only for a caller with a
+-- proved registered host-process ancestor; otherwise it prints nothing.
+-- Reported, recurred, and reopened send one notice to the component_owner
+-- resolved with component_path or else the component name, naming id, title,
+-- severity, and `issues show <id>`. Unresolved owners are diagnosed, never
+-- guessed. Closed sends each agent-mail: watcher the issue and close reason;
+-- recurred and reopened also notify watchers. Foreign tokens are ignored,
+-- and unregistered or offline watcher sessions are diagnosed and skipped.
+-- Sighted, noted, watched, and unwatched send no notices. Every valid event
+-- requests an early daemon snapshot refresh; an absent daemon is not an error.
 ------------------------------------------------------------
 
 -- Derived, never stored. id is namespaced so it can never collide with a

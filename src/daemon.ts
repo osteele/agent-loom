@@ -4,6 +4,7 @@
  * Endpoints (127.0.0.1 only):
  *   POST /notify   {project, from, message, meta?} -> append spool, echo Slack
  *   POST /read     {project, ids?} or {project, all:true} -> mark read
+ *   POST /api/v1/ledger-issues/refresh  schedule an early ledger snapshot tick
  *   GET  /health   daemon liveness + config summary
  *   GET  /          persistent read-only dashboard
  *   GET  /api/state dashboard JSON
@@ -171,6 +172,14 @@ const server = await serve({
         port: config.port,
         slack: config.slackWebhook ? config.slackEcho : "unconfigured",
       });
+    }
+
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/v1/ledger-issues/refresh"
+    ) {
+      tickLedgerIssues();
+      return json({ ok: true });
     }
 
     if (req.method === "GET" && url.pathname === "/registry") {
@@ -693,10 +702,10 @@ let lastWeftTotal = -1;
  * An open issue IS an obligation (specs/obligations.allium): the owner of the
  * issue's component owes the fix, and the ledger is the record — agent-mail
  * stores nothing for it. Views read only the snapshot written here, so this
- * tick owns the one `issues list --json` spawn, on its own slow timer rather
- * than the 10s presence tick, exactly like the weft refreshers above. The
+ * tick owns the `issues list --json` spawn, on its own slow timer or when
+ * asked by a committed ledger event, never on the 10s presence tick. The
  * bounds, in order:
- *   - at most one spawn per window, one diagnostic per five-minute window;
+ *   - at most one concurrent spawn, one diagnostic per five-minute window;
  *   - a 15s timeout on the spawn;
  *   - open rows only are kept (the listing is open issues only; a row
  *     carrying another status is excluded at parse time);
