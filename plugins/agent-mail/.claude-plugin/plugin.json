@@ -1,6 +1,6 @@
 {
   "name": "agent-mail",
-  "description": "Local mail bus channel: pushes agent-mail inbox messages into the session as <channel> events, and exposes send_mail/check_inbox/list_sessions/mark_read tools.",
+  "description": "Local mail and coordination between coding-agent sessions: pushes agent-mail inbox messages into the session as <channel> events, and exposes tools for mail, path claims, work leases, experiment numbers, and obligations.",
   "version": "0.1.0",
   "author": {
     "name": "Oliver Steele"

@@ -8,8 +8,13 @@ copy text from one session and paste it into another.
 
 agent-mail is a local message bus for those sessions. A message lands in a
 project's on-disk inbox (its spool) whether or not anyone is listening. A
-a running session can receive it in context when its push integration is
+running session can receive it in context when its push integration is
 enabled.
+
+The same sessions also need to stay out of each other's way and keep track of
+what they are waiting for. agent-mail records that too: who is editing which
+files, who is responsible for which piece of work, and who owes whom a decision,
+a fix, or a finished job.
 
 ```mermaid
 graph LR
@@ -36,6 +41,11 @@ Sessions address each other by stable names across project directories.
 - **Advisory coordination.** Path claims keep two agents from editing the
   same files, work leases record who is responsible for a logical unit, and
   lab-notebook experiment numbers (`EXP-NNN`) allocate atomically.
+- **Obligations.** A session records that someone owes it an outcome —
+  another session, a component's owner, you, or a system such as weft or
+  [issue-ledger](#related-projects). Records owed by a system settle on that
+  system's own evidence, and `obligations owed` lists everything open that
+  names you, across every project.
 - **Inspectable traffic.** Unread state, threads, Slack echo, and web and
   Slack dashboards.
 
@@ -346,7 +356,7 @@ spool after delivery.
 
 ## Coordination
 
-Three primitives, all advisory, and all filesystem transactions rather than
+Four primitives, all advisory, and all filesystem transactions rather than
 daemon state:
 
 - **Path claims** reserve names before you edit them. Existing targets use
@@ -359,6 +369,9 @@ daemon state:
   as executing a research plan. A lease does not block unrelated file edits.
 - **Experiment numbers** (`EXP-NNN`) are allocated atomically against a lab
   notebook, counting both existing files and outstanding reservations.
+- **Obligations** record who owes whom a specific outcome. Unlike the other
+  three they are machine-global rather than per-project;
+  [Obligations](#obligations) below covers them.
 
 The daemon reminds a live session when a claim reaches a condition or age
 milestone: a materialized experiment reservation after 15 minutes, any claim
@@ -366,7 +379,7 @@ after 2 and 8 hours, and then daily starting at 24 hours. Reminders are
 addressed only to the exact owning session. Work leases carry explicit activity
 instead.
 
-`list_coordination` shows all three together, with owners and conditions.
+`list_coordination` shows all four together, with owners and conditions.
 `recover_coordination` releases a record after revalidating its lifecycle.
 Forced recovery requires user-supplied `authority` and `reason` values;
 agent-mail records both in an audit log.
@@ -399,24 +412,58 @@ and the equivalent MCP metadata.
 ### Obligations
 
 An obligation is a session's public record that someone owes it a specific
-outcome: another session, or you, the human operator. They are announced, not
-negotiated — the announcing session creates the record, the obligee closes it,
-and the obligor can contest it (a tag, never a closure) but cannot confirm or
-delete it. Announcing to a session sends exactly one notice; your records are
-never pushed anywhere, because the owed view is how you see them.
+outcome. It is announced, not negotiated: the waiting session (the obligee)
+creates the record and closes it; the obligor can contest it — a tag, never a
+closure — but cannot confirm or delete it.
 
-The `obligations` tools (MCP) and `agent-mail obligations` subcommands
-(announce, close, withdraw, contest, adopt, clear, list, owed) share one store:
+The obligor is one of:
 
-- `--kind claim_release` records settle automatically when the referenced
-  claim releases — deterministic evidence, no confirmation needed. `decision`
-  and `external_fix` records close when the obligee reports the outcome.
+- **a session**, which must be live, and receives exactly one notice;
+- **you, the human operator** — never pushed anywhere; the `owed` view is how
+  you see these;
+- **a system** with its own events: `claims`, `weft`, or `issue-ledger`;
+- **a role**, resolved to one responsible session when it is read: a
+  component's owner (see `project_owner`), a research plan's current executor,
+  or an experiment's claimer.
+
+A record owed by a system or a role cannot be contested, because evidence
+settles it rather than anyone's say-so:
+
+| Kind | Settles when |
+|---|---|
+| `claim_release` | the referenced claim releases, inside the release transaction |
+| `job_completion` | weft reports the job finished, through `agent-mail notify` |
+| `external_fix` | the issue-ledger issue named as its subject leaves the open state; the daemon observes this through `issues list --json` |
+| `decision`, `review` | the obligee closes it with the outcome |
+
+The `obligations_*` MCP tools and the `agent-mail obligations` subcommands
+share one store. `announce` creates a record with a short subject; a
+Markdown `--description` carries the context, `--option` declares the choices
+for a decision, and `--marker` points at evidence (a path, or a label resolved
+against the obligee's lab notebook). `update` amends those presentation fields,
+and `comment` appends a note from either end. `close` and `withdraw` end a
+record as its obligee; `contest` tags it as its obligor.
+
+```bash
+agent-mail obligations announce --user --kind decision \
+  --subject "Review packet format" \
+  --description '**Finding:** A PDF export drops table labels.' \
+  --option 'Tagged **PDF**' --option 'Structured export (`.json`)'
+
+agent-mail obligations announce --component ~/code/research-tools/weft \
+  --kind external_fix --subject <issue id>
+```
+
 - `owed` lists everything open that names you as obligor, across every
-  project. That view is the feature: what you owe, in one place.
+  project. That view is the feature: what you owe, in one place. `state
+  --json` and the status line carry the same counts per session.
 - `adopt` moves an offline session's open obligations to its successor, proven
   by the host resume id or by declared operator authority.
 - `clear` withdraws a record on declared operator authority — recorded, never
   verified — typically for a contested record the obligee will not withdraw.
+
+[docs/cli.md](docs/cli.md#obligations) documents every subcommand, and
+`specs/obligations.allium` is the full contract.
 
 ## Configuration
 
@@ -696,6 +743,12 @@ mail carries something one session needs to tell another now, while lore is
 where a session records what it worked out for whoever comes next. If you
 find yourself sending the same explanation to a third agent, that is the
 boundary.
+
+[issue-ledger](https://github.com/osteele/issue-ledger) is a local issue
+ledger shared across projects, with its `issues` CLI. An `external_fix`
+obligation whose subject is an issue id settles when that issue closes. The
+integration is optional: without the `issues` binary on PATH, the daemon logs
+once and such references stay unverified.
 
 Both sit in a wider set of agent infrastructure, listed at
 [osteele.com/software/agent-tools](https://osteele.com/software/agent-tools).
