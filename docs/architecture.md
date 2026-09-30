@@ -480,15 +480,28 @@ agent-mail coordination transfers [--project <dir> | --all] [--json]
 
 Obligations are the fourth coordination primitive: machine-global records of
 who owes whom a specific outcome, spanning projects. Each end is a party —
-a session, the human operator, a wired system (`weft`, `issue-ledger`), or
+a session, the human operator, a wired system (`weft`, `claims`), or
 a role (component owner, plan executor, experiment claimer) that resolves
 exactly to one responsible session. The model is announced, not negotiated:
 the obligee creates the record and closes it, the obligor can contest but
 never confirm, and records whose obligor cannot act settle by evidence — a
 claim release settles inside the release transaction, a system event
 settles through its versioned surface. There is no time-based expiry, only
-liveness and reference health; a dead session's waits move to a successor
+liveness; a dead session's waits move to a successor
 by adoption, proven by the host resume id or declared operator authority.
+
+Open issue-ledger issues are obligations without a stored record: the ledger
+is the source of truth, and every open issue is owed by the owner of its
+component. The daemon snapshots `issues list --json` once a minute to
+`~/.claude/agent-mail/ledger-issues.json` (keeping the previous rows and the
+error when a refresh fails), and every view projects the snapshot at read
+time — rows tagged `[issue-ledger]`, marked stale with their age past the
+snapshot TTL, or replaced by one diagnostic line when no snapshot exists.
+Watcher tokens of the form `agent-mail:<session-id>` on an issue name its
+obligees. The projected rows are read-only: the mutating verbs refuse an
+`issue:<id>` and name the ledger's own command (`issues close`, `issues
+note`, `issues unwatch`). A reopened issue reappears on its own — the ledger
+lists it as open again, so there is nothing to re-announce.
 
 `coordination list --all` joins them, `state --json` and the status line
 carry per-session `waiting`/`owed` counts, and `agent-mail obligations`

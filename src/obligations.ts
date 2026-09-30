@@ -5,8 +5,9 @@
  * (a claim release, a system event) settles waits without belief. Parties
  * are sessions, the human operator, systems, and roles. Records are
  * machine-global (they span projects), under one lock, and there is no
- * time-based expiry: liveness and reference health are conditions on open
- * records, never status. */
+ * time-based expiry: liveness is a condition on open records, never a
+ * status. Open issue-ledger issues are obligations too, but projected at
+ * read time (src/ledgerIssues.ts), never stored here. */
 
 import { randomUUID } from "node:crypto";
 import {
@@ -75,7 +76,6 @@ export type ObligationKind =
   | "review";
 export type ObligationStatus = "open" | "satisfied" | "withdrawn";
 export type ClosedBy = "obligee" | "system" | "user_authority";
-export type RefState = "unverified" | "resolves" | "unresolvable";
 
 export interface SessionRef {
   sessionId: string;
@@ -98,7 +98,7 @@ export type Role =
 /** An obligation end. `session` is structurally a SessionRef, so existing
  * call sites that name a session keep working. The human is a single
  * principal on this machine (ADR 0001); a system is a local integration
- * with a versioned event or CLI surface ("weft", "issue-ledger", ...); a
+ * with a versioned event or CLI surface ("weft", "claims", ...); a
  * role names a responsibility rather than a process. */
 export type Party =
   | SessionParty
@@ -178,14 +178,6 @@ export interface ObligationComment {
   text: string;
 }
 
-export interface RefObservation {
-  version: 1;
-  obligationId: string;
-  state: RefState;
-  issueId?: string;
-  observedAt: string;
-}
-
 /** The retained lifetime of a terminal record: thirty days, matching the
  * claims system's released_claim_retention. */
 export const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -246,11 +238,13 @@ const KINDS: readonly ObligationKind[] = [
 
 /** Systems whose settlement hook this repo configures, and therefore the
  * system names a `system` party may use: claims settles in the release
- * transaction, weft through the notify command, issue-ledger through the
- * daemon's ref observer. A system outside this set has no wired settlement
- * hook, so a record waiting on it could never settle by evidence — announce
- * refuses it rather than minting a wait nothing can satisfy. */
-const WIRED_SYSTEMS: readonly string[] = ["claims", "weft", "issue-ledger"];
+ * transaction, weft through the notify command. A system outside this set
+ * has no wired settlement hook, so a record waiting on it could never settle
+ * by evidence — announce refuses it rather than minting a wait nothing can
+ * satisfy. Issue-ledger is deliberately absent: an open issue is already an
+ * obligation by projection (src/ledgerIssues.ts), so there is nothing to
+ * announce against it. */
+const WIRED_SYSTEMS: readonly string[] = ["claims", "weft"];
 
 /** Whether the named system's settlement hook is one this build configures —
  * the PartyResolves answer for a system party. */
@@ -948,8 +942,8 @@ export class ObligationStore {
   }
 
   /** A system event settles the open records waiting on it (EventSettles):
-   * a weft job completion, an issue reaching its fixed state, a review
-   * finishing. Only obligors that cannot close by belief settle this way —
+   * a weft job completion, a review finishing. Only obligors that cannot
+   * close by belief settle this way —
    * a system party matching the event's system, or a role party (whose
    * repair the event reports), whatever system observed it. Session and
    * human obligors settle by belief or authority, never by an event. */
@@ -1176,38 +1170,6 @@ export class ObligationStore {
     return this.readRecord(id);
   }
 
-  /** The daemon re-observes the referenced issue of every open external_fix
-   * obligation; observation never mutates the obligation. */
-  observeRef(
-    obligationId: string,
-    state: RefState,
-    options: ObligationNow & { issueId?: string } = {},
-  ): RefObservation {
-    const record = this.readRecord(obligationId);
-
-    if (!record) {
-      throw new ObligationStateError(`no such obligation: ${obligationId}`);
-    }
-    if (record.status !== "open" || record.kind !== "external_fix") {
-      throw new ObligationStateError(
-        `only open external_fix obligations take ref observations: ${obligationId}`,
-      );
-    }
-    const observation: RefObservation = {
-      version: 1,
-      obligationId,
-      state,
-      ...(options.issueId ? { issueId: options.issueId } : {}),
-      observedAt: options.now ?? new Date().toISOString(),
-    };
-    mkdirSync(join(this.root, "refs"), { recursive: true });
-    const path = join(this.root, "refs", `${obligationId}.json`);
-    const temporary = `${path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(observation, null, 2)}\n`);
-    renameSync(temporary, path);
-    return observation;
-  }
-
   /** Remove expired terminal records without racing with a record update. */
   pruneTerminal(nowMs = Date.now()): number {
     if (!existsSync(this.root)) return 0;
@@ -1222,33 +1184,10 @@ export class ObligationStore {
           continue;
         }
         unlinkSync(join(this.root, `${record.id}.json`));
-        const ref = join(this.root, "refs", `${record.id}.json`);
-        if (existsSync(ref)) unlinkSync(ref);
         removed += 1;
       }
       return removed;
     });
-  }
-
-  latestRef(obligationId: string): RefObservation | undefined {
-    const path = join(this.root, "refs", `${obligationId}.json`);
-    if (!existsSync(path)) return undefined;
-    return JSON.parse(readFileSync(path, "utf8")) as RefObservation;
-  }
-
-  /** Open external_fix obligations whose latest observation is unresolvable
-   * — a diagnostic that must surface, never a silent skip. */
-  unresolvableRefs(): {
-    obligation: Obligation;
-    observation: RefObservation;
-  }[] {
-    return this.listOpen()
-      .filter((o) => o.kind === "external_fix")
-      .map((o) => ({ obligation: o, observation: this.latestRef(o.id) }))
-      .filter((entry) => entry.observation?.state === "unresolvable") as {
-      obligation: Obligation;
-      observation: RefObservation;
-    }[];
   }
 }
 

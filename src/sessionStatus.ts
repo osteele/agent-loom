@@ -1,4 +1,8 @@
 /** Daemon-owned presentation data. Delivery and coordination never read this cache. */
+import {
+  type LedgerObligation,
+  currentLedgerObligations,
+} from "./ledgerIssues.ts";
 import { type Obligation, type Role, obligations } from "./obligations.ts";
 import { canonicalProject } from "./paths.ts";
 import { peersInProject } from "./presence.ts";
@@ -49,11 +53,13 @@ export interface StatusWork {
 /** What one session waits for and what waits on it. Obligations are
  * machine-global, so `humanOwed` is the same number in every session's
  * summary: it is the operator's owed view, not this session's. `roleOwed`
- * counts open records owed by a role party; `unresolvedOwed` counts the
- * role-obligor records whose role resolves to nobody right now (the same
- * number in every summary — an unresolvable role belongs to no session).
- * A role resolving to this session counts toward its `owed`
- * (ResolvedOwedIsComplete). */
+ * counts open records owed by a role party — including projected ledger
+ * obligations, whose obligor is the issue component's owner;
+ * `unresolvedOwed` counts the role-obligor records whose role resolves to
+ * nobody right now (the same number in every summary — an unresolvable role
+ * belongs to no session). A role resolving to this session counts toward its
+ * `owed` (ResolvedOwedIsComplete), and a session watching an issue counts it
+ * toward its `waiting`. */
 export interface ObligationsSummary {
   waiting: number;
   owed: number;
@@ -72,6 +78,7 @@ export function summarizeObligations(
   open: Obligation[],
   sessionId?: string,
   resolveRole?: (role: Role) => string | undefined,
+  ledger: LedgerObligation[] = [],
 ): ObligationsSummary {
   let waiting = 0;
   let owed = 0;
@@ -102,6 +109,20 @@ export function summarizeObligations(
       const resolvedTo = resolveRole?.(obligation.obligor.role);
       if (!resolvedTo) unresolvedOwed++;
       else if (resolvedTo === sessionId) owed++;
+    }
+  }
+  // Projected ledger obligations arrive with the component-owner role already
+  // resolved by the caller, so they need no resolver here. Owed by a role in
+  // every count; the resolved owner session owes it, each watcher session
+  // waits on it.
+  for (const obligation of ledger) {
+    roleOwed++;
+    if (!obligation.ownerSessionId) unresolvedOwed++;
+    if (sessionId === undefined) {
+      waiting++;
+    } else {
+      if (obligation.obligees.includes(sessionId)) waiting++;
+      if (obligation.ownerSessionId === sessionId) owed++;
     }
   }
   return { waiting, owed, humanOwed, roleOwed, unresolvedOwed };
@@ -193,6 +214,9 @@ export function makeSessionStatus(input: {
    * the caller. Optional so existing callers keep compiling; omitting it
    * omits the summary rather than reporting zeros. */
   openObligations?: Obligation[];
+  /** Ledger obligations projected from the daemon's issues snapshot, already
+   * role-resolved. Collected with the same once-per-refresh read. */
+  ledgerObligations?: LedgerObligation[];
   /** Role resolver used while summarizing. Refresh supplies a degrading
    * wrapper: a throw for one foreign record becomes a collected error and
    * an unresolved role, not a lost session status. */
@@ -209,6 +233,7 @@ export function makeSessionStatus(input: {
     jobs,
     running,
     openObligations,
+    ledgerObligations,
     roleSessionId = (role: Role) => obligations.sessionResponsibleFor(role),
     nowMs,
   } = input;
@@ -232,6 +257,7 @@ export function makeSessionStatus(input: {
             openObligations,
             sessionId,
             (role: Role) => roleSessionId(role),
+            ledgerObligations,
           ),
         }
       : {}),
@@ -276,6 +302,24 @@ export class SessionStatusCache {
     } catch (error) {
       errors.push(`session status obligations failed: ${String(error)}`);
     }
+    // A foreign record citing a since-deleted component or plan must degrade
+    // to a collected error and an unresolved role — not take the project's
+    // unread, work, and peer summary down with it.
+    const safeRoleSessionId = (role: Role): string | undefined => {
+      try {
+        return obligations.sessionResponsibleFor(role);
+      } catch (error) {
+        errors.push(
+          `session status obligation resolution failed: ${String(error)}`,
+        );
+        return undefined;
+      }
+    };
+    // The ledger projection reads the daemon's snapshot file, never spawns
+    // `issues`; a missing snapshot simply contributes no rows.
+    const ledgerObligations = openObligations
+      ? currentLedgerObligations(safeRoleSessionId, nowMs).obligations
+      : undefined;
     for (const [project, registrations] of grouped) {
       try {
         const logical = coalesceRegistrations(registrations);
@@ -315,20 +359,8 @@ export class SessionStatusCache {
               jobs,
               running,
               openObligations,
-              // A foreign record citing a since-deleted component or plan
-              // must degrade to a collected error and an unresolved role —
-              // not take the project's unread, work, and peer summary down
-              // with it.
-              roleSessionId: (role: Role) => {
-                try {
-                  return obligations.sessionResponsibleFor(role);
-                } catch (error) {
-                  errors.push(
-                    `session status obligation resolution failed for ${project}: ${String(error)}`,
-                  );
-                  return undefined;
-                }
-              },
+              ledgerObligations,
+              roleSessionId: safeRoleSessionId,
               nowMs,
             }),
           );

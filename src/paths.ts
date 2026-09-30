@@ -9,7 +9,7 @@
  *   claims/<slug>/          experiment-number and path claims
  *   work/<slug>/            exclusive logical-work leases
  *   transfers/              auditable work-lease transfer requests
- *   obligations/            machine-global obligation records + ref observations
+ *   obligations/            machine-global obligation records
  *   presence.json          daemon snapshot of the live registry
  *   processes.json         daemon snapshot of coordination-owner processes
  *   unread-summary.json    daemon snapshot of per-session unread counts
@@ -62,6 +62,13 @@ export const SLACK_DASHBOARD_PATH = join(STATE_DIR, "slack-dashboard.json");
 export const PRESENCE_SNAPSHOT_PATH = join(STATE_DIR, "presence.json");
 export const PROCESS_SNAPSHOT_PATH = join(STATE_DIR, "processes.json");
 export const WEFT_JOBS_SNAPSHOT_PATH = join(STATE_DIR, "weft-jobs.json");
+/** Daemon snapshot of the open issue-ledger issues (`issues list --json`),
+ * the raw input every ledger-obligation view projects from. Same
+ * presentation-cache rules as weft-jobs.json: readers never spawn `issues`. */
+export const LEDGER_ISSUES_SNAPSHOT_PATH = join(
+  STATE_DIR,
+  "ledger-issues.json",
+);
 /** Per-session unread counts the daemon publishes for hook reminders. Same
  * presentation-cache rules as presence.json: never a delivery input. */
 export const UNREAD_SUMMARY_PATH = join(STATE_DIR, "unread-summary.json");

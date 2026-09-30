@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { LedgerObligation } from "./ledgerIssues.ts";
 import { type Obligation, obligations } from "./obligations.ts";
 import {
   PRESENCE_SNAPSHOT_PATH,
@@ -546,6 +547,46 @@ test("the obligations summary is absent without records and zeros with an empty 
     roleOwed: 0,
     unresolvedOwed: 0,
   });
+});
+
+// The per-session summary behind `state --json`, the status line, and the
+// daemon cache is built here, not in summarizeObligations alone: a ledger
+// issue must reach it through makeSessionStatus.
+test("the session summary counts a ledger issue for its owner and its watcher", () => {
+  const owner = registration("ledger-owner");
+  const ledger: LedgerObligation[] = [
+    {
+      id: "issue:am17",
+      kind: "external_fix",
+      subject: "am17: fix the retry loop",
+      component: "agent-mail",
+      obligorRole: { kind: "component_owner", component: owner.cwd },
+      ownerSessionId: "ledger-owner",
+      obligees: ["ledger-watcher"],
+      source: "issue-ledger",
+      observedAt: Date.parse("2026-09-27T00:00:00.000Z"),
+      stale: false,
+    },
+  ];
+  const base = {
+    project: owner.cwd,
+    sessions: [owner],
+    meta: new Map(),
+    unread: 0,
+    leases: [],
+    jobs: undefined,
+    running: undefined,
+    openObligations: [],
+    ledgerObligations: ledger,
+    nowMs: Date.parse("2026-09-27T00:00:00.000Z"),
+  };
+  expect(
+    makeSessionStatus({ ...base, sessionId: "ledger-owner" }).obligations?.owed,
+  ).toBe(1);
+  expect(
+    makeSessionStatus({ ...base, sessionId: "ledger-watcher" }).obligations
+      ?.waiting,
+  ).toBe(1);
 });
 
 test("the cached status carries the session's obligations aggregate", async () => {

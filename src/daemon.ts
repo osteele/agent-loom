@@ -42,7 +42,12 @@ import { claims } from "./claims.ts";
 import { type Config, loadConfig } from "./config.ts";
 import { listCoordination } from "./coordination.ts";
 import { dashboardResponse } from "./dashboard.ts";
-import { type Obligation, type RefState, obligations } from "./obligations.ts";
+import {
+  LEDGER_ISSUES_REFRESH_MS,
+  parseLedgerIssueRows,
+  writeLedgerIssuesSnapshot,
+} from "./ledgerIssues.ts";
+import { obligations } from "./obligations.ts";
 // Late-bound role resolution for the process-wide store. Importing this
 // module is what wires the singleton in the daemon process; see its own
 // comment for the import-cycle reasoning.
@@ -681,34 +686,28 @@ function tickWeftJobs(): void {
 
 let lastWeftTotal = -1;
 
-// --- obligation reference observations ---------------------------------------
+// --- ledger issues snapshot --------------------------------------------------
 
-/** Re-observe the ledger issue each open external_fix obligation cites.
+/** Publish the open issue-ledger issues every obligation view projects from.
  *
- * The issues ledger is an external store: an obligation carries a reference,
- * never the referenced work, so whether that reference still resolves is a
- * condition read periodically (RefObservation in specs/obligations.allium),
- * never a mutation of the record. Deliberately on its own slow timer rather
- * than the 10s presence tick — the check starts a binary, exactly like the
- * weft refresher above. The bounds, in order:
- *   - zero open external_fix obligations → no listing read past the store
- *     scan and no spawn at all;
- *   - at most the first 10 by createdAt observed per sweep;
- *   - one `issues list --json` resolves every subject at once (the listing
- *     is open issues only, so present means resolves, and absent means
- *     closed or missing — the same unresolvable either way);
- *   - a failed, timed-out, or unparseable run leaves every previous
- *     observation standing and logs at most one diagnostic per window;
- *   - a record closed mid-sweep is skipped; the next sweep re-derives it.
- * Only subjects shaped like ledger ids (am17) are observed, so a free-text
- * subject is never marked unresolvable by a heuristic. */
-const OBLIGATION_REF_TICK_MS = 60_000;
-const OBLIGATION_REF_TIMEOUT_MS = 15_000;
-const REF_DIAGNOSTIC_MIN_MS = 5 * 60_000;
-const ISSUE_ID_SHAPE = /^[a-z]{1,5}[1-9][0-9]*$/;
-let observingRefs = false;
+ * An open issue IS an obligation (specs/obligations.allium): the owner of the
+ * issue's component owes the fix, and the ledger is the record — agent-mail
+ * stores nothing for it. Views read only the snapshot written here, so this
+ * tick owns the one `issues list --json` spawn, on its own slow timer rather
+ * than the 10s presence tick, exactly like the weft refreshers above. The
+ * bounds, in order:
+ *   - at most one spawn per window, one diagnostic per five-minute window;
+ *   - a 15s timeout on the spawn;
+ *   - open rows only are kept (the listing is open issues only; a row
+ *     carrying another status is excluded at parse time);
+ *   - a failed, timed-out, or unparseable run keeps the previous rows and
+ *     records the error and its time on the snapshot, so views degrade with
+ *     an explanation instead of going blank. */
+const LEDGER_ISSUES_TIMEOUT_MS = 15_000;
+const LEDGER_DIAGNOSTIC_MIN_MS = 5 * 60_000;
+let refreshingLedger = false;
 let missingIssuesLogged = false;
-let lastRefDiagnosticMs = 0;
+let lastLedgerDiagnosticMs = 0;
 
 /** Absolute path to the issues CLI, or undefined when it cannot be found.
  *
@@ -721,123 +720,54 @@ function resolveIssues(): string | undefined {
   return which("issues");
 }
 
-/** Open external_fix obligations whose subject looks like a ledger id,
- * oldest first. Unbounded per sweep on purpose: the bound is the single
- * `issues list --json` spawn, and every candidate beyond it would otherwise
- * starve behind the head of the queue forever. */
-function obligationRefCandidates(): Obligation[] {
-  return obligations
-    .listOpen()
-    .filter(
-      (record) =>
-        record.kind === "external_fix" && ISSUE_ID_SHAPE.test(record.subject),
-    )
-    .sort(
-      (a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-    );
-}
-
-function logRefDiagnostic(message: string): void {
+function logLedgerDiagnostic(message: string): void {
   const nowMs = Date.now();
-  if (nowMs - lastRefDiagnosticMs < REF_DIAGNOSTIC_MIN_MS) return;
-  lastRefDiagnosticMs = nowMs;
+  if (nowMs - lastLedgerDiagnosticMs < LEDGER_DIAGNOSTIC_MIN_MS) return;
+  lastLedgerDiagnosticMs = nowMs;
   log(message);
 }
 
-function tickObligationRefs(): void {
-  if (observingRefs) return;
-  let candidates: Obligation[];
-  try {
-    candidates = obligationRefCandidates();
-  } catch (error) {
-    logRefDiagnostic(
-      `obligation refs: listing obligations failed: ${String(error)}`,
-    );
-    return;
-  }
-  // The common case is the cheap one: nothing to observe, nothing spawned.
-  if (candidates.length === 0) return;
+function tickLedgerIssues(): void {
+  if (refreshingLedger) return;
   const issues = resolveIssues();
   if (!issues) {
     if (!missingIssuesLogged) {
       missingIssuesLogged = true;
       log(
-        "obligation refs: issues binary not found; references stay unverified",
+        "ledger issues snapshot: issues binary not found, ledger obligations stay absent",
       );
     }
     return;
   }
-  observingRefs = true;
+  refreshingLedger = true;
   execFile(
     issues,
     ["list", "--json"],
-    { timeout: OBLIGATION_REF_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
+    { timeout: LEDGER_ISSUES_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
     (error, stdout) => {
       try {
         if (error) throw error;
-        const rows: unknown = JSON.parse(stdout);
-        if (!Array.isArray(rows)) {
+        const rows = parseLedgerIssueRows(JSON.parse(stdout));
+        if (!rows) {
+          // A shape this build does not recognise. Publishing a partial parse
+          // would undercount, and an undercount here reads as settled.
           throw new Error("unrecognized issues listing document");
         }
-        const statusById = new Map<string, string>();
-        for (const row of rows) {
-          const candidate = row as { id?: unknown; status?: unknown };
-          if (
-            typeof candidate?.id === "string" &&
-            typeof candidate?.status === "string"
-          ) {
-            statusById.set(candidate.id, candidate.status);
-          }
-        }
-        const now = new Date().toISOString();
-        for (const record of candidates) {
-          const ledgerStatus = statusById.get(record.subject);
-          const next: RefState =
-            ledgerStatus === "open" ? "resolves" : "unresolvable";
-          const previous = obligations.latestRef(record.id)?.state;
-          // Observation never mutates the obligation; rewriting an unchanged
-          // state would only churn observedAt, so skip it.
-          if (previous === next) continue;
-          try {
-            obligations.observeRef(record.id, next, {
-              now,
-              ...(ledgerStatus !== undefined
-                ? { issueId: record.subject }
-                : {}),
-            });
-          } catch {
-            // Only an open external_fix record accepts an observation, so a
-            // throw here means it closed mid-sweep; the next sweep re-derives.
-            continue;
-          }
-          // EventSettles (specs/obligations.allium): the ledger lists open
-          // issues only, so an issue that was last observed resolving and is
-          // now absent has reached its fixed-or-closed state — deterministic
-          // evidence that settles system- and role-obligor waits on that
-          // subject. A subject that was never resolving is a dangling
-          // reference, not evidence: it stays open with its unresolvable
-          // diagnostic instead of being settled by a guess.
-          if (previous === "resolves" && next === "unresolvable") {
-            const settled = obligations.settleByEvent(
-              "issue-ledger",
-              record.subject,
-              { now },
-            );
-            if (settled.length > 0) {
-              log(
-                `obligation refs: ${settled.length} obligation(s) settled by the issue-ledger event on ${record.subject}`,
-              );
-            }
-          }
-        }
+        writeLedgerIssuesSnapshot({ issues: rows });
       } catch (failure) {
-        // Absent, slow, or unparseable ledger output: the previous
-        // observation stands and expires by being replaced later, never by
-        // being written over with a guess.
-        logRefDiagnostic(`obligation refs: ${String(failure)}`);
+        // Absent, slow, or unparseable ledger output: the previous rows stand
+        // with the error recorded beside them, never overwritten by a guess.
+        try {
+          writeLedgerIssuesSnapshot({ error: String(failure) });
+        } catch (writeFailure) {
+          logLedgerDiagnostic(
+            `ledger issues snapshot: ${String(failure)}; recording the failure also failed: ${String(writeFailure)}`,
+          );
+          return;
+        }
+        logLedgerDiagnostic(`ledger issues snapshot: ${String(failure)}`);
       } finally {
-        observingRefs = false;
+        refreshingLedger = false;
       }
     },
   );
@@ -857,10 +787,10 @@ tickAckReminders();
 const ackReminderTimer = setInterval(tickAckReminders, CLAIM_REMINDER_SWEEP_MS);
 tickWeftJobs();
 const weftJobsTimer = setInterval(tickWeftJobs, WEFT_JOBS_REFRESH_MS);
-tickObligationRefs();
-const obligationRefTimer = setInterval(
-  tickObligationRefs,
-  OBLIGATION_REF_TICK_MS,
+tickLedgerIssues();
+const ledgerIssuesTimer = setInterval(
+  tickLedgerIssues,
+  LEDGER_ISSUES_REFRESH_MS,
 );
 
 process.on("SIGHUP", () => {
@@ -880,7 +810,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     clearInterval(sessionPushTimer);
     clearInterval(claimReminderTimer);
     clearInterval(weftJobsTimer);
-    clearInterval(obligationRefTimer);
+    clearInterval(ledgerIssuesTimer);
     ohMyPiPush.close();
     server.stop();
     process.exit(0);

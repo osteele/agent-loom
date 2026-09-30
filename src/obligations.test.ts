@@ -96,11 +96,6 @@ const SESSION_OBLIGOR = {
   ...{ sessionId: "bob", label: "Bob" },
 };
 const WEFT = { kind: "system" as const, system: "weft", label: "weft" };
-const ISSUE_LEDGER = {
-  kind: "system" as const,
-  system: "issue-ledger",
-  label: "issue-ledger",
-};
 const T0 = "2026-09-27T00:00:00.000Z";
 const T1 = "2026-09-27T01:00:00.000Z";
 
@@ -214,6 +209,19 @@ test("a system obligor announces against a wired settlement hook and an unwired 
       obligor: { kind: "system", system: "not-a-system", label: "nope" },
     }),
   ).toThrow(ObligationAuthorityError);
+  // Issue-ledger is deliberately unwired: its open issues are obligations by
+  // projection (src/ledgerIssues.ts), so nothing announces a wait on it.
+  expect(() =>
+    announce(store, {
+      kind: "external_fix",
+      subject: "am17",
+      obligor: {
+        kind: "system",
+        system: "issue-ledger",
+        label: "issue-ledger",
+      },
+    }),
+  ).toThrow(ObligationAuthorityError);
 });
 
 test("EventSettles settles system and role obligors on a matching event, never belief-settled parties", () => {
@@ -226,24 +234,9 @@ test("EventSettles settles system and role obligors on a matching event, never b
     subject: "job-9",
     obligor: WEFT,
   });
-  const otherSystemWait = announce(store, {
-    kind: "job_completion",
-    subject: "job-9",
-    obligee: CAROL,
-    obligor: ISSUE_LEDGER,
-  });
   const roleWait = announce(store, {
     kind: "external_fix",
     subject: "job-9",
-    obligor: {
-      kind: "role",
-      role: { kind: "component_owner", component: "agent-mail" },
-      label: "owner of agent-mail",
-    },
-  });
-  const roleOtherSubject = announce(store, {
-    kind: "external_fix",
-    subject: "am17",
     obligor: {
       kind: "role",
       role: { kind: "component_owner", component: "agent-mail" },
@@ -275,19 +268,12 @@ test("EventSettles settles system and role obligors on a matching event, never b
       TERMINAL_RETENTION_MS,
     );
   }
-  expect(store.get(otherSystemWait.id)?.status).toBe("open");
   // Session and human obligors settle by belief or authority, never by an
   // event about the same subject.
   expect(store.get(sessionWait.id)?.status).toBe("open");
   expect(store.get(humanWait.id)?.status).toBe("open");
   // Idempotent: a second pass settles nothing further.
   expect(store.settleByEvent("weft", "job-9", { now: T1 })).toEqual([]);
-  // The other system's event settles its own wait, and a role obligor
-  // settles on whatever system observed the event for its subject.
-  const settledNow = store.settleByEvent("issue-ledger", "job-9", { now: T1 });
-  expect(settledNow.map((o) => o.id)).toEqual([otherSystemWait.id]);
-  const settledRole = store.settleByEvent("issue-ledger", "am17", { now: T1 });
-  expect(settledRole.map((o) => o.id)).toEqual([roleOtherSubject.id]);
 });
 
 test("a role obligor announces when exactly one responsible session holds the role and is refused otherwise", () => {
@@ -639,7 +625,6 @@ test("terminal pruning retains open and unexpired records and removes expired ev
     kind: "external_fix",
     subject: "issue am22",
   });
-  store.observeRef(expired.id, "unresolvable", { now: T0 });
   store.close(expired.id, ALICE, undefined, { now: T1 });
   const open = announce(store, { subject: "still owed" });
   const recent = announce(store, { subject: "recently settled" });
@@ -652,7 +637,6 @@ test("terminal pruning retains open and unexpired records and removes expired ev
   expect(store.get(expired.id)).toBeDefined();
   expect(store.pruneTerminal(expiry)).toBe(1);
   expect(store.get(expired.id)).toBeUndefined();
-  expect(store.latestRef(expired.id)).toBeUndefined();
   expect(store.get(open.id)?.status).toBe("open");
   expect(store.get(recent.id)?.status).toBe("satisfied");
   expect(store.pruneTerminal(expiry + 1)).toBe(0);
@@ -1029,37 +1013,6 @@ test("ContestedStaysVisible and HumanOwedIsComplete: listings keep contested and
     "already done",
   );
   expect(store.owedToHuman().map((o) => o.id)).toContain(humanObligation.id);
-});
-
-test("UnresolvableRefIsVisible: an unresolvable reference is a listed diagnostic", () => {
-  const { store } = makeStore([ALICE.sessionId]);
-  const record = announce(store, { kind: "external_fix", subject: "am17" });
-  expect(store.unresolvableRefs().length).toBe(0);
-  store.observeRef(record.id, "unresolvable", { now: T1 });
-  const diagnostics = store.unresolvableRefs();
-  expect(diagnostics.length).toBe(1);
-  expect(diagnostics[0].obligation.id).toBe(record.id);
-  expect(diagnostics[0].observation.state).toBe("unresolvable");
-  // Observation never mutates the obligation.
-  expect(store.get(record.id)?.status).toBe("open");
-  // A later observation replaces the latest; resolution clears the diagnostic.
-  store.observeRef(record.id, "resolves", { now: T1, issueId: "am17" });
-  expect(store.unresolvableRefs().length).toBe(0);
-  expect(store.latestRef(record.id)?.state).toBe("resolves");
-  expect(store.latestRef(record.id)?.issueId).toBe("am17");
-});
-
-test("ref observations are refused on records that are not open external-fix", () => {
-  const { store } = makeStore([ALICE.sessionId]);
-  const decision = announce(store, { subject: "s1" });
-  expect(() => store.observeRef(decision.id, "resolves", { now: T1 })).toThrow(
-    ObligationStateError,
-  );
-  const external = announce(store, { kind: "external_fix", subject: "am17" });
-  store.withdraw(external.id, ALICE, { now: T1 });
-  expect(() => store.observeRef(external.id, "resolves", { now: T1 })).toThrow(
-    ObligationStateError,
-  );
 });
 
 // ---------------------------------------------------------------------------

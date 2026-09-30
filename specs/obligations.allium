@@ -14,13 +14,13 @@
 --     review
 --   - closure by a session obligee, by withdrawal, by user authority, or
 --     deterministically: claim releases settle in the release transaction,
---     and system events (weft job completion, review completion, issue
---     state) settle their own waits
+--     and system events (weft job completion, review completion) settle
+--     their own waits
 --   - contest by a session or human obligor; user-authority clearing
 --   - adoption: a successor session inheriting an offline predecessor's open
 --     obligations, in both roles
---   - component-owner role as the creditor of record for bug fixes when no
---     specific session is blocked
+--   - component-owner role as the obligor of record for bug fixes when no
+--     specific session is blocked (the ledger projection below)
 --   - project-scoped and cross-project inspection, including the human
 --     owed view
 -- Excludes:
@@ -38,8 +38,8 @@
 -- resolve exactly: a session to a live process, a role to one responsible
 -- session, a system to a wired integration, the human to the operator. A
 -- party that resolves to nobody renders as nothing — it is never guessed.
--- Liveness and reference health are conditions on open records, never
--- status, and there is no time-based expiry.
+-- Liveness is a condition on open records, never a status, and there is no
+-- time-based expiry.
 --
 -- Prior art within this repo: owner conditions and in-transaction settlement
 -- (ADR 0007, 0021); declared authority that is recorded, never verified
@@ -63,11 +63,12 @@ enum RoleKind { component_owner | plan_executor | experiment_claimer }
 enum ObligationKind { claim_release | decision | external_fix | job_completion | review }
 enum ObligationStatus { open | satisfied | withdrawn }
 enum ClosedBy { obligee | system | user_authority }
-enum RefState { unverified | resolves | unresolvable }
 
 -- The human is a single principal on this machine (ADR 0001): the operator.
 -- A system is a local integration with a versioned event or CLI surface
--- ("weft", "agent-review", "issue-ledger", "claims"). A role names a
+-- ("weft", "agent-review", "claims"). Issue-ledger is deliberately not a
+-- wired system: its open issues are obligations by projection (below), so
+-- nothing announces a wait on it. A role names a
 -- responsibility whose holder is resolved exactly at read and act time:
 -- component_owner via project ownership, plan_executor via the plan's
 -- current executor (ADR 0019), experiment_claimer via the experiment's
@@ -155,25 +156,42 @@ entity Obligation {
     }
 }
 
--- Observed health of an external reference, re-observed by the daemon for
--- every open obligation that cites an external record. Observation never
--- mutates the obligation.
-entity RefObservation {
-    obligation: Obligation
-    issue: LedgerIssue?
-    state: RefState
-    observed_at: Timestamp
+------------------------------------------------------------
+-- Derived: issue-ledger obligations
+--
+-- Every open issue in the issue ledger IS an obligation, projected at read
+-- time from the daemon's snapshot of `issues list --json` and never stored:
+-- the ledger is the record, and agent-mail holds only the raw rows of its
+-- last read. The projection is a pure function of (snapshot, now, role
+-- resolution); it re-derives on every read, so a reopened issue reappears
+-- because the ledger lists it as open again — there is nothing to
+-- re-announce.
+------------------------------------------------------------
+
+-- Derived, never stored. id is namespaced so it can never collide with a
+-- stored Obligation id.
+value LedgerObligation {
+    id: String            -- "issue:<citable id>", e.g. "issue:am17"
+    kind: external_fix
+    subject: String       -- "<id>: <title>"
+    obligor: Role         -- component_owner of the issue's component,
+                          -- resolved exactly; unresolvable renders as such,
+                          -- never guessed
+    obligees: List<claims/Session>  -- the sessions named by the issue's
+                                    -- "agent-mail:<session-id>" watcher
+                                    -- tokens; other token prefixes belong to
+                                    -- other tools and are ignored. Empty is
+                                    -- not absent: the fix is still owed,
+                                    -- with the obligee shown as no watcher
+    source: "issue-ledger"
+    observed_at: Timestamp          -- the snapshot's
+    stale: Boolean                  -- the snapshot is older than its TTL
 }
 
-external entity LedgerIssue {
-    id: String
-    state: String
-}
-
-surface RefObservationInputs {
-    context observation: RefObservation
-    provides: RefObserved(observation)
-}
+-- Read-only: close, withdraw, contest, amend, comment, and clear aimed at an
+-- "issue:<id>" record are refused, naming the ledger's own verb (issues
+-- close, issues note, issues unwatch). Settlement is the issue leaving the
+-- ledger's open listing — the row simply stops projecting.
 
 ------------------------------------------------------------
 -- Predicates
@@ -296,9 +314,10 @@ rule Announce {
     ensures: CreationNoticePushed(Obligation.lastCreated)
 
     -- A record whose ends are a role or a system is announced through the
-    -- owning integration's path (the daemon for ledger-derived repairs, the
-    -- submitter for job waits); the resolution rule, not the announcer's
-    -- session, is what makes the record addressable.
+    -- owning integration's path (the submitter for job waits); the
+    -- resolution rule, not the announcer's session, is what makes the record
+    -- addressable. Ledger issues need no announce path at all: they are
+    -- obligations by projection.
 }
 
 rule ObligeeCloses {
@@ -346,9 +365,8 @@ rule ClaimReleaseSettles {
 
 rule EventSettles {
     when: SystemEventObserved(system, subject, at)
-        -- a weft job completing, a review finishing, an issue reaching its
-        -- fixed or closed state, observed through that system's versioned
-        -- event or CLI output
+        -- a weft job completing or a review finishing, observed through
+        -- that system's versioned event or CLI output
 
     ensures:
         for o in Obligations where o.status = open
@@ -362,8 +380,8 @@ rule EventSettles {
 
     -- The general form of ClaimReleaseSettles: deterministic evidence from
     -- the owning system settles the wait without belief. It covers every
-    -- obligor that cannot close by belief — a system, or a role such as a
-    -- component owner whose repair the ledger reports fixed. Observation is
+    -- obligor that cannot close by belief — a system, or a role whose owed
+    -- outcome the event reports. Observation is
     -- consumed from the system's versioned interface, never its private
     -- state; a system that goes unreachable leaves waits open and stale
     -- with age rather than silently satisfied.
@@ -487,19 +505,17 @@ invariant ResolvedOwedIsComplete {
     -- unresolvable — never guessed, never silently dropped.
 }
 
-invariant UnresolvableRefIsVisible {
-    -- Every open obligation citing an external record whose latest
-    -- RefObservation is unresolvable surfaces a diagnostic in inspection
-    -- views. A reference that stops resolving is never silently skipped (a
-    -- silent skip is a bug); neither is creation refused for it —
-    -- validation is asynchronous by design.
+invariant LedgerProjectionIsVisible {
+    -- Every open issue in the daemon's latest snapshot appears in every
+    -- open-obligation listing as a derived ledger obligation. A missing
+    -- snapshot renders one diagnostic line, never a silent omission; a stale
+    -- snapshot or a failed refresh renders its rows marked with the age and
+    -- the last error. A silent skip is a bug.
 }
 
 ------------------------------------------------------------
 -- Open questions
 ------------------------------------------------------------
-
-open question "Does an external_fix obligation reopen when the referenced issue reopens, or does the obligee re-announce?"
 
 open question "Should adoption observe a restart grace like claims' fifteen minutes, or is offline-now sufficient? A resumed harness may briefly hold two sessions."
 
@@ -509,4 +525,4 @@ open question "Is terminal_retention = 30 days right, or should satisfied resolu
 
 open question "CLI/MCP verb names: announce / close / withdraw / contest / adopt / owed, or align with claim vocabulary (acquire/release/recover)?"
 
-open question "Should stale system waits (an unreachable integration leaving event-settled obligations open) escalate anywhere, or is the unresolvable-ref diagnostic their whole story?"
+open question "Should stale system waits (an unreachable integration leaving event-settled obligations open) escalate anywhere, or is the stale-with-age rendering their whole story?"

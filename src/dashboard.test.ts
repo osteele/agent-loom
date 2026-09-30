@@ -90,9 +90,6 @@ test("state obligationRecords project both ends with resolution and project prov
     { now: "2026-09-27T00:00:00.000Z" },
   );
   createdRecordIds.push(repair.id);
-  obligations.observeRef(repair.id, "unresolvable", {
-    now: "2026-09-27T00:01:00.000Z",
-  });
 
   const state = buildState({ registrations: listLive(), logLimit: 20 });
   expect(state.obligationRecords.length).toBeGreaterThanOrEqual(3);
@@ -124,7 +121,6 @@ test("state obligationRecords project both ends with resolution and project prov
   expect(bySubject.get("pick the reviewer")?.obligor.project).toBeUndefined();
 
   const repairView = bySubject.get("am17");
-  expect(repairView?.ref).toEqual({ state: "unresolvable" });
   expect(repairView?.obligor).toMatchObject({
     partyKind: "role",
     roleKind: "component_owner",

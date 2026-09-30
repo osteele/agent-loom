@@ -536,7 +536,7 @@ outcome records lease loss.
 Obligations are machine-global records of who owes whom a specific outcome —
 a claim release, a decision, a referenced fix, a job completion, a review.
 Parties are sessions, the human operator, systems (a wired integration such
-as `weft` or `issue-ledger`), and roles (the component owner, the plan's
+as `weft` or `claims`), and roles (the component owner, the plan's
 current executor, the experiment's claimer of record). The model is
 announced, not negotiated: the obligee creates the record and closes it, the
 obligor can contest but never confirm, and deterministic evidence settles
@@ -545,6 +545,16 @@ system event settles records owed by a system or a role. Records span
 projects, so these commands take no `--project`. `--user` addresses the
 operator; the obligor's copy of a session-addressed record arrives as
 exactly one notice.
+
+Open issue-ledger issues join every open listing without a stored record:
+each is a read-only `issue:<id>` obligation owed by its component's owner,
+projected from the daemon's `issues list --json` snapshot and tagged
+`[issue-ledger]`. The sessions named by `agent-mail:<session-id>` watcher
+tokens on the issue are its obligees. The mutating subcommands refuse these
+ids and name the ledger's own verb (`issues close`, `issues note`, `issues
+unwatch`) instead. A snapshot older than its TTL shows its rows marked stale
+with their age; a missing snapshot or failed refresh prints one diagnostic
+line rather than omitting the rows silently.
 
 ### `obligations announce`
 
@@ -560,7 +570,7 @@ agent-mail obligations announce (--obligor <name-or-id> | --user |
 
 Announces that the obligor owes the calling session a specific outcome. A
 session obligor must resolve to a live session; `--system <name>` names a
-wired integration (`claims`, `weft`, `issue-ledger`) whose own events settle
+wired integration (`claims`, `weft`) whose own events settle
 the record; `--component <name>` names the component whose owner owes the
 repair, and resolves at read time to the one responsible session — its
 creation notice goes to that session. A role or system obligor cannot be
@@ -632,7 +642,7 @@ Satisfies an open obligation. Obligee-only; the resolution text is captured
 at the act and never edited. Closed records are retained for 30 days. Besides
 the obligee's own close, `claim_release` records settle when the claim
 releases, and records owed by a system or a role settle when the owning
-system reports the event (a weft job finishing, an issue reaching fixed).
+system reports the event (a weft job finishing).
 
 ### `obligations withdraw`
 

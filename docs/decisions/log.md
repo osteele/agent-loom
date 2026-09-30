@@ -223,3 +223,20 @@ Q, accepting D.*
   per-render status-line cost at Bun's startup price, accepting that the
   local install and the published GitHub/npm distribution run different
   runtimes over the same dist. The published distribution path is unchanged.
+
+- **2026-09-30** — In the context of obligations whose subject is an
+  issue-ledger issue, facing a daemon shadow that re-observed each cited
+  issue and settled stored records when it vanished — a copy that went stale,
+  could not represent a reopened issue, and was never used — we decided every
+  open issue is an obligation by projection, read from the daemon's
+  once-a-minute `issues list --json` snapshot and owed by the issue
+  component's owner, and neglected both stored records settled by
+  observation and issue-ledger creating obligations through agent-mail's
+  CLI, to keep the ledger the single source of truth with nothing to
+  re-announce on reopen, accepting that ledger obligations are as fresh as
+  the last daemon refresh (up to a minute) and absent — with a diagnostic
+  line — when the daemon or `issues` is unavailable. Records stored under
+  the earlier design are not migrated: none existed in this machine's store
+  when it changed, and a stored `external_fix` record that cites an issue —
+  one owed by the retired `issue-ledger` system lists as unresolvable — stays
+  open until its obligee closes or withdraws it.

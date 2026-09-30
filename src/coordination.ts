@@ -14,6 +14,10 @@ import {
   pathClaimTargets,
 } from "./claims.ts";
 import {
+  type LedgerObligation,
+  currentLedgerObligations,
+} from "./ledgerIssues.ts";
+import {
   type Obligation,
   type ObligationStore,
   type Party,
@@ -28,6 +32,7 @@ import {
   type Registration,
   listLive,
 } from "./registry.ts";
+import { formatAge } from "./sessions.ts";
 import {
   type WorkLease,
   type WorkOwner,
@@ -463,6 +468,67 @@ function obligationEntry(
   };
 }
 
+/** A projected ledger obligation joins the same cross-project view as a
+ * stored one, with the resolved component owner as its owner: resolving
+ * renders the responsible session with the ordinary liveness treatment;
+ * unresolvable renders owner-unresolved — never guessed onto a session. The
+ * ledger owns the record, so it is never recoverable and never contested
+ * here; the activity slot carries its provenance and staleness instead. */
+function ledgerObligationEntry(
+  obligation: LedgerObligation,
+  registrations: Registration[],
+  nowMs: number,
+): CoordinationEntry {
+  const ownerLabel = `owner of ${obligation.component}`;
+  let owner: ClaimOwner;
+  let status: OwnerStatus;
+  let condition: CoordinationCondition;
+  if (obligation.ownerSessionId) {
+    owner = {
+      id: obligation.ownerSessionId,
+      label: ownerLabel,
+      kind: "session",
+      sessionId: obligation.ownerSessionId,
+    };
+    // A registration join, not a process scan: the projection never captures
+    // a pid, so the session id is the only identity to check against.
+    status = registrations.some(
+      (registration) => registration.sessionId === obligation.ownerSessionId,
+    )
+      ? "live"
+      : "offline";
+    condition = status === "offline" ? "owner-offline" : "healthy";
+  } else {
+    owner = { id: ownerLabel, label: ownerLabel, kind: "manual" };
+    status = "manual";
+    condition = "owner-unresolved";
+  }
+  const observedAt = new Date(obligation.observedAt).toISOString();
+  return {
+    id: obligation.id,
+    kind: "obligation",
+    project: "",
+    projectLabel: "all projects",
+    resourceType: "obligation",
+    resourceKey: `external_fix:${obligation.subject}`,
+    resourceLabel: `external_fix:${obligation.subject}`,
+    sourcePaths: [],
+    owner,
+    ownerStatus: status,
+    condition,
+    recoverable: false,
+    state: "open",
+    obligee: obligation.obligees.length
+      ? obligation.obligees.join(", ")
+      : "no watcher",
+    activity: obligation.stale
+      ? `[issue-ledger] snapshot stale (${formatAge(nowMs - obligation.observedAt)} old)`
+      : "[issue-ledger]",
+    createdAt: observedAt,
+    updatedAt: observedAt,
+  };
+}
+
 export function listCoordination(
   options: {
     project?: string;
@@ -473,6 +539,9 @@ export function listCoordination(
     claimStore?: ClaimStore;
     workStore?: WorkStore;
     obligationsStore?: ObligationStore;
+    /** Projected ledger obligations to join into the cross-project view.
+     * Defaults to the current snapshot's projection; tests inject fixtures. */
+    ledgerObligations?: LedgerObligation[];
   } = {},
 ): CoordinationEntry[] {
   const registrations = options.registrations ?? listLive();
@@ -521,6 +590,16 @@ export function listCoordination(
   const obligationRecords = options.allProjects
     ? obligationStore.listOpen()
     : [];
+  // Projected ledger obligations join the same cross-project scope, read from
+  // the daemon's issues snapshot — never a spawn. A missing snapshot
+  // contributes no rows (listings surface the diagnostic separately).
+  const ledgerObligations = options.allProjects
+    ? (options.ledgerObligations ??
+      currentLedgerObligations((role) =>
+        obligationStore.sessionResponsibleFor(role),
+      ).obligations)
+    : [];
+  const nowMs = Date.now();
   return [
     ...workRecords.map((lease) =>
       workEntry(lease, registrations, processes, registrationsReliable),
@@ -538,6 +617,9 @@ export function listCoordination(
       obligationEntry(obligation, registrations, (party) =>
         obligationStore.resolveParty(party),
       ),
+    ),
+    ...ledgerObligations.map((obligation) =>
+      ledgerObligationEntry(obligation, registrations, nowMs),
     ),
   ].sort(
     (a, b) =>

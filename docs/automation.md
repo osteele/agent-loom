@@ -67,6 +67,13 @@ the party has a project, `project` with the `projectBasis` that produced it
 none). Sessions also carry `sessionId` and `live`. Grouping by project is the
 consumer's job; the resolution and its provenance are agent-mail's.
 
+`ledgerObligations` carries the open issue-ledger issues projected as
+read-only obligations (`issue:<id>`), each with its component, resolved
+component-owner obligor, watcher-session obligees, and the snapshot's
+`observedAt` with a `stale` flag; `ledgerDiagnostic`, when present, explains
+why the projection is missing or degraded. The summary counts above include
+them: an issue adds to its owner's `owed` and each watcher's `waiting`.
+
 Each `obligationRecords` entry has a short identifying `subject` and, when
 provided, an optional `description` containing multiline decision context.
 `options` names declared choices, `markers` holds typed path or label evidence

@@ -1853,6 +1853,167 @@ test("obligations announce accepts system and component obligors over MCP", asyn
   }
 }, 45_000);
 
+test("ledger obligations are read-only over MCP and never announced", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-ledger-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [join(import.meta.dir, "channel.ts")],
+        cwd: project,
+        env: {
+          ...environment,
+          HOME: home,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: "watcher-session",
+          AGENT_SESSION_ID: "",
+          AGENT_SESSION_PID: "",
+        },
+        stderr: "pipe",
+      }),
+    );
+
+    // issue-ledger is not an announceable system: its open issues are
+    // already obligations by projection.
+    const announced = await client.callTool({
+      name: "obligations_announce",
+      arguments: {
+        system: "issue-ledger",
+        kind: "external_fix",
+        subject: "am17",
+      },
+    });
+    expect(announced.isError).toBe(true);
+    expect(textContent(announced)).toContain("already obligations");
+
+    // Every mutating tool refuses an issue: id, naming the ledger's verb.
+    const refusals: [string, Record<string, unknown>, string][] = [
+      ["obligations_close", { id: "issue:am17" }, "issues close am17"],
+      ["obligations_withdraw", { id: "issue:am17" }, "issues unwatch am17"],
+      [
+        "obligations_contest",
+        { id: "issue:am17", reason: "not mine" },
+        "issues note am17",
+      ],
+      [
+        "obligations_update",
+        { id: "issue:am17", description: "x" },
+        "issues note am17",
+      ],
+      [
+        "obligations_comment",
+        { id: "issue:am17", text: "x" },
+        "issues note am17",
+      ],
+      [
+        "obligations_clear",
+        { id: "issue:am17", authority: "operator", reason: "x" },
+        "issues close am17",
+      ],
+    ];
+    for (const [name, args, command] of refusals) {
+      const refused = await client.callTool({ name, arguments: args });
+      expect(refused.isError).toBe(true);
+      expect(textContent(refused)).toContain("read-only");
+      expect(textContent(refused)).toContain(command);
+    }
+
+    // No daemon snapshot: the listing says why ledger rows are missing
+    // rather than silently omitting them.
+    const listed = textContent(
+      await client.callTool({ name: "obligations_list", arguments: {} }),
+    );
+    expect(listed).toContain("no open obligations");
+    expect(listed).toContain("ledger obligations unavailable");
+
+    // The store stayed empty through every refusal.
+    const obligationsDir = join(home, ".claude", "agent-mail", "obligations");
+    expect(
+      existsSync(obligationsDir) ? readdirSync(obligationsDir) : [],
+    ).toEqual([]);
+  } finally {
+    await client.close();
+  }
+}, 45_000);
+
+test("obligations_list shows projected ledger obligations from the snapshot", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-ledger-list-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(home);
+  mkdirSync(project);
+  // Publish a snapshot the way the daemon would: one open issue whose
+  // component resolves to this project's sole live session, watched by it.
+  const stateDir = join(home, ".claude", "agent-mail");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    join(stateDir, "ledger-issues.json"),
+    JSON.stringify({
+      version: 1,
+      observedAt: Date.now(),
+      observedBy: 1,
+      issues: [
+        {
+          id: "am17",
+          title: "fix the retry loop",
+          component: "project",
+          watchers: ["agent-mail:watcher-session", "slack:U123"],
+        },
+      ],
+    }),
+  );
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [join(import.meta.dir, "channel.ts")],
+        cwd: project,
+        env: {
+          ...environment,
+          HOME: home,
+          AGENT_MAIL_PORT: "0",
+          CLAUDE_CODE_SESSION_ID: "",
+          CODEX_THREAD_ID: "watcher-session",
+          AGENT_SESSION_ID: "",
+          AGENT_SESSION_PID: "",
+        },
+        stderr: "pipe",
+      }),
+    );
+    const listed = textContent(
+      await client.callTool({ name: "obligations_list", arguments: {} }),
+    );
+    expect(listed).toContain(
+      "issue:am17 external_fix am17: fix the retry loop",
+    );
+    expect(listed).toContain("[issue-ledger]");
+    expect(listed).toContain("owner of project → watcher-session");
+    expect(listed).toContain("owed to watcher-session");
+    expect(listed).not.toContain("slack:U123");
+  } finally {
+    await client.close();
+  }
+}, 45_000);
+
 test("shutdown unregisters and releases work if experiment settlement fails", async () => {
   const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-shutdown-"));
   temporaryDirectories.push(root);

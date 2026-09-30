@@ -8,6 +8,12 @@ import {
   isDisplaceable,
   listCoordination,
 } from "./coordination.ts";
+import {
+  type LedgerObligation,
+  ledgerObligationsDiagnostic,
+  projectLedgerObligations,
+  readLedgerIssuesSnapshot,
+} from "./ledgerIssues.ts";
 import { indexedMessages, messageRecipient } from "./messageIndex.ts";
 import {
   type PartyView,
@@ -19,7 +25,6 @@ import type {
   Obligation,
   ObligationComment,
   ObligationMarker,
-  RefState,
 } from "./obligations.ts";
 import { canonicalProject, displayName } from "./paths.ts";
 import { readListenerSnapshot } from "./presence.ts";
@@ -134,6 +139,11 @@ export interface DashboardState {
    * sessions where possible — grouping by project is the consumer's job.
    * Additive within schemaVersion 1. */
   obligationRecords: ObligationRecordView[];
+  /** Open issue-ledger issues projected as obligations (never stored), with
+   * the diagnostic that explains their absence or degraded freshness.
+   * Additive within schemaVersion 1. */
+  ledgerObligations: LedgerObligationView[];
+  ledgerDiagnostic?: string;
   routes: FlowRoute[];
   log: LogEntry[];
   volume: VolumeBucket[];
@@ -160,20 +170,55 @@ export interface ObligationRecordView {
   markers?: ObligationMarker[];
   /** Append-only commentary from either end or the operator. */
   comments?: ObligationComment[];
-  /** Latest reference observation, for records that cite an external record
-   * (open external_fix waits). Absent when nothing has been observed. */
-  ref?: { state: RefState };
   obligee: PartyView;
   obligor: PartyView;
+}
+
+/** A projected ledger obligation (src/ledgerIssues.ts): never stored, so it
+ * carries its snapshot provenance rather than a lifecycle. Additive within
+ * schemaVersion 1. */
+export interface LedgerObligationView {
+  id: string;
+  kind: "external_fix";
+  subject: string;
+  component: string;
+  obligor: PartyView;
+  /** Sessions watching the issue through `agent-mail:` tokens. */
+  obligees: string[];
+  source: "issue-ledger";
+  observedAt: string;
+  stale: boolean;
+}
+
+function ledgerObligationRecords(
+  ledger: LedgerObligation[],
+  deps: PartyViewDeps,
+): LedgerObligationView[] {
+  return ledger.map((obligation) => ({
+    id: obligation.id,
+    kind: obligation.kind,
+    subject: obligation.subject,
+    component: obligation.component,
+    obligor: partyView(
+      {
+        kind: "role",
+        role: obligation.obligorRole,
+        label: `owner of ${obligation.component}`,
+      },
+      deps,
+    ),
+    obligees: obligation.obligees,
+    source: obligation.source,
+    observedAt: new Date(obligation.observedAt).toISOString(),
+    stale: obligation.stale,
+  }));
 }
 
 function obligationRecords(
   open: Obligation[],
   deps: PartyViewDeps,
-  latestRef: (id: string) => { state: RefState } | undefined,
 ): ObligationRecordView[] {
   return open.map((record) => {
-    const observation = latestRef(record.id);
     return {
       id: record.id,
       kind: record.kind,
@@ -187,7 +232,6 @@ function obligationRecords(
       ...(record.contestReason ? { contestReason: record.contestReason } : {}),
       ...(record.adoptedFrom ? { adoptedFrom: record.adoptedFrom } : {}),
       ...(record.adoptedAt ? { adoptedAt: record.adoptedAt } : {}),
-      ...(observation ? { ref: { state: observation.state } } : {}),
       obligee: partyView(record.obligee, deps),
       obligor: partyView(record.obligor, deps),
     };
@@ -290,6 +334,14 @@ export function buildState(
   // Machine-global and small: open obligation records live in one directory,
   // bounded by the thirty-day terminal retention.
   const openObligations = obligations.listOpen();
+  // Ledger obligations project from the daemon's issues snapshot (a file
+  // read, never a spawn) with the same machine-global role resolution.
+  const ledgerSnapshot = readLedgerIssuesSnapshot();
+  const ledgerProjection = ledgerSnapshot
+    ? projectLedgerObligations(ledgerSnapshot, now.getTime(), (role) =>
+        obligations.sessionResponsibleFor(role),
+      )
+    : [];
   const liveSessionIds = new Set(
     liveAll
       .map((registration) => registration.sessionId)
@@ -306,6 +358,10 @@ export function buildState(
     thread: Boolean(m.replyTo),
     preview: preview(m.message),
   }));
+  const ledgerDiagnostic = ledgerObligationsDiagnostic(
+    ledgerSnapshot,
+    now.getTime(),
+  );
   return {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
@@ -339,13 +395,15 @@ export function buildState(
     presence: presence(live),
     work: leases,
     coordination,
-    obligations: summarizeObligations(openObligations, undefined, (role) =>
-      obligations.sessionResponsibleFor(role),
+    obligations: summarizeObligations(
+      openObligations,
+      undefined,
+      (role) => obligations.sessionResponsibleFor(role),
+      ledgerProjection,
     ),
-    obligationRecords: obligationRecords(openObligations, partyDeps, (id) => {
-      const observation = obligations.latestRef(id);
-      return observation ? { state: observation.state } : undefined;
-    }),
+    obligationRecords: obligationRecords(openObligations, partyDeps),
+    ledgerObligations: ledgerObligationRecords(ledgerProjection, partyDeps),
+    ...(ledgerDiagnostic ? { ledgerDiagnostic } : {}),
     routes: indexed.routes,
     log,
     volume: indexed.volume,

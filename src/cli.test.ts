@@ -2920,3 +2920,117 @@ test("obligations CLI announces a component owner, notifies the resolved session
     rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("obligations CLI projects ledger issues, refuses their mutation, and refuses announcing them", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-ledger-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  mkdirSync(project, { recursive: true });
+  registerLiveSession(home, project, "caller-session");
+  const cli = join(import.meta.dir, "cli.ts");
+  const run = (args: string[]) => obligationsRun(cli, home, project, args);
+  try {
+    // No daemon snapshot yet: the listing says why ledger rows are missing
+    // rather than silently omitting them.
+    const empty = await run(["obligations", "list"]);
+    expect(empty.exit, empty.stderr).toBe(0);
+    expect(empty.stdout).toContain("no open obligations");
+    expect(empty.stdout).toContain("ledger obligations unavailable");
+
+    // Publish a snapshot the way the daemon would: one open issue whose
+    // component resolves to this project, watched by the caller session.
+    const stateDir = join(home, ".claude", "agent-mail");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(
+      join(stateDir, "ledger-issues.json"),
+      JSON.stringify({
+        version: 1,
+        observedAt: Date.now(),
+        observedBy: 1,
+        issues: [
+          {
+            id: "am17",
+            title: "fix the retry loop",
+            component: "project",
+            watchers: ["agent-mail:caller-session", "slack:U123"],
+          },
+        ],
+      }),
+    );
+    const listed = await run(["obligations", "list"]);
+    expect(listed.exit, listed.stderr).toBe(0);
+    expect(listed.stdout).toContain(
+      "issue:am17 external_fix am17: fix the retry loop",
+    );
+    expect(listed.stdout).toContain("[issue-ledger]");
+    expect(listed.stdout).toContain("owner of project → caller-session");
+    expect(listed.stdout).toContain("owed to caller-session");
+    // Foreign watcher tokens are ignored.
+    expect(listed.stdout).not.toContain("slack:U123");
+
+    // Every mutating verb refuses an issue: id, naming the ledger's own
+    // command, and the store stays empty throughout.
+    const obligationsDir = join(stateDir, "obligations");
+    const refusals: [string[], string][] = [
+      [["obligations", "close", "--id", "issue:am17"], "issues close am17"],
+      [
+        ["obligations", "withdraw", "--id", "issue:am17"],
+        "issues unwatch am17",
+      ],
+      [
+        ["obligations", "contest", "--id", "issue:am17", "--reason", "no"],
+        "issues note am17",
+      ],
+      [
+        ["obligations", "update", "--id", "issue:am17", "--description", "x"],
+        "issues note am17",
+      ],
+      [
+        ["obligations", "comment", "--id", "issue:am17", "--text", "x"],
+        "issues note am17",
+      ],
+      [
+        [
+          "obligations",
+          "clear",
+          "--id",
+          "issue:am17",
+          "--authority",
+          "operator",
+          "--reason",
+          "x",
+        ],
+        "issues close am17",
+      ],
+    ];
+    for (const [args, command] of refusals) {
+      const refused = await run(args);
+      expect(refused.exit).toBe(1);
+      expect(refused.stderr).toContain("read-only");
+      expect(refused.stderr).toContain(command);
+    }
+    expect(
+      existsSync(obligationsDir) ? readdirSync(obligationsDir) : [],
+    ).toEqual([]);
+
+    // issue-ledger is not an announceable system: its open issues are
+    // already obligations.
+    const announced = await run([
+      "obligations",
+      "announce",
+      "--system",
+      "issue-ledger",
+      "--kind",
+      "external_fix",
+      "--subject",
+      "am17",
+    ]);
+    expect(announced.exit).toBe(1);
+    expect(announced.stderr).toContain("already obligations");
+    expect(
+      existsSync(obligationsDir) ? readdirSync(obligationsDir) : [],
+    ).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);

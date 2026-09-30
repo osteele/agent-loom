@@ -42,8 +42,10 @@ Sessions address each other by stable names across project directories.
   same files, work leases record who is responsible for a logical unit, and
   lab-notebook experiment numbers (`EXP-NNN`) allocate atomically.
 - **Obligations.** A session records that someone owes it an outcome —
-  another session, a component's owner, you, or a system such as weft or
-  [issue-ledger](#related-projects). Records owed by a system settle on that
+  another session, a component's owner, you, or a system such as weft. Open
+  [issue-ledger](#related-projects) issues are obligations without any
+  record: each is owed by its component's owner and lists as a read-only
+  `issue:<id>` row. Records owed by a system settle on that
   system's own evidence, and `obligations owed` lists everything open that
   names you, across every project.
 - **Inspectable traffic.** Unread state, threads, Slack echo, and web and
@@ -421,7 +423,7 @@ The obligor is one of:
 - **a session**, which must be live, and receives exactly one notice;
 - **you, the human operator** — never pushed anywhere; the `owed` view is how
   you see these;
-- **a system** with its own events: `claims`, `weft`, or `issue-ledger`;
+- **a system** with its own events: `claims` or `weft`;
 - **a role**, resolved to one responsible session when it is read: a
   component's owner (see `project_owner`), a research plan's current executor,
   or an experiment's claimer.
@@ -433,8 +435,20 @@ settles it rather than anyone's say-so:
 |---|---|
 | `claim_release` | the referenced claim releases, inside the release transaction |
 | `job_completion` | weft reports the job finished, through `agent-mail notify` |
-| `external_fix` | the issue-ledger issue named as its subject leaves the open state; the daemon observes this through `issues list --json` |
-| `decision`, `review` | the obligee closes it with the outcome |
+| `decision`, `review`, `external_fix` | the obligee closes it with the outcome |
+
+Open issue-ledger issues need no announce: every open issue already **is** an
+obligation, owed by the owner of the issue's component. The daemon snapshots
+`issues list --json` once a minute and every obligation view projects the
+open issues from it as read-only `issue:<id>` rows tagged `[issue-ledger]` —
+`obligations list`, `coordination list --all`, the dashboards, and the
+per-session `waiting`/`owed` counts all include them. A session named by an
+`agent-mail:<session-id>` watcher token on the issue is its obligee; an
+unwatched issue is still owed, with no watcher. The rows settle when the
+issue leaves the ledger's open listing, and the mutating verbs refuse them —
+close, note, or unwatch the issue with `issues` instead. The rows are as
+fresh as the last daemon refresh and absent (with a diagnostic line) when the
+daemon or `issues` is unavailable.
 
 The `obligations_*` MCP tools and the `agent-mail obligations` subcommands
 share one store. `announce` creates a record with a short subject; a
@@ -449,9 +463,6 @@ agent-mail obligations announce --user --kind decision \
   --subject "Review packet format" \
   --description '**Finding:** A PDF export drops table labels.' \
   --option 'Tagged **PDF**' --option 'Structured export (`.json`)'
-
-agent-mail obligations announce --component ~/code/research-tools/weft \
-  --kind external_fix --subject <issue id>
 ```
 
 - `owed` lists everything open that names you as obligor, across every
@@ -745,10 +756,11 @@ find yourself sending the same explanation to a third agent, that is the
 boundary.
 
 [issue-ledger](https://github.com/osteele/issue-ledger) is a local issue
-ledger shared across projects, with its `issues` CLI. An `external_fix`
-obligation whose subject is an issue id settles when that issue closes. The
-integration is optional: without the `issues` binary on PATH, the daemon logs
-once and such references stay unverified.
+ledger shared across projects, with its `issues` CLI. Every open issue is an
+obligation owed by its component's owner, projected into the obligation views
+from the daemon's once-a-minute `issues list --json` snapshot — nothing is
+stored or announced. The integration is optional: without the daemon or the
+`issues` binary, the listings print a diagnostic and omit the rows.
 
 Both sit in a wider set of agent infrastructure, listed at
 [osteele.com/software/agent-tools](https://osteele.com/software/agent-tools).

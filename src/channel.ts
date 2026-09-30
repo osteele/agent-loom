@@ -67,6 +67,11 @@ import {
   withAttemptKey,
 } from "./delivery.ts";
 import {
+  currentLedgerObligations,
+  describeLedgerObligation,
+  ledgerObligationRefusal,
+} from "./ledgerIssues.ts";
+import {
   installMcpStartupDiagnostics,
   markMcpInitialized,
   setMcpStartupPhase,
@@ -1097,7 +1102,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           system: {
             type: "string",
             description:
-              'Name of a wired integration that owes the outcome ("weft", "issue-ledger", "claims"). Event-settled: it cannot be contested. Exactly one of obligor / to_user / system / component.',
+              'Name of a wired integration that owes the outcome ("weft", "claims"). Event-settled: it cannot be contested. Issue-ledger needs no announce: every open issue is already an obligation. Exactly one of obligor / to_user / system / component.',
           },
           component: {
             type: "string",
@@ -1329,7 +1334,9 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "obligations_list",
       description:
         "List obligations machine-globally. Defaults to open records in any " +
-        "project; owed_filter=human selects the operator's owed view. " +
+        "project, including issue:<id> rows projected read-only from the " +
+        "issue ledger's open issues; owed_filter=human selects the " +
+        "operator's owed view. " +
         "Contested records stay listed and tagged; liveness of an offline " +
         "obligee or obligor is a condition on open records, not a status.",
       inputSchema: {
@@ -1404,6 +1411,21 @@ const OBLIGATION_KINDS: readonly ObligationKind[] = [
   "job_completion",
   "review",
 ];
+
+/** Read-only refusal for a mutating tool call aimed at a projected ledger
+ * obligation: the record lives in the issue ledger, so the refusal names
+ * the ledger's own verb and nothing changes. */
+function ledgerReadOnlyError(
+  id: string,
+  verb: "close" | "withdraw" | "contest" | "update" | "comment" | "clear",
+) {
+  const refusal = ledgerObligationRefusal(id, verb);
+  if (!refusal) return undefined;
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: refusal }],
+  };
+}
 
 const SESSION_ID_SHAPE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2381,13 +2403,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (condition) {
       entries = entries.filter((entry) => entry.condition === condition);
     }
+    // Projected ledger obligations join the cross-project view; a missing or
+    // failed issues snapshot says so rather than omitting them silently.
+    const ledgerDiagnostic = all_projects
+      ? currentLedgerObligations((role) =>
+          obligations.sessionResponsibleFor(role),
+        ).diagnostic
+      : undefined;
     return {
       content: [
         {
           type: "text",
-          text: entries.length
-            ? entries.map(describeCoordination).join("\n")
-            : "no active coordination",
+          text:
+            (entries.length
+              ? entries.map(describeCoordination).join("\n")
+              : "no active coordination") +
+            (ledgerDiagnostic ? `\n${ledgerDiagnostic}` : ""),
         },
       ],
     };
@@ -2561,10 +2592,23 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     } else if (system !== undefined) {
       if (typeof system !== "string" || !system.trim()) {
         throw new Error(
-          'system must name a wired integration, e.g. "weft" or "issue-ledger"',
+          'system must name a wired integration, e.g. "weft" or "claims"',
         );
       }
       const wired = system.trim();
+      // Issue-ledger is not a wired system: every open issue is already an
+      // obligation by projection, so there is nothing to announce.
+      if (wired === "issue-ledger") {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "issue-ledger issues are already obligations: the open issues appear in obligations_list as `issue:<id>` rows owed by each component's owner — file, note, or watch the issue with `issues` instead",
+            },
+          ],
+        };
+      }
       obligorInput = { kind: "system", system: wired, label: wired };
     } else if (component !== undefined) {
       if (typeof component !== "string" || !component.trim()) {
@@ -2674,6 +2718,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (typeof id !== "string" || !id.trim()) {
       throw new Error("obligations_close requires id");
     }
+    const closeRefusal = ledgerReadOnlyError(id.trim(), "close");
+    if (closeRefusal) return closeRefusal;
     const record = obligations.close(
       id.trim(),
       { kind: "session", sessionId, label: mySessionNames.fullName },
@@ -2690,6 +2736,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (typeof id !== "string" || !id.trim()) {
       throw new Error("obligations_withdraw requires id");
     }
+    const withdrawRefusal = ledgerReadOnlyError(id.trim(), "withdraw");
+    if (withdrawRefusal) return withdrawRefusal;
     const record = obligations.withdraw(id.trim(), {
       kind: "session",
       sessionId,
@@ -2712,6 +2760,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (typeof reason !== "string" || !reason.trim()) {
       throw new Error("obligations_contest requires reason");
     }
+    const contestRefusal = ledgerReadOnlyError(id.trim(), "contest");
+    if (contestRefusal) return contestRefusal;
     const existing = obligations.get(id.trim());
     if (existing?.obligor.kind === "human") {
       return {
@@ -2824,6 +2874,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (typeof reason !== "string" || !reason.trim()) {
       throw new Error("obligations_clear requires reason");
     }
+    const clearRefusal = ledgerReadOnlyError(id.trim(), "clear");
+    if (clearRefusal) return clearRefusal;
     const record = obligations.authorityClear(
       id.trim(),
       authority.trim(),
@@ -2892,6 +2944,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         "obligations_update requires description, options, markers, clear_description, clear_options, or clear_markers",
       );
     }
+    const updateRefusal = ledgerReadOnlyError(id.trim(), "update");
+    if (updateRefusal) return updateRefusal;
     const record = obligations.update(
       id.trim(),
       { kind: "session", sessionId, label: mySessionNames.fullName },
@@ -2917,6 +2971,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     ) {
       throw new Error("obligations_comment requires id and text");
     }
+    const commentRefusal = ledgerReadOnlyError(id.trim(), "comment");
+    if (commentRefusal) return commentRefusal;
     const record = obligations.comment(
       id.trim(),
       { kind: "session", sessionId, label: mySessionNames.fullName },
@@ -2948,17 +3004,38 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         : scope === "all"
           ? obligations.list()
           : obligations.listOpen();
-    return {
-      content: [
-        {
-          type: "text",
-          text: records.length
-            ? records.map(describeObligation).join("\n")
-            : owed_filter === "human"
+    // Ledger obligations project from the daemon's issues snapshot (a file
+    // read, never a spawn). They join the open listings — not the operator's
+    // owed view — and a missing or failed snapshot explains itself in one
+    // line rather than vanishing.
+    const ledger = currentLedgerObligations((role) =>
+      obligations.sessionResponsibleFor(role),
+    );
+    const ledgerRows = owed_filter === "human" ? [] : ledger.obligations;
+    const nowMs = Date.now();
+    const rows = [
+      ...records.map(describeObligation),
+      ...ledgerRows.map((obligation) =>
+        describeLedgerObligation(obligation, nowMs),
+      ),
+    ];
+    const lines = [
+      ...(rows.length
+        ? rows
+        : [
+            owed_filter === "human"
               ? "no open obligations owed by you"
               : scope === "all"
                 ? "no obligations"
                 : "no open obligations",
+          ]),
+      ...(ledger.diagnostic ? [ledger.diagnostic] : []),
+    ];
+    return {
+      content: [
+        {
+          type: "text",
+          text: lines.join("\n"),
         },
       ],
     };

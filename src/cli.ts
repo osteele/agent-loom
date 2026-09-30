@@ -128,6 +128,11 @@ import {
   upsertOpenCodeMcpRegistration,
   upsertStdioMcpRegistration,
 } from "./integrations.ts";
+import {
+  currentLedgerObligations,
+  describeLedgerObligation,
+  ledgerObligationRefusal,
+} from "./ledgerIssues.ts";
 import { readSessionMailHistory } from "./mailHistory.ts";
 import { selectTriageCandidates } from "./mailTriage.ts";
 import { runMailTui } from "./mailTui.ts";
@@ -1511,6 +1516,10 @@ async function cmdStatusLine(
             jobs: readWeftJobsSnapshot(now),
             running: readRunningJobsSnapshot(now),
             openObligations: obligations.listOpen(),
+            // One file read — the status line never spawns `issues`.
+            ledgerObligations: currentLedgerObligations((role) =>
+              obligations.sessionResponsibleFor(role),
+            ).obligations,
             nowMs: now,
           }),
         ),
@@ -2205,11 +2214,21 @@ function cmdCoordination(
       console.log(JSON.stringify({ schemaVersion: 1, entries }, null, 2));
       return;
     }
+    // The cross-project view joins projected ledger obligations; a missing
+    // or failed issues snapshot says so rather than omitting them silently.
+    const ledgerDiagnostic =
+      flags.all === true
+        ? currentLedgerObligations((role) =>
+            obligations.sessionResponsibleFor(role),
+          ).diagnostic
+        : undefined;
     if (entries.length === 0) {
       console.log("no active coordination");
+      if (ledgerDiagnostic) console.log(ledgerDiagnostic);
       return;
     }
     for (const entry of entries) console.log(describeCoordination(entry));
+    if (ledgerDiagnostic) console.log(ledgerDiagnostic);
     return;
   }
   if (subcommand === "recover") {
@@ -2506,6 +2525,13 @@ function cmdObligations(
         throw new Error("--system requires the integration's name, e.g. weft");
       }
       const system = flags.system.trim();
+      // Issue-ledger is not a wired system: every open issue is already an
+      // obligation by projection, so there is nothing to announce.
+      if (system === "issue-ledger") {
+        throw new Error(
+          "issue-ledger issues are already obligations: the open issues appear in obligations list as `issue:<id>` rows owed by each component's owner — file, note, or watch the issue with `issues` instead",
+        );
+      }
       obligor = { kind: "system", system, label: system };
     } else if (flags.component !== undefined) {
       if (typeof flags.component !== "string" || !flags.component.trim()) {
@@ -2628,6 +2654,8 @@ function cmdObligations(
         "obligations update requires --description, --clear-description, --option, --marker, --clear-options, or --clear-markers",
       );
     }
+    const updateRefusal = ledgerObligationRefusal(flags.id.trim(), "update");
+    if (updateRefusal) throw new Error(updateRefusal);
     const record = obligations.update(
       flags.id.trim(),
       obligationActor(flags),
@@ -2649,6 +2677,8 @@ function cmdObligations(
     }
     const actor =
       flags.user === true ? ("user" as const) : obligationActor(flags);
+    const commentRefusal = ledgerObligationRefusal(flags.id.trim(), "comment");
+    if (commentRefusal) throw new Error(commentRefusal);
     const record = obligations.comment(
       flags.id.trim(),
       actor,
@@ -2663,6 +2693,8 @@ function cmdObligations(
         "usage: agent-mail obligations close --id <obligation-id> [--resolution <text>]",
       );
     }
+    const closeRefusal = ledgerObligationRefusal(flags.id.trim(), "close");
+    if (closeRefusal) throw new Error(closeRefusal);
     const record = obligations.close(
       flags.id.trim(),
       obligationActor(flags),
@@ -2679,6 +2711,11 @@ function cmdObligations(
         "usage: agent-mail obligations withdraw --id <obligation-id>",
       );
     }
+    const withdrawRefusal = ledgerObligationRefusal(
+      flags.id.trim(),
+      "withdraw",
+    );
+    if (withdrawRefusal) throw new Error(withdrawRefusal);
     const record = obligations.withdraw(
       flags.id.trim(),
       obligationActor(flags),
@@ -2695,6 +2732,8 @@ function cmdObligations(
     if (typeof flags.reason !== "string" || !flags.reason.trim()) {
       throw new Error("obligations contest requires --reason <text>");
     }
+    const contestRefusal = ledgerObligationRefusal(flags.id.trim(), "contest");
+    if (contestRefusal) throw new Error(contestRefusal);
     if (flags.user === true) {
       const record = obligations.contest(
         flags.id.trim(),
@@ -2794,6 +2833,8 @@ function cmdObligations(
         "usage: agent-mail obligations clear --id <obligation-id> --authority <text> --reason <text>",
       );
     }
+    const clearRefusal = ledgerObligationRefusal(flags.id.trim(), "clear");
+    if (clearRefusal) throw new Error(clearRefusal);
     const record = obligations.authorityClear(
       flags.id.trim(),
       flags.authority.trim(),
@@ -2820,7 +2861,15 @@ function cmdObligations(
       : scopeAll
         ? obligations.list()
         : obligations.listOpen();
-    if (records.length === 0) {
+    // Ledger obligations project from the daemon's issues snapshot, read here
+    // as a file — never a spawn. They join the open listings (not the
+    // operator's owed view, whose obligor is the human), and a missing or
+    // failed snapshot explains itself in one line rather than vanishing.
+    const ledger = currentLedgerObligations((role) =>
+      obligations.sessionResponsibleFor(role),
+    );
+    const ledgerRows = owed ? [] : ledger.obligations;
+    if (records.length === 0 && ledgerRows.length === 0) {
       console.log(
         owed
           ? "no open obligations owed by you"
@@ -2828,9 +2877,15 @@ function cmdObligations(
             ? "no obligations"
             : "no open obligations",
       );
+      if (ledger.diagnostic) console.log(ledger.diagnostic);
       return;
     }
     for (const record of records) console.log(describeObligation(record));
+    const nowMs = Date.now();
+    for (const obligation of ledgerRows) {
+      console.log(describeLedgerObligation(obligation, nowMs));
+    }
+    if (ledger.diagnostic) console.log(ledger.diagnostic);
     return;
   }
   throw new Error(
@@ -4013,10 +4068,13 @@ Coordination:
                         contest but never confirms. A session obligor is
                         resolved like --session recipients and gets one
                         notice; --system names a wired integration (claims,
-                        weft, issue-ledger) and settles by its own events;
+                        weft) and settles by its own events;
                         --component names the component whose owner owes
                         the repair, and its notice goes to the resolved
                         owner. A role or system obligor cannot contest.
+                        Open issue-ledger issues are already obligations —
+                        they list as read-only issue:<id> rows with no
+                        announce.
                         Keep the subject a short plain-text decision name; put
                         findings, settled constraints, and consequences in
                         description. Description accepts multiline Markdown;
