@@ -117,6 +117,11 @@ export interface DashboardState {
     presenceGeneratedAt: number | null;
     processEvidence: boolean;
     processEvidenceGeneratedAt: number | null;
+    /** False when another process held the message index's write lock, so
+     * totals, routes, volume and the log come from its last committed state
+     * and may omit the newest messages or read marks. Additive within
+     * schemaVersion 1. */
+    messages: boolean;
   };
   now: string;
   totals: {
@@ -379,6 +384,7 @@ export function buildState(
       presenceGeneratedAt: opts.presenceGeneratedAt ?? null,
       processEvidence: opts.processEvidenceFresh ?? true,
       processEvidenceGeneratedAt: opts.processEvidenceGeneratedAt ?? null,
+      messages: indexed.current,
     },
     now: now.toISOString(),
     totals: {

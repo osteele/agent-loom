@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop `agent-mail state` failing with `database is locked`. The message index
+  held its write lock while it statted and read every spool, resolved every
+  project path (which can block on an iCloud-backed directory), and parsed new
+  lines, so one starved or background-throttled caller made every other reader
+  wait 30 seconds and exit 1. All file work now happens before the lock, and a
+  reader that cannot get the lock within 5 seconds answers from the last
+  committed index with `freshness.messages: false`.
 - Stop `mail tui` from burning about half a core while idle. It re-read and
   re-parsed the whole message archive and receipt log every 2 seconds; it now
   rebuilds only when a spool or receipt log changed, and a rebuild resolves each

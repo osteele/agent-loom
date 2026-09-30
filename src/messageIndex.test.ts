@@ -3,15 +3,22 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { buildReadOnlyState } from "./dashboardData.ts";
-import { indexedMessages } from "./messageIndex.ts";
-import { readStatePath, spoolPath } from "./paths.ts";
+import {
+  applyIngest,
+  indexedMessages,
+  planIngest,
+  schema,
+} from "./messageIndex.ts";
+import { MESSAGE_INDEX_PATH, readStatePath, spoolPath } from "./paths.ts";
 import { appendMessage, markMessagesRead } from "./spool.ts";
 
 const at = new Date("2026-09-29T12:30:00.000Z");
@@ -250,5 +257,154 @@ test("global counts deduplicate thread IDs across projects", () => {
   expect(result).toEqual({
     totals: { messages: 2, projects: 2, threads: 1 },
     ids: ["alpha", "beta"],
+  });
+});
+
+test("a plan read against a cursor another process advanced is dropped, not double-counted", () => {
+  projectFixture((project) => {
+    appendMessage({
+      id: "a",
+      ts: "2026-09-29T12:01:00.000Z",
+      from: "s",
+      project,
+      message: "a",
+    });
+    markMessagesRead(project, ["a"]);
+    indexedMessages(project, 0, at);
+    appendMessage({
+      id: "b",
+      ts: "2026-09-29T12:02:00.000Z",
+      from: "s",
+      project,
+      message: "b",
+    });
+    markMessagesRead(project, ["b"]);
+    const db = new DatabaseSync(MESSAGE_INDEX_PATH);
+    try {
+      schema(db);
+      const stale = planIngest(db);
+      expect(stale.spools.length).toBe(1);
+      expect(stale.reads.length).toBe(1);
+      // A peer ingests the same bytes first.
+      expect(indexedMessages(project, 0, at).totals.messages).toBe(2);
+      db.exec("BEGIN IMMEDIATE");
+      expect(applyIngest(db, stale)).toBe(false);
+      db.exec("ROLLBACK");
+    } finally {
+      db.close();
+    }
+    const state = indexedMessages(project, 0, at);
+    expect(state.totals).toEqual({ messages: 2, projects: 1, threads: 2 });
+    expect(state.routes).toEqual([{ from: "s", to: "mailbox", count: 2 }]);
+    expect(state.messages.every((m) => m.read)).toBe(true);
+  });
+});
+
+test("a reader answers from the committed projection while a peer holds the write lock", () => {
+  projectFixture((project) => {
+    appendMessage({
+      id: "old",
+      ts: "2026-09-29T12:01:00.000Z",
+      from: "s",
+      project,
+      message: "old",
+    });
+    expect(indexedMessages(project, 0, at).current).toBe(true);
+    appendMessage({
+      id: "new",
+      ts: "2026-09-29T12:02:00.000Z",
+      from: "s",
+      project,
+      message: "new",
+    });
+    const holder = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `const { DatabaseSync } = require("node:sqlite");
+         const db = new DatabaseSync(${JSON.stringify(MESSAGE_INDEX_PATH)});
+         db.exec("BEGIN IMMEDIATE");
+         console.log("locked");
+         Bun.sleepSync(12000);`,
+      ],
+      { stdout: "pipe" },
+    );
+    try {
+      const deadline = Date.now() + 5000;
+      const reader = holder.stdout.getReader();
+      // Wait until the peer really holds the lock.
+      void reader.read();
+      while (Date.now() < deadline) {
+        const probe = new DatabaseSync(MESSAGE_INDEX_PATH);
+        try {
+          probe.exec("PRAGMA busy_timeout = 0");
+          probe.exec("BEGIN IMMEDIATE");
+          probe.exec("ROLLBACK");
+        } catch (error) {
+          if ((error as { errcode?: number }).errcode !== 5) throw error;
+          break;
+        } finally {
+          probe.close();
+        }
+        Bun.sleepSync(50);
+      }
+      const started = performance.now();
+      const state = indexedMessages(project, 0, at);
+      const waited = performance.now() - started;
+      expect(state.current).toBe(false);
+      expect(state.messages.map((m) => m.id)).toEqual(["old"]);
+      expect(waited).toBeLessThan(10_000);
+    } finally {
+      // The kernel releases the lock with the process; the next call's lock
+      // wait covers the gap.
+      holder.kill(9);
+    }
+    const caught = indexedMessages(project, 0, at);
+    expect(caught.current).toBe(true);
+    expect(caught.messages.map((m) => m.id)).toEqual(["new", "old"]);
+  });
+}, 20_000);
+
+test("a stale rebuild plan cannot erase a newer committed rebuild", () => {
+  projectFixture((project) => {
+    appendMessage({
+      id: "a",
+      ts: "2026-09-29T12:01:00.000Z",
+      from: "s",
+      project,
+      message: "a",
+    });
+    indexedMessages(project, 0, at);
+    // Replacing the spool (new inode) makes the next plan a rebuild.
+    const spool = spoolPath(project);
+    const copy = `${spool}.tmp`;
+    writeFileSync(copy, readFileSync(spool));
+    renameSync(copy, spool);
+    const db = new DatabaseSync(MESSAGE_INDEX_PATH);
+    try {
+      schema(db);
+      const older = planIngest(db);
+      expect(older.rebuild).toBe(true);
+      appendMessage({
+        id: "b",
+        ts: "2026-09-29T12:02:00.000Z",
+        from: "s",
+        project,
+        message: "b",
+      });
+      const newer = planIngest(db);
+      expect(newer.rebuild).toBe(true);
+      db.exec("BEGIN IMMEDIATE");
+      expect(applyIngest(db, newer)).toBe(true);
+      db.exec("COMMIT");
+      db.exec("BEGIN IMMEDIATE");
+      expect(applyIngest(db, older)).toBe(false);
+      db.exec("ROLLBACK");
+    } finally {
+      db.close();
+    }
+    const state = indexedMessages(project, 0, at);
+    expect(state.current).toBe(true);
+    expect(state.messages.map((m) => m.id)).toEqual(["b", "a"]);
   });
 });

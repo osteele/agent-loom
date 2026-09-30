@@ -55,6 +55,16 @@ spools, and a truncated, replaced, or removed spool rebuilds the projection.
 The first build can take longer than subsequent requests. This cache is shared
 by the CLI and daemon, so `--no-sync` stays current without an HTTP request.
 
+A request reads the new bytes and resolves project paths before it takes the
+index's write lock, and holds the lock only to insert what it read. The
+inserts apply only if no other request committed since it read the index's
+cursors; otherwise it reads again from the new cursors, so concurrent requests
+never count a line twice or roll back each other's work. A request that cannot
+get the lock within 5 seconds, because another process holding it has stalled,
+or that loses that race three times running, does not fail. It answers from the last committed projection and reports
+`freshness.messages: false`; totals, routes, volume, `log`, and `messages` may
+then omit the newest messages and read marks, which the next request picks up.
+
 `obligations` summarizes open obligation records: `waiting` counts records
 this session is the obligee of, `owed` counts records naming it as session
 obligor, `roleOwed` counts obligor roles resolving to it, `unresolvedOwed`
