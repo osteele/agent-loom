@@ -53,6 +53,7 @@ import { obligations } from "./obligations.ts";
 // module is what wires the singleton in the daemon process; see its own
 // comment for the import-cycle reasoning.
 import "./obligationResolution.ts";
+import { resolveInstalledTool } from "./installedTools.ts";
 import { LOG_PATH, PID_PATH, canonicalProject, ensureDirs } from "./paths.ts";
 import { writePresenceSnapshot } from "./presence.ts";
 import { writeProcessSnapshot } from "./processSnapshot.ts";
@@ -579,26 +580,9 @@ function tickClaimReminders(): void {
 let refreshing = false;
 let missingWeftLogged = false;
 
-/** Absolute path to weft, or undefined when it cannot be found.
- *
- * The daemon runs under launchd with a minimal PATH, so a bare name resolves
- * in an interactive shell and not here. Probing the usual install locations
- * keeps the refresher working without making the daemon depend on a login
- * environment it does not have. */
+/** Absolute path to weft, or undefined when it cannot be found. */
 function resolveWeft(): string | undefined {
-  const configured = process.env.AGENT_MAIL_WEFT_BIN;
-  if (configured) return existsSync(configured) ? configured : undefined;
-  const found = which("weft");
-  if (found) return found;
-  for (const candidate of [
-    join(homedir(), "go", "bin", "weft"),
-    "/opt/homebrew/bin/weft",
-    "/usr/local/bin/weft",
-    join(homedir(), ".local", "bin", "weft"),
-  ]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return undefined;
+  return resolveInstalledTool("weft", process.env.AGENT_MAIL_WEFT_BIN);
 }
 
 let refreshingRunning = false;
@@ -718,15 +702,10 @@ let refreshingLedger = false;
 let missingIssuesLogged = false;
 let lastLedgerDiagnosticMs = 0;
 
-/** Absolute path to the issues CLI, or undefined when it cannot be found.
- *
- * The daemon runs under launchd with a minimal PATH, and tests and exotic
- * installs need a way to pin the binary, so the same escape hatch as weft:
- * an explicit environment override first, then `which`. */
+/** Absolute path to the issue-ledger CLI, or undefined when it cannot be
+ * found. `AGENT_MAIL_ISSUES_BIN` pins it for tests and unusual installs. */
 function resolveIssues(): string | undefined {
-  const configured = process.env.AGENT_MAIL_ISSUES_BIN;
-  if (configured) return existsSync(configured) ? configured : undefined;
-  return which("issues");
+  return resolveInstalledTool("issues", process.env.AGENT_MAIL_ISSUES_BIN);
 }
 
 function logLedgerDiagnostic(message: string): void {
