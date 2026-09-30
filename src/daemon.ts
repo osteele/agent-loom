@@ -74,6 +74,7 @@ import {
   readReceipts,
   shouldEchoMessageToSlack,
 } from "./spool.ts";
+import { stateRevision } from "./stateRevision.ts";
 import { flushTransferNotifications, transfers } from "./transfers.ts";
 import { writeUnreadSummarySnapshot } from "./unreadSummary.ts";
 import {
@@ -164,6 +165,11 @@ const server = await serve({
     if (req.method === "GET" && config.dashboard) {
       const dashboard = dashboardResponse(req);
       if (dashboard) return dashboard;
+    }
+
+    // Not behind the dashboard gate: a digest reveals no mail or presence.
+    if (req.method === "GET" && url.pathname === "/api/v1/state/revision") {
+      return json(stateRevision());
     }
 
     if (req.method === "GET" && url.pathname === "/health") {

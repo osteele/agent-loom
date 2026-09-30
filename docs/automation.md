@@ -65,6 +65,31 @@ or that loses that race three times running, does not fail. It answers from the 
 `freshness.messages: false`; totals, routes, volume, `log`, and `messages` may
 then omit the newest messages and read marks, which the next request picks up.
 
+### Change signal
+
+`agent-mail state --revision` (or `GET /api/v1/state/revision`) prints
+`{kind:"agent_mail_state_revision", version:1, digest, generatedAt}` in a few
+milliseconds. The digest covers the identity (inode, size, mtime) of every file
+aggregate state is built from: message spools, read logs, claims, work leases,
+transfers, obligations, the session registry, Claude's session status files,
+session-name assignments, and the config's alias table. It also covers the content and
+freshness of the daemon's presence, process, and ledger snapshots, but not
+their per-tick timestamps. It also covers the message index's files, which change
+when an ingest commits. Compare digests for equality only; an unchanged digest
+means `state --no-sync` would read the same inputs. A poller reads the revision
+often and the full state only when the digest changes. A state read that
+ingests new mail moves the digest itself, so expect one extra read after each
+change. When a state read reports `freshness.messages: false`, re-read state
+on the next revision poll even if the digest has not moved.
+
+Two kinds of change do not move the digest. Time alone: a manual owner
+expires, an age advances. And coordination conditions derived from files
+outside agent-mail's state: an experiment file appearing in a notebook, or a
+work lease's source path disappearing. Keep a slow reconciliation read
+(minutes) alongside the revision poll to pick those up. No
+process sees every write, so the revision is derived from the files rather
+than counted, and it has no ordering: a later digest is not "greater".
+
 `obligations` summarizes open obligation records: `waiting` counts records
 this session is the obligee of, `owed` counts records naming it as session
 obligor, `roleOwed` counts obligor roles resolving to it, `unresolvedOwed`

@@ -31,7 +31,7 @@ import {
 } from "./paths.ts";
 import type { Registration } from "./registry.ts";
 
-const SESSIONS_DIR = join(
+export const CLAUDE_SESSIONS_DIR = join(
   process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
   "sessions",
 );
@@ -102,12 +102,12 @@ function syllable(bytes: Buffer, offset: number): string {
  * cross-reference the agent-mail registry (which is pid-pruned) for that. */
 export function claudeSessions(): Map<string, ClaudeSessionMeta> {
   const map = new Map<string, ClaudeSessionMeta>();
-  if (!existsSync(SESSIONS_DIR)) return map;
-  for (const file of readdirSync(SESSIONS_DIR)) {
+  if (!existsSync(CLAUDE_SESSIONS_DIR)) return map;
+  for (const file of readdirSync(CLAUDE_SESSIONS_DIR)) {
     if (!file.endsWith(".json")) continue;
     try {
       const doc = JSON.parse(
-        readFileSync(join(SESSIONS_DIR, file), "utf8"),
+        readFileSync(join(CLAUDE_SESSIONS_DIR, file), "utf8"),
       ) as {
         sessionId?: unknown;
         name?: unknown;

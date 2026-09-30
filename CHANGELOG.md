@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `agent-mail state --revision` and `GET /api/v1/state/revision`: a digest of
+  every file aggregate state is built from, computed in a few milliseconds, so a
+  poller can skip the full `state` dump when nothing changed.
 - Carry the sending session's id on every attributed message and its delivery
   receipts. `origin.sessionId` is now stamped on CLI sends (previously only MCP
   sends), receipts record a distinct `senderSessionId` alongside the

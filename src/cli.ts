@@ -240,6 +240,7 @@ import {
   readReceipts,
   senderSessionIdOf,
 } from "./spool.ts";
+import { stateRevision } from "./stateRevision.ts";
 import {
   findWorkLease,
   flushTransferNotifications,
@@ -4060,6 +4061,10 @@ async function cmdDashboard(
 async function cmdState(
   flags: Record<string, string | boolean>,
 ): Promise<void> {
+  if (flags.revision === true) {
+    console.log(JSON.stringify(stateRevision()));
+    return;
+  }
   const project =
     typeof flags.project === "string"
       ? canonicalProject(flags.project)
@@ -4282,6 +4287,8 @@ Dashboards:
                         Versioned aggregate state; does not change mail or
                         coordination. Uses the daemon when available; --no-sync
                         reads snapshots and updates the disposable message index.
+  state --revision      Digest of the files state is built from; poll it and
+                        read state only when it changes.
   dashboard [--port N] [--open] [--no-tui]
                         Show the persistent daemon dashboard, or serve a
                         direct-filesystem fallback when the daemon is down.

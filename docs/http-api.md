@@ -10,6 +10,7 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | `GET /` | persistent read-only web dashboard |
 | `GET /api/v1/state?project=<path>` | schema-v1 aggregate state; preserves mail and coordination while updating a disposable message index; project is optional |
 | `GET /api/state` | compatibility alias for `/api/v1/state` |
+| `GET /api/v1/state/revision` | `{kind:"agent_mail_state_revision", version:1, digest, generatedAt}`; the digest changes when an input of aggregate state changes. Served whether or not the dashboard is enabled. |
 | `POST /notify` | `{project, message, from?, meta?, idempotencyKey?, ttlSeconds?, slackEcho?}` → guarded spool + optional Slack echo |
 | `POST /api/v1/ledger-issues/refresh` | Request an early `issues list --json` snapshot tick; responds immediately, does not wait for the subprocess. Concurrent refreshes coalesce. |
 | `POST /read` | `{project, ids}` or `{project, all:true}` → mark messages read |
