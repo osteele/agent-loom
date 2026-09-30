@@ -3,6 +3,27 @@
 Planned and in-progress work. Shipped items are removed from this file (the
 git log is the record of what's done).
 
+## Rename to agent-loom
+
+Decided 2026-09-30 (`docs/decisions/log.md`); not yet carried out. The name
+describes one feature of a tool that now also carries session identity, claims,
+leases, experiment numbers, and obligations. Messaging keeps the name "mail".
+
+- Inventory every surface first: GitHub repository and the `npx add-mcp
+  github:osteele/agent-mail` install line; the MCP server name `agent-mail` in
+  each client config (and the `mcp__plugin_agent-mail_agent-mail__*` tool
+  prefixes that permission allowlists match); the Claude plugin id; the
+  `agent-mail` CLI; `~/.config/agent-mail`, `~/.claude/agent-mail` state, and
+  the launchd label `com.osteele.agent-mail`; `AGENT_MAIL_*` environment
+  variables; hooks and status-line scripts; the `agent-mail-triage` skill;
+  weft's notify integration; issue-ledger hooks (`agent-mail issues ...`);
+  lore and the global agent instructions.
+- Follow the agent-review rename (2026-08): read the old names alongside the
+  new ones for a bounded transition, record an old-to-new lookup table, then
+  retire the old names once no configured client or environment uses them.
+- Rename state and config directories with a compatibility symlink rather than
+  a copy, so a session on an old build and one on a new build share one store.
+
 ## Additional coding agents
 
 - Add MCP registration adapters for other mainstream coding agents as their

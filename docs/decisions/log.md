@@ -240,3 +240,16 @@ Q, accepting D.*
   when it changed, and a stored `external_fix` record that cites an issue —
   one owed by the retired `issue-ledger` system lists as unresolvable — stays
   open until its obligee closes or withdraws it.
+- **2026-09-30** — In the context of a tool whose surface has grown from mail
+  into session identity, path claims, work leases, experiment numbering, the
+  project-owner role, and obligations, facing a name that describes one of those
+  features, we decided to rename agent-mail to **agent-loom** — the frame that
+  holds many threads under tension without tangling them, alongside weft — and
+  neglected `agent-coord` / `agent-coordination`, which matches the existing
+  `list_coordination` vocabulary but reads as dry, and keeping `agent-mail`, to
+  name what the tool is rather than its first feature, accepting a rename that
+  reaches the public repository and install line, the MCP server name in every
+  client's config, permission allowlists keyed on tool names, the plugin id,
+  config and state paths, environment variables, hooks, status lines, skills,
+  and lore. "Mail" stays the name of the messaging feature (`send_mail`,
+  `check_inbox`, "check mail").
