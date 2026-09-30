@@ -253,3 +253,16 @@ Q, accepting D.*
   config and state paths, environment variables, hooks, status lines, skills,
   and lore. "Mail" stays the name of the messaging feature (`send_mail`,
   `check_inbox`, "check mail").
+
+- **2026-09-30** — In the context of two sessions reinstalling the same shared
+  tool environment at once (am20: `uv tool install --reinstall` left
+  agent-offload's live env without its package for ~43 s while both installs
+  exited 0), facing a race that no coordination record made visible, we
+  decided installs are not claimable: the fix is an installer that builds into
+  an immutable release directory, verifies it, and flips a `current` pointer,
+  as agent-review, agent-host-sync, and agent-offload's `just install` do. We
+  neglected an install-operation claim type, which would only make the race
+  detectable and only between sessions that remembered to take it, to make a
+  reader's view of an environment correct whether or not anyone coordinated,
+  accepting that a tool still installed in place remains exposed until its
+  own installer adopts the pointer flip.
