@@ -278,13 +278,16 @@ or `--once` prints the full bodies once. All external terminal controls are
 escaped. Viewing, expanding, refreshing, and quitting create no read or
 delivery receipts, register no session, and prune no state.
 
-The TUI checks for new mail every 2 seconds, but rebuilds the timeline only
-when a message spool or receipt log has changed size, inode, or mtime. The
-pane is meant to stay open for the life of an agent session, one per session,
-so its idle cost is paid continuously and multiplied by the number of
-sessions: while no mail arrives and no key is pressed, it must stay under 1%
-of one core. On a 22 MB spool an idle check costs about 1 ms of CPU, and a
-rebuild about 160 ms.
+On macOS the TUI watches the spool and receipt directories and rebuilds the
+timeline when a file in them changes, typically within a fraction of a second
+of a send. A 30-second pass rebuilds only if a spool or receipt log changed
+size, inode, or mtime, which catches any event the watch missed. On other
+platforms, and before the directories exist, it runs that check every 2
+seconds instead. The pane is meant to stay
+open for the life of an agent session, one per session, so its idle cost is
+paid continuously and multiplied by the number of sessions: while no mail
+arrives and no key is pressed, it must stay under 1% of one core. On a 22 MB
+spool an idle check costs about 1 ms of CPU, and a rebuild about 160 ms.
 
 `mail history` returns `{kind:"session_mail_history", version:1, project,
 sessionId, generatedAt, messages}`. `generatedAt` is epoch milliseconds.

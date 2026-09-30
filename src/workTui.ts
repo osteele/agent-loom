@@ -1,12 +1,15 @@
 /** Session-scoped, read-only work inspection. Never consults the live registry. */
 import {
   constants,
+  type FSWatcher,
   closeSync,
+  existsSync,
   fstatSync,
   openSync,
   readSync,
   realpathSync,
   statSync,
+  watch,
 } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { type Key, emitKeypressEvents } from "node:readline";
@@ -345,10 +348,19 @@ export function wrapWorkLines(lines: string[], columns: number): string[] {
 }
 
 /** Shared read-only terminal lifecycle. Views own their projection and viewport. */
+const POLL_MS = 2000;
+/** Catches a change a watch missed; every tick costs only a directory stat. */
+const RECONCILE_MS = 30_000;
+const WATCH_SETTLE_MS = 150;
+
 export function runReadOnlyTerminal(view: {
   label: string;
   /** Returns false when nothing changed, so the timer skips the redraw. */
   refresh: () => boolean;
+  /** Directories whose changes should trigger a refresh. On macOS, when every
+   * one exists, the timer drops to a slow reconciliation pass; otherwise it
+   * polls every 2 seconds. */
+  watch?: readonly string[];
   render: (
     columns: number,
     height: number,
@@ -357,6 +369,8 @@ export function runReadOnlyTerminal(view: {
 }): void {
   let cleaned = false;
   let timer: NodeJS.Timeout | undefined;
+  let pending: NodeJS.Timeout | undefined;
+  const watchers: FSWatcher[] = [];
   const wasRaw = process.stdin.isRaw;
   const signals = [
     "SIGINT",
@@ -369,6 +383,8 @@ export function runReadOnlyTerminal(view: {
     if (cleaned) return;
     cleaned = true;
     clearInterval(timer);
+    clearTimeout(pending);
+    for (const watcher of watchers.splice(0)) watcher.close();
     process.stdin.off("keypress", onKey);
     process.stdin.off("end", quit);
     process.stdin.off("error", fail);
@@ -439,16 +455,70 @@ export function runReadOnlyTerminal(view: {
     process.stdout.write("\x1b[?1049h\x1b[?25l");
     redraw();
     if (cleaned) return;
-    timer = setInterval(() => {
+    const tick = (): void => {
       try {
         if (!view.refresh()) return;
         redraw();
       } catch (error) {
         fail(error);
       }
-    }, 2000);
+    };
+    // A burst of appends (a send writes the spool, then a receipt per
+    // recipient) arrives as several events; settle before rebuilding.
+    const schedule = (): void => {
+      clearTimeout(pending);
+      pending = setTimeout(tick, WATCH_SETTLE_MS);
+    };
+    const watched = (view.watch ?? []).filter((dir) => existsSync(dir));
+    // Verified on macOS, where a directory watch (FSEvents) reports appends to
+    // files already in it. Elsewhere that is unverified, so the 2 s poll stays.
+    const reactive =
+      process.platform === "darwin" &&
+      view.watch !== undefined &&
+      watched.length === view.watch.length &&
+      watched.length > 0;
+    // A watch that cannot start or later fails costs latency, not
+    // correctness: close every watch and poll as if none had been asked for.
+    const degrade = (): void => {
+      for (const watcher of watchers.splice(0)) watcher.close();
+      if (cleaned) return;
+      clearInterval(timer);
+      timer = setInterval(tick, POLL_MS);
+    };
+    if (reactive) {
+      const started = watchDirectories(watched, schedule, degrade);
+      if (started) watchers.push(...started);
+    }
+    const watching = watchers.length > 0;
+    timer = setInterval(tick, watching ? RECONCILE_MS : POLL_MS);
+    // A change between the first frame's snapshot and the watches starting
+    // raised no event; one gated check now covers that window.
+    if (watching) schedule();
   } catch (error) {
     fail(error);
+  }
+}
+
+/** Watch every directory, or none: a watch that cannot start (ENOENT after an
+ * existence check, EACCES on macOS, EMFILE as sessions multiply) closes the ones
+ * already started and returns undefined, so the caller polls instead. */
+export function watchDirectories(
+  dirs: readonly string[],
+  onChange: () => void,
+  onError: () => void,
+): FSWatcher[] | undefined {
+  const started: FSWatcher[] = [];
+  try {
+    for (const dir of dirs) {
+      const watcher = watch(dir, onChange);
+      watcher.on("error", onError);
+      started.push(watcher);
+    }
+    return started;
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error)) throw error;
+    for (const watcher of started) watcher.close();
+    return undefined;
   }
 }
 

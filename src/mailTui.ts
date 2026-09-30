@@ -2,6 +2,7 @@ import type { Key } from "node:readline";
 import {
   type SessionMailHistory,
   type SessionMailMessage,
+  mailHistoryDirectories,
   mailHistoryPoller,
   readSessionMailHistory,
 } from "./mailHistory.ts";
@@ -149,8 +150,8 @@ export function runMailTui(options: WorkTuiOptions): void {
     process.stdout.write(`${formatMailHistory(history)}\n`);
     return;
   }
-  // The pane stays open for the life of every agent session, so an idle tick
-  // must cost a directory stat, not an archive read.
+  // The pane stays open for the life of every agent session, so it rebuilds
+  // only when the spools or receipt logs change, driven by directory events.
   const poll = mailHistoryPoller(options.project, options.sessionId);
   const initial = poll();
   if (!initial)
@@ -158,6 +159,7 @@ export function runMailTui(options: WorkTuiOptions): void {
   const timeline = new MailTimeline(initial);
   runReadOnlyTerminal({
     label: "mail tui",
+    watch: mailHistoryDirectories(),
     refresh() {
       const history = poll();
       if (!history) return false;

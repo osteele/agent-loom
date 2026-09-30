@@ -205,11 +205,16 @@ function fileStamps(dir: string): string[] {
     });
 }
 
+/** The directories whose files readSessionMailHistory derives from. */
+export function mailHistoryDirectories(): string[] {
+  return [INBOX_DIR, RECEIPTS_DIR];
+}
+
 /** Identity of every file readSessionMailHistory derives from: the message
  * spools and the receipt logs. Equal stamps mean an identical history, so a
  * viewer that polls can skip the rebuild, which reads the whole archive. */
 export function mailHistoryInputs(): string {
-  return JSON.stringify([fileStamps(INBOX_DIR), fileStamps(RECEIPTS_DIR)]);
+  return JSON.stringify(mailHistoryDirectories().map(fileStamps));
 }
 
 /** A poller that rebuilds the history only when its inputs changed, and
