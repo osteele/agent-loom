@@ -67,7 +67,7 @@ enum RefState { unverified | resolves | unresolvable }
 
 -- The human is a single principal on this machine (ADR 0001): the operator.
 -- A system is a local integration with a versioned event or CLI surface
--- ("weft", "agent-review", "agent-issues", "claims"). A role names a
+-- ("weft", "agent-review", "issue-ledger", "claims"). A role names a
 -- responsibility whose holder is resolved exactly at read and act time:
 -- component_owner via project ownership, plan_executor via the plan's
 -- current executor (ADR 0019), experiment_claimer via the experiment's

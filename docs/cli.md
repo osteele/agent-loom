@@ -536,7 +536,7 @@ outcome records lease loss.
 Obligations are machine-global records of who owes whom a specific outcome —
 a claim release, a decision, a referenced fix, a job completion, a review.
 Parties are sessions, the human operator, systems (a wired integration such
-as `weft` or `agent-issues`), and roles (the component owner, the plan's
+as `weft` or `issue-ledger`), and roles (the component owner, the plan's
 current executor, the experiment's claimer of record). The model is
 announced, not negotiated: the obligee creates the record and closes it, the
 obligor can contest but never confirm, and deterministic evidence settles
@@ -560,7 +560,7 @@ agent-mail obligations announce (--obligor <name-or-id> | --user |
 
 Announces that the obligor owes the calling session a specific outcome. A
 session obligor must resolve to a live session; `--system <name>` names a
-wired integration (`claims`, `weft`, `agent-issues`) whose own events settle
+wired integration (`claims`, `weft`, `issue-ledger`) whose own events settle
 the record; `--component <name>` names the component whose owner owes the
 repair, and resolves at read time to the one responsible session — its
 creation notice goes to that session. A role or system obligor cannot be

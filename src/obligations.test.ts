@@ -96,10 +96,10 @@ const SESSION_OBLIGOR = {
   ...{ sessionId: "bob", label: "Bob" },
 };
 const WEFT = { kind: "system" as const, system: "weft", label: "weft" };
-const AGENT_ISSUES = {
+const ISSUE_LEDGER = {
   kind: "system" as const,
-  system: "agent-issues",
-  label: "agent-issues",
+  system: "issue-ledger",
+  label: "issue-ledger",
 };
 const T0 = "2026-09-27T00:00:00.000Z";
 const T1 = "2026-09-27T01:00:00.000Z";
@@ -230,7 +230,7 @@ test("EventSettles settles system and role obligors on a matching event, never b
     kind: "job_completion",
     subject: "job-9",
     obligee: CAROL,
-    obligor: AGENT_ISSUES,
+    obligor: ISSUE_LEDGER,
   });
   const roleWait = announce(store, {
     kind: "external_fix",
@@ -284,9 +284,9 @@ test("EventSettles settles system and role obligors on a matching event, never b
   expect(store.settleByEvent("weft", "job-9", { now: T1 })).toEqual([]);
   // The other system's event settles its own wait, and a role obligor
   // settles on whatever system observed the event for its subject.
-  const settledNow = store.settleByEvent("agent-issues", "job-9", { now: T1 });
+  const settledNow = store.settleByEvent("issue-ledger", "job-9", { now: T1 });
   expect(settledNow.map((o) => o.id)).toEqual([otherSystemWait.id]);
-  const settledRole = store.settleByEvent("agent-issues", "am17", { now: T1 });
+  const settledRole = store.settleByEvent("issue-ledger", "am17", { now: T1 });
   expect(settledRole.map((o) => o.id)).toEqual([roleOtherSubject.id]);
 });
 

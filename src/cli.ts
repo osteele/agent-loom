@@ -4013,7 +4013,7 @@ Coordination:
                         contest but never confirms. A session obligor is
                         resolved like --session recipients and gets one
                         notice; --system names a wired integration (claims,
-                        weft, agent-issues) and settles by its own events;
+                        weft, issue-ledger) and settles by its own events;
                         --component names the component whose owner owes
                         the repair, and its notice goes to the resolved
                         owner. A role or system obligor cannot contest.

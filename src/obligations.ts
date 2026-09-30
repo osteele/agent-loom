@@ -98,7 +98,7 @@ export type Role =
 /** An obligation end. `session` is structurally a SessionRef, so existing
  * call sites that name a session keep working. The human is a single
  * principal on this machine (ADR 0001); a system is a local integration
- * with a versioned event or CLI surface ("weft", "agent-issues", ...); a
+ * with a versioned event or CLI surface ("weft", "issue-ledger", ...); a
  * role names a responsibility rather than a process. */
 export type Party =
   | SessionParty
@@ -246,11 +246,11 @@ const KINDS: readonly ObligationKind[] = [
 
 /** Systems whose settlement hook this repo configures, and therefore the
  * system names a `system` party may use: claims settles in the release
- * transaction, weft through the notify command, agent-issues through the
+ * transaction, weft through the notify command, issue-ledger through the
  * daemon's ref observer. A system outside this set has no wired settlement
  * hook, so a record waiting on it could never settle by evidence — announce
  * refuses it rather than minting a wait nothing can satisfy. */
-const WIRED_SYSTEMS: readonly string[] = ["claims", "weft", "agent-issues"];
+const WIRED_SYSTEMS: readonly string[] = ["claims", "weft", "issue-ledger"];
 
 /** Whether the named system's settlement hook is one this build configures —
  * the PartyResolves answer for a system party. */

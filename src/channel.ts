@@ -1097,7 +1097,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           system: {
             type: "string",
             description:
-              'Name of a wired integration that owes the outcome ("weft", "agent-issues", "claims"). Event-settled: it cannot be contested. Exactly one of obligor / to_user / system / component.',
+              'Name of a wired integration that owes the outcome ("weft", "issue-ledger", "claims"). Event-settled: it cannot be contested. Exactly one of obligor / to_user / system / component.',
           },
           component: {
             type: "string",
@@ -2561,7 +2561,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     } else if (system !== undefined) {
       if (typeof system !== "string" || !system.trim()) {
         throw new Error(
-          'system must name a wired integration, e.g. "weft" or "agent-issues"',
+          'system must name a wired integration, e.g. "weft" or "issue-ledger"',
         );
       }
       const wired = system.trim();

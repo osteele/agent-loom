@@ -480,7 +480,7 @@ agent-mail coordination transfers [--project <dir> | --all] [--json]
 
 Obligations are the fourth coordination primitive: machine-global records of
 who owes whom a specific outcome, spanning projects. Each end is a party —
-a session, the human operator, a wired system (`weft`, `agent-issues`), or
+a session, the human operator, a wired system (`weft`, `issue-ledger`), or
 a role (component owner, plan executor, experiment claimer) that resolves
 exactly to one responsible session. The model is announced, not negotiated:
 the obligee creates the record and closes it, the obligor can contest but

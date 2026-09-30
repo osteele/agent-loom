@@ -820,13 +820,13 @@ function tickObligationRefs(): void {
           // diagnostic instead of being settled by a guess.
           if (previous === "resolves" && next === "unresolvable") {
             const settled = obligations.settleByEvent(
-              "agent-issues",
+              "issue-ledger",
               record.subject,
               { now },
             );
             if (settled.length > 0) {
               log(
-                `obligation refs: ${settled.length} obligation(s) settled by the agent-issues event on ${record.subject}`,
+                `obligation refs: ${settled.length} obligation(s) settled by the issue-ledger event on ${record.subject}`,
               );
             }
           }
