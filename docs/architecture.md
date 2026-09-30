@@ -281,7 +281,15 @@ Agents can coordinate work without racing on notebook IDs or overlapping
 edits. `claim_experiment` atomically returns the next `EXP-NNN`, accounting for
 both files already in `experiments/` and reservations held by other agents.
 Create the `EXP-NNN-*.md` file before releasing the claim; after release, the
-file is what keeps the number allocated.
+file is what keeps the number allocated. It defaults to the calling session's
+project; a notebook in another project is named by that project's canonical
+absolute `project` path, and the result names the notebook and project the
+number was drawn from.
+
+Every MCP tool refuses an argument its schema does not declare, naming the
+arguments it does accept. A dropped key would otherwise be indistinguishable
+from a default, and the default for most coordination tools is the server's
+own project.
 
 `claim_path` reserves one or more names within a project. It defaults to the
 calling MCP session's project. A cross-project call names the destination with

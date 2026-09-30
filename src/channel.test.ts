@@ -2091,3 +2091,69 @@ test("shutdown unregisters and releases work if experiment settlement fails", as
     await client.close();
   }
 }, 20_000);
+
+test("claim_experiment honors an explicit project and refuses undeclared arguments", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-experiment-"));
+  temporaryDirectories.push(root);
+  const home = join(root, "home");
+  const here = join(root, "here");
+  const there = realpathSync(mkdtempSync(join(root, "there-")));
+  mkdirSync(home);
+  mkdirSync(join(here, "lab-notebook", "experiments"), { recursive: true });
+  mkdirSync(join(there, "lab-notebook", "experiments"), { recursive: true });
+  writeFileSync(
+    join(there, "lab-notebook", "experiments", "EXP-002-prior.md"),
+    "",
+  );
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(import.meta.dir, "channel.ts")],
+    cwd: here,
+    env: { ...environment, HOME: home },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "agent-mail-test", version: "1" });
+  try {
+    await client.connect(transport);
+
+    // am19: a key the tool does not model was dropped, and the claim landed in
+    // the server's own project under a message that named neither.
+    await expect(
+      client.callTool({
+        name: "claim_experiment",
+        arguments: { projects: there },
+      }),
+    ).rejects.toThrow("claim_experiment does not accept projects");
+    await expect(
+      client.callTool({ name: "check_inbox", arguments: { unred: true } }),
+    ).rejects.toThrow("check_inbox does not accept unred");
+    await expect(
+      client.callTool({
+        name: "claim_experiment",
+        arguments: { project: "there" },
+      }),
+    ).rejects.toThrow("explicit canonical absolute path");
+
+    const claimed = textContent(
+      await client.callTool({
+        name: "claim_experiment",
+        arguments: { project: there },
+      }),
+    );
+    expect(claimed).toContain(
+      `EXP-003 claimed in ${join(there, "lab-notebook")} (project ${there};`,
+    );
+    const local = textContent(
+      await client.callTool({ name: "claim_experiment" }),
+    );
+    expect(local).toContain("EXP-001 claimed in");
+    expect(local).toContain(join("here", "lab-notebook"));
+  } finally {
+    await client.close();
+  }
+});

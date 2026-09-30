@@ -26,6 +26,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { readAnnouncedState, writeAnnouncedState } from "./announced.ts";
 import {
@@ -158,6 +159,7 @@ import {
   senderSessionIdOf,
   visibleToSession,
 } from "./spool.ts";
+import { undeclaredArguments } from "./tool-arguments.ts";
 import {
   findWorkLease,
   flushTransferNotifications,
@@ -308,7 +310,10 @@ function ownerForPathClaim(
     throw new Error("plan_project and plan_stem must be supplied together");
   }
   if (planStem === undefined) return claimOwner;
-  const project = explicitCanonicalProject(planProject as string);
+  const project = explicitCanonicalProject(
+    "claim_path plan",
+    planProject as string,
+  );
   const plan = { project, stem: planStem };
   const executor = currentPlanExecutor(plan);
   if (!executor) {
@@ -586,777 +591,783 @@ const mcp = new Server(
   },
 );
 
+const TOOLS: Tool[] = [
+  {
+    name: "send_mail",
+    description:
+      "Send durable mail to another project's agent-mail inbox. Use for " +
+      "requests to send mail between coding-agent sessions; harness-native " +
+      "peer messaging must be named explicitly. By default every session " +
+      "in the target directory sees it; pass `session` to address one " +
+      "specific session. To reply to the original sender, pass `reply_to` with " +
+      "the id shown by check_inbox. It selects their live mailbox and inherits the thread; " +
+      "an explicit `session` overrides the recipient.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Project directory (absolute path) for owner routing, broadcast, or disambiguating human-name collisions. Exact IDs and globally unique names select the recipient's registered mailbox.",
+        },
+        message: { type: "string", description: "The message" },
+        session: {
+          type: "string",
+          description:
+            "Optional: exact opaque session ID, or agent-mail full/display name (see list_sessions). " +
+            "IDs take precedence; unique names resolve globally. Project disambiguates name collisions, never IDs with multiple live mailboxes. " +
+            "This is separate from Claude's native agent ids. Overrides reply_to's recipient; missing, ambiguous, empty, or refusing recipients are errors. Omit both session and role to broadcast.",
+        },
+        role: {
+          type: "string",
+          enum: ["owner"],
+          description:
+            "Address the target project's owner. Mutually exclusive with session; overrides reply_to's recipient. Missing or ambiguous owners are errors.",
+        },
+        reply_to: {
+          type: "string",
+          description:
+            "Optional: id of the message this answers (from check_inbox). " +
+            "Addresses the original sender in their live mailbox and inherits the thread. An unresolved sender is an error; use project with session or role to select a recipient explicitly.",
+        },
+        idempotency_key: {
+          type: "string",
+          description:
+            "Optional retry key. Reusing it returns the original message id without appending a duplicate.",
+        },
+        ttl_seconds: {
+          type: "number",
+          description:
+            "Optional delivery lifetime in seconds. Expired mail remains auditable but is not pushed.",
+        },
+      },
+      required: ["project", "message"],
+    },
+  },
+  {
+    name: "project_owner",
+    description:
+      "Inspect a project's owner, or claim/release this session's explicit owner assignment. With no assignment the sole live session is inferred; multiple sessions require an explicit claim. The returned leaseId supports the existing work-transfer tools. This role grants no permissions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["show", "claim", "release"],
+          description: "Defaults to show",
+        },
+        project: {
+          type: "string",
+          description:
+            "Defaults to this project. Claim and release operate only in this session's project.",
+        },
+      },
+    },
+  },
+  {
+    name: "list_sessions",
+    description:
+      "List attached agent sessions (mail targets) and their display names, full names, and ids. " +
+      "Optionally scope to one project directory. Attached does not mean " +
+      "active: each entry shows how recently the session did anything " +
+      "(busy / active / idle <age>) — treat long-idle sessions as probably " +
+      "vacant even though mail to them will be delivered. Entries also show " +
+      "client capabilities and inbound accept/hold/refuse policy.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Optional: only list sessions in this directory",
+        },
+      },
+    },
+  },
+  {
+    name: "check_inbox",
+    description:
+      "Read this project's recent agent-mail messages. Use when the user " +
+      "asks to check or read mail or an unqualified inbox. Returned messages " +
+      "are marked read; pass peek=true to leave them unread.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Max messages to return (default 20)",
+        },
+        unread: {
+          type: "boolean",
+          description: "Only return unread messages",
+        },
+        peek: {
+          type: "boolean",
+          description:
+            "Look without acknowledging: leave returned messages unread",
+        },
+      },
+    },
+  },
+  {
+    name: "mark_read",
+    description: "Mark this project's agent-mail messages read.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Message ids to mark read",
+        },
+        all: {
+          type: "boolean",
+          description: "Mark all current messages read",
+        },
+      },
+    },
+  },
+  {
+    name: "mute_notifications",
+    description:
+      "Pause channel push for this session. Incoming mail keeps spooling " +
+      "and stays visible to check_inbox, but is not pushed as a channel " +
+      "event. When you unmute, everything held is delivered at once.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "unmute_notifications",
+    description:
+      "Resume channel push for this session, delivering any messages that " +
+      "arrived while muted.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "set_inbound_policy",
+    description:
+      "Set this session's inbound agent-mail policy. accept delivers new and held mail; hold queues it without entering context; refuse drops it for this session while retaining the audit record.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        policy: {
+          type: "string",
+          enum: ["accept", "hold", "refuse"],
+        },
+      },
+      required: ["policy"],
+    },
+  },
+  {
+    name: "delivery_status",
+    description:
+      "Show append-only delivery receipts for one message, or the most recent receipts in this project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message_id: { type: "string" },
+        limit: { type: "number", description: "Default 50" },
+      },
+    },
+  },
+  {
+    name: "claim_experiment",
+    description:
+      "Atomically reserve the next sequential EXP-NNN number in a research " +
+      "lab notebook. The default notebook is <project>/lab-notebook when present, " +
+      "otherwise the project root. Create the experiment file, then call " +
+      "release_claim with the returned claim id; the file keeps the number reserved.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Optional canonical absolute project directory. Required for a notebook in another project.",
+        },
+        notebook: {
+          type: "string",
+          description:
+            "Optional lab-notebook directory inside the project, absolute or relative to it",
+        },
+      },
+    },
+  },
+  {
+    name: "claim_path",
+    description:
+      "Atomically claim one or more names inside one project. Existing files " +
+      "and directories use their observed type. A nonexistent target defaults " +
+      "to file unless directory is true. Same-owner overlap is allowed; other " +
+      "owners conflict hierarchically. A new claim returns a one-time release token.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Optional canonical absolute project directory. Required for cross-project claims.",
+        },
+        path: {
+          type: "string",
+          description:
+            "One path, absolute or relative to the selected project. Use paths for an atomic edit set.",
+        },
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description:
+            "Paths claimed atomically under one claim id, relative to the selected project.",
+        },
+        directory: {
+          type: "boolean",
+          description:
+            "Declare every nonexistent target as a directory. Existing targets use their observed type.",
+        },
+        plan_project: {
+          type: "string",
+          description:
+            "Canonical project containing the execution plan. Requires plan_stem and makes that plan the claim owner.",
+        },
+        plan_stem: {
+          type: "string",
+          description:
+            "Stable filename stem of a research plan currently held by this executor. Requires plan_project.",
+        },
+      },
+    },
+  },
+  {
+    name: "list_claims",
+    description:
+      "List claims. Defaults to active claims in this project; pass all_projects for cross-project inspection or include_history for retained released path claims.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { type: "string" },
+        all_projects: { type: "boolean" },
+        include_history: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "release_claim",
+    description:
+      "Release a claim by public id and proven owner identity, or by its unguessable release token. Exactly one identifier is required.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        claim_id: { type: "string", description: "Public claim id" },
+        release_token: {
+          type: "string",
+          description:
+            "Secret token returned once when a path claim is created",
+        },
+        project: {
+          type: "string",
+          description: "Optional canonical project filter",
+        },
+      },
+    },
+  },
+  {
+    name: "acquire_work",
+    description:
+      "Atomically acquire exclusive responsibility for a logical unit of work. " +
+      "This does not claim or restrict edits to any file. Repeating the call " +
+      "for the same resource from this session is idempotent and updates its metadata.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        resource_type: {
+          type: "string",
+          description: "Namespaced resource type, for example research-plan",
+        },
+        resource_key: {
+          type: "string",
+          description:
+            "Stable key within this project and resource type; research plans use the filename stem",
+        },
+        label: { type: "string", description: "Optional display label" },
+        source_path: {
+          type: "string",
+          description:
+            "Optional source path inside the project, absolute or relative",
+        },
+        state: {
+          type: "string",
+          enum: ["working", "waiting"],
+          description: "Initial responsibility state (default working)",
+        },
+        activity: {
+          type: "string",
+          description: "Optional short description of the current activity",
+        },
+        progress: {
+          type: ["object", "null"],
+          description:
+            "Reported position; omit to preserve, null to clear. current <= total.",
+          properties: {
+            current: { type: "integer", minimum: 1 },
+            total: { type: "integer", minimum: 1 },
+            label: { type: "string" },
+          },
+          required: ["current"],
+          additionalProperties: false,
+        },
+      },
+      required: ["resource_type", "resource_key"],
+    },
+  },
+  {
+    name: "update_work",
+    description:
+      "Update the state, current activity, or reported position of one of this session's work leases.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        work_id: { type: "string", description: "Work lease id" },
+        state: { type: "string", enum: ["working", "waiting"] },
+        activity: {
+          type: "string",
+          description: "Short current activity; pass an empty string to clear",
+        },
+        progress: {
+          type: ["object", "null"],
+          description:
+            "Reported position; omit to preserve, null to clear. current <= total.",
+          properties: {
+            current: { type: "integer", minimum: 1 },
+            total: { type: "integer", minimum: 1 },
+            label: { type: "string" },
+          },
+          required: ["current"],
+          additionalProperties: false,
+        },
+      },
+      required: ["work_id"],
+    },
+  },
+  {
+    name: "list_work",
+    description:
+      "List exclusive logical-work leases and their owners. Defaults to this " +
+      "project; pass all_projects to answer cross-project ownership questions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Optional project directory instead of this project",
+        },
+        all_projects: {
+          type: "boolean",
+          description: "List work across every known project",
+        },
+        resource_type: { type: "string" },
+        owner: {
+          type: "string",
+          description: "Owner session id or display label",
+        },
+      },
+    },
+  },
+  {
+    name: "release_work",
+    description:
+      "Release one of this session's logical-work leases. For a research plan, " +
+      "an optional terminal outcome records why its plan-owned claims ended.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        work_id: { type: "string", description: "Work lease id" },
+        outcome: {
+          type: "string",
+          enum: ["completed", "abandoned"],
+        },
+      },
+      required: ["work_id"],
+    },
+  },
+  {
+    name: "list_coordination",
+    description:
+      "List logical work, path claims, and experiment-number reservations in one health-oriented view. Defaults to this project; pass all_projects for a cross-project view.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description: "Optional project directory instead of this project",
+        },
+        all_projects: {
+          type: "boolean",
+          description: "List coordination across every known project",
+        },
+        kind: {
+          type: "string",
+          enum: ["work", "path-claim", "experiment-claim", "obligation"],
+        },
+        owner: {
+          type: "string",
+          description: "Owner session id or display label",
+        },
+        condition: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "recover_coordination",
+    description:
+      "Release one stale work lease or claim after inspecting its source and related artifacts. Pass authority and reason together to force recovery when the user authorized breaking this specific lock. The declaration is recorded, not verified.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        coordination_id: {
+          type: "string",
+          description: "Work lease or claim id returned by list_coordination",
+        },
+        authority: {
+          type: "string",
+          description:
+            "Who authorized breaking this lock. Use only on explicit user instruction.",
+        },
+        reason: {
+          type: "string",
+          description:
+            "Required justification when authority forces recovery; recorded verbatim.",
+        },
+      },
+      required: ["coordination_id"],
+    },
+  },
+  {
+    name: "request_coordination_transfer",
+    description:
+      "Request an asynchronous transfer of a logical work lease. The current owner may accept or decline; if it does not respond before the deadline, ownership transfers automatically. The request is durable, auditable, idempotent for the same requester and lease version, and returns immediately.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        coordination_id: {
+          type: "string",
+          description: "Logical work lease id from list_coordination",
+        },
+        reason: { type: "string" },
+        timeout_seconds: {
+          type: "number",
+          minimum: 5,
+          maximum: 86400,
+          description: "Deadline delay; default 300 seconds",
+        },
+      },
+      required: ["coordination_id"],
+    },
+  },
+  {
+    name: "respond_coordination_transfer",
+    description:
+      "Accept or decline a pending work-lease transfer request. Only the exact current owner process captured by the request may respond.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: { type: "string" },
+        decision: { type: "string", enum: ["accept", "decline"] },
+        message: { type: "string" },
+      },
+      required: ["request_id", "decision"],
+    },
+  },
+  {
+    name: "list_coordination_transfers",
+    description:
+      "List durable work-lease transfer requests for this project, including deadlines and final dispositions.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "obligations_announce",
+    description:
+      "Announce that another session, the human operator, a system, or a " +
+      "component's owner owes this session a specific outcome. Announced, " +
+      "not negotiated: this session creates and later closes the record; " +
+      "the named obligor may contest it but never confirms it. A session " +
+      "obligor is resolved like send_mail recipients and gets exactly one " +
+      "notice; a component owner is notified through the session that " +
+      "holds the role; the operator and systems get none (the owed view " +
+      "and the system's own event feed are theirs). Announcing the same " +
+      "open subject twice is an error naming the existing obligation id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        obligor: {
+          type: "string",
+          description:
+            "Session name or ID that owes the outcome (exact IDs and unique names resolve globally). Exactly one of obligor / to_user / system / component.",
+        },
+        to_user: {
+          type: "boolean",
+          description:
+            "Announce the human operator as the obligor instead of a session. Exactly one of obligor / to_user / system / component.",
+        },
+        system: {
+          type: "string",
+          description:
+            'Name of a wired integration that owes the outcome ("weft", "claims"). Event-settled: it cannot be contested. Issue-ledger needs no announce: every open issue is already an obligation. Exactly one of obligor / to_user / system / component.',
+        },
+        component: {
+          type: "string",
+          description:
+            "Name of the component whose owner owes the outcome (e.g. agent-mail). Resolves at read time to the one responsible session. Exactly one of obligor / to_user / system / component.",
+        },
+        kind: {
+          type: "string",
+          enum: [
+            "claim_release",
+            "decision",
+            "external_fix",
+            "job_completion",
+            "review",
+          ],
+          description:
+            "claim_release settles automatically when the named claim releases; job_completion, review, and external_fix on system or role obligors settle on their system's events; decision awaits a choice",
+        },
+        subject: {
+          type: "string",
+          description:
+            "Short plain-text title, e.g. EXP-238: disposition of F1834. Put findings, settled constraints, and consequences in description; choices in options; evidence pointers in markers.",
+        },
+        description: {
+          type: "string",
+          description:
+            "Optional multiline Markdown context (up to 10,000 characters): why the decision is open, what is settled, and the consequences of each choice. Unicode math symbols are stored verbatim.",
+        },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Declared choices, each one line (up to 500 characters). Inline Markdown and Unicode math are accepted. Presentation only: closure stays free-text belief; a recommendation is a comment, never a privileged index.",
+        },
+        markers: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["path", "label"] },
+              value: { type: "string" },
+              label: { type: "string" },
+            },
+            required: ["type", "value"],
+          },
+          description:
+            "Typed background markers: type path is a canonical absolute path (Open/Reveal/Quick Look), type label is reference text resolved against the obligee's lab notebook. Validated for shape, never dereferenced; a missing path shows as missing downstream.",
+        },
+      },
+      required: ["kind", "subject"],
+    },
+  },
+  {
+    name: "obligations_close",
+    description:
+      "Close one of this session's open obligations as satisfied — only the " +
+      "obligee session may close. claim_release subjects settle on their own " +
+      "when the claim releases; use this for decisions and external fixes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Obligation id (ob-…)" },
+        resolution: {
+          type: "string",
+          description: "Optional recorded outcome, never edited afterwards",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "obligations_withdraw",
+    description:
+      "Withdraw one of this session's open obligations — retract the wait " +
+      "without claiming it was satisfied. Only the obligee session may withdraw.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Obligation id (ob-…)" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "obligations_contest",
+    description:
+      "As the named session obligor, mark an obligation contested. Contest " +
+      "never closes: the record stays visible and tagged until the obligee " +
+      "withdraws or the operator clears it. Records naming the human " +
+      "operator are refused here; the operator contests them from the CLI " +
+      "with --user.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Obligation id (ob-…)" },
+        reason: {
+          type: "string",
+          description: "Recorded verbatim on the record",
+        },
+      },
+      required: ["id", "reason"],
+    },
+  },
+  {
+    name: "obligations_adopt",
+    description:
+      "Adopt every open obligation of an offline predecessor session — in " +
+      "both roles: what it was owed, and what it owed. The transfer is " +
+      "atomic and all-or-nothing. Exactly one succession proof is required: " +
+      "resume_id (the predecessor's session id, e.g. from the host command " +
+      "line) or authority with reason (a declared operator authorization, " +
+      "recorded, never verified).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        predecessor: {
+          type: "string",
+          description:
+            "Predecessor session name or ID. Offline sessions resolve only by exact ID; a live predecessor is refused.",
+        },
+        resume_id: {
+          type: "string",
+          description:
+            "The predecessor's session id as carried by THIS session's own host command line (--resume <id> at launch). Validated against it: a typed id that the host command line does not carry is refused. Use authority+reason when the session was not launched with --resume. Exactly one of resume_id / authority.",
+        },
+        authority: {
+          type: "string",
+          description:
+            "Succession proof: who authorized this adoption. Requires reason. Exactly one of resume_id / authority.",
+        },
+        reason: {
+          type: "string",
+          description: "Required justification when authority is declared",
+        },
+      },
+    },
+  },
+  {
+    name: "obligations_clear",
+    description:
+      "Clear an open obligation on declared operator authority — recorded, " +
+      "never verified. Use only on explicit user instruction, typically for " +
+      "a contested record the obligee will not withdraw.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Obligation id (ob-…)" },
+        authority: {
+          type: "string",
+          description: "Who authorized clearing this obligation",
+        },
+        reason: {
+          type: "string",
+          description: "Required justification; recorded verbatim",
+        },
+      },
+      required: ["id", "authority", "reason"],
+    },
+  },
+  {
+    name: "obligations_update",
+    description:
+      "Amend an open obligation's presentation fields in place — description " +
+      "(multiline decision context), options (declared choices, at least " +
+      "two), and markers (typed: path markers are absolute paths; label " +
+      "markers resolve against the obligee's notebook). Subject, kind, " +
+      "and obligor are the identity of the ask and never change. Only " +
+      "the obligee may amend.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Obligation id (ob-…)" },
+        description: {
+          type: "string",
+          description:
+            "Multiline Markdown decision context, including Unicode math. Omitting preserves it.",
+        },
+        clear_description: {
+          type: "boolean",
+          description: "Clear the description when true",
+        },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Declared choices, one line each (up to 500 characters); inline Markdown and Unicode math are accepted. Omitting preserves them.",
+        },
+        clear_options: {
+          type: "boolean",
+          description: "Clear options when true",
+        },
+        markers: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["path", "label"] },
+              value: { type: "string" },
+              label: { type: "string" },
+            },
+            required: ["type", "value"],
+          },
+          description: "Typed background markers. Omitting preserves them.",
+        },
+        clear_markers: {
+          type: "boolean",
+          description: "Clear markers when true",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "obligations_comment",
+    description:
+      "Append a note to an open obligation — either end or the operator " +
+      "may comment. Comments are notes, never lifecycle events, and are " +
+      "append-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Obligation id (ob-…)" },
+        text: { type: "string", description: "The comment text" },
+      },
+      required: ["id", "text"],
+    },
+  },
+  {
+    name: "obligations_list",
+    description:
+      "List obligations machine-globally. Defaults to open records in any " +
+      "project, including issue:<id> rows projected read-only from the " +
+      "issue ledger's open issues; owed_filter=human selects the " +
+      "operator's owed view. " +
+      "Contested records stay listed and tagged; liveness of an offline " +
+      "obligee or obligor is a condition on open records, not a status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: {
+          type: "string",
+          enum: ["open", "all"],
+          description: "Defaults to open",
+        },
+        owed_filter: {
+          type: "string",
+          enum: ["any", "human"],
+          description:
+            "any (default) lists everything; human lists records naming the operator as obligor",
+        },
+      },
+    },
+  },
+];
+
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "send_mail",
-      description:
-        "Send durable mail to another project's agent-mail inbox. Use for " +
-        "requests to send mail between coding-agent sessions; harness-native " +
-        "peer messaging must be named explicitly. By default every session " +
-        "in the target directory sees it; pass `session` to address one " +
-        "specific session. To reply to the original sender, pass `reply_to` with " +
-        "the id shown by check_inbox. It selects their live mailbox and inherits the thread; " +
-        "an explicit `session` overrides the recipient.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: {
-            type: "string",
-            description:
-              "Project directory (absolute path) for owner routing, broadcast, or disambiguating human-name collisions. Exact IDs and globally unique names select the recipient's registered mailbox.",
-          },
-          message: { type: "string", description: "The message" },
-          session: {
-            type: "string",
-            description:
-              "Optional: exact opaque session ID, or agent-mail full/display name (see list_sessions). " +
-              "IDs take precedence; unique names resolve globally. Project disambiguates name collisions, never IDs with multiple live mailboxes. " +
-              "This is separate from Claude's native agent ids. Overrides reply_to's recipient; missing, ambiguous, empty, or refusing recipients are errors. Omit both session and role to broadcast.",
-          },
-          role: {
-            type: "string",
-            enum: ["owner"],
-            description:
-              "Address the target project's owner. Mutually exclusive with session; overrides reply_to's recipient. Missing or ambiguous owners are errors.",
-          },
-          reply_to: {
-            type: "string",
-            description:
-              "Optional: id of the message this answers (from check_inbox). " +
-              "Addresses the original sender in their live mailbox and inherits the thread. An unresolved sender is an error; use project with session or role to select a recipient explicitly.",
-          },
-          idempotency_key: {
-            type: "string",
-            description:
-              "Optional retry key. Reusing it returns the original message id without appending a duplicate.",
-          },
-          ttl_seconds: {
-            type: "number",
-            description:
-              "Optional delivery lifetime in seconds. Expired mail remains auditable but is not pushed.",
-          },
-        },
-        required: ["project", "message"],
-      },
-    },
-    {
-      name: "project_owner",
-      description:
-        "Inspect a project's owner, or claim/release this session's explicit owner assignment. With no assignment the sole live session is inferred; multiple sessions require an explicit claim. The returned leaseId supports the existing work-transfer tools. This role grants no permissions.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          action: {
-            type: "string",
-            enum: ["show", "claim", "release"],
-            description: "Defaults to show",
-          },
-          project: {
-            type: "string",
-            description:
-              "Defaults to this project. Claim and release operate only in this session's project.",
-          },
-        },
-      },
-    },
-    {
-      name: "list_sessions",
-      description:
-        "List attached agent sessions (mail targets) and their display names, full names, and ids. " +
-        "Optionally scope to one project directory. Attached does not mean " +
-        "active: each entry shows how recently the session did anything " +
-        "(busy / active / idle <age>) — treat long-idle sessions as probably " +
-        "vacant even though mail to them will be delivered. Entries also show " +
-        "client capabilities and inbound accept/hold/refuse policy.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: {
-            type: "string",
-            description: "Optional: only list sessions in this directory",
-          },
-        },
-      },
-    },
-    {
-      name: "check_inbox",
-      description:
-        "Read this project's recent agent-mail messages. Use when the user " +
-        "asks to check or read mail or an unqualified inbox. Returned messages " +
-        "are marked read; pass peek=true to leave them unread.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          limit: {
-            type: "number",
-            description: "Max messages to return (default 20)",
-          },
-          unread: {
-            type: "boolean",
-            description: "Only return unread messages",
-          },
-          peek: {
-            type: "boolean",
-            description:
-              "Look without acknowledging: leave returned messages unread",
-          },
-        },
-      },
-    },
-    {
-      name: "mark_read",
-      description: "Mark this project's agent-mail messages read.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ids: {
-            type: "array",
-            items: { type: "string" },
-            description: "Message ids to mark read",
-          },
-          all: {
-            type: "boolean",
-            description: "Mark all current messages read",
-          },
-        },
-      },
-    },
-    {
-      name: "mute_notifications",
-      description:
-        "Pause channel push for this session. Incoming mail keeps spooling " +
-        "and stays visible to check_inbox, but is not pushed as a channel " +
-        "event. When you unmute, everything held is delivered at once.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "unmute_notifications",
-      description:
-        "Resume channel push for this session, delivering any messages that " +
-        "arrived while muted.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "set_inbound_policy",
-      description:
-        "Set this session's inbound agent-mail policy. accept delivers new and held mail; hold queues it without entering context; refuse drops it for this session while retaining the audit record.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          policy: {
-            type: "string",
-            enum: ["accept", "hold", "refuse"],
-          },
-        },
-        required: ["policy"],
-      },
-    },
-    {
-      name: "delivery_status",
-      description:
-        "Show append-only delivery receipts for one message, or the most recent receipts in this project.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          message_id: { type: "string" },
-          limit: { type: "number", description: "Default 50" },
-        },
-      },
-    },
-    {
-      name: "claim_experiment",
-      description:
-        "Atomically reserve the next sequential EXP-NNN number in a research " +
-        "lab notebook. The default notebook is ./lab-notebook when present, " +
-        "otherwise the project root. Create the experiment file, then call " +
-        "release_claim with the returned claim id; the file keeps the number reserved.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          notebook: {
-            type: "string",
-            description:
-              "Optional lab-notebook directory, absolute or relative to the project",
-          },
-        },
-      },
-    },
-    {
-      name: "claim_path",
-      description:
-        "Atomically claim one or more names inside one project. Existing files " +
-        "and directories use their observed type. A nonexistent target defaults " +
-        "to file unless directory is true. Same-owner overlap is allowed; other " +
-        "owners conflict hierarchically. A new claim returns a one-time release token.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: {
-            type: "string",
-            description:
-              "Optional canonical absolute project directory. Required for cross-project claims.",
-          },
-          path: {
-            type: "string",
-            description:
-              "One path, absolute or relative to the selected project. Use paths for an atomic edit set.",
-          },
-          paths: {
-            type: "array",
-            items: { type: "string" },
-            minItems: 1,
-            description:
-              "Paths claimed atomically under one claim id, relative to the selected project.",
-          },
-          directory: {
-            type: "boolean",
-            description:
-              "Declare every nonexistent target as a directory. Existing targets use their observed type.",
-          },
-          plan_project: {
-            type: "string",
-            description:
-              "Canonical project containing the execution plan. Requires plan_stem and makes that plan the claim owner.",
-          },
-          plan_stem: {
-            type: "string",
-            description:
-              "Stable filename stem of a research plan currently held by this executor. Requires plan_project.",
-          },
-        },
-      },
-    },
-    {
-      name: "list_claims",
-      description:
-        "List claims. Defaults to active claims in this project; pass all_projects for cross-project inspection or include_history for retained released path claims.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: { type: "string" },
-          all_projects: { type: "boolean" },
-          include_history: { type: "boolean" },
-        },
-      },
-    },
-    {
-      name: "release_claim",
-      description:
-        "Release a claim by public id and proven owner identity, or by its unguessable release token. Exactly one identifier is required.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          claim_id: { type: "string", description: "Public claim id" },
-          release_token: {
-            type: "string",
-            description:
-              "Secret token returned once when a path claim is created",
-          },
-          project: {
-            type: "string",
-            description: "Optional canonical project filter",
-          },
-        },
-      },
-    },
-    {
-      name: "acquire_work",
-      description:
-        "Atomically acquire exclusive responsibility for a logical unit of work. " +
-        "This does not claim or restrict edits to any file. Repeating the call " +
-        "for the same resource from this session is idempotent and updates its metadata.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          resource_type: {
-            type: "string",
-            description: "Namespaced resource type, for example research-plan",
-          },
-          resource_key: {
-            type: "string",
-            description:
-              "Stable key within this project and resource type; research plans use the filename stem",
-          },
-          label: { type: "string", description: "Optional display label" },
-          source_path: {
-            type: "string",
-            description:
-              "Optional source path inside the project, absolute or relative",
-          },
-          state: {
-            type: "string",
-            enum: ["working", "waiting"],
-            description: "Initial responsibility state (default working)",
-          },
-          activity: {
-            type: "string",
-            description: "Optional short description of the current activity",
-          },
-          progress: {
-            type: ["object", "null"],
-            description:
-              "Reported position; omit to preserve, null to clear. current <= total.",
-            properties: {
-              current: { type: "integer", minimum: 1 },
-              total: { type: "integer", minimum: 1 },
-              label: { type: "string" },
-            },
-            required: ["current"],
-            additionalProperties: false,
-          },
-        },
-        required: ["resource_type", "resource_key"],
-      },
-    },
-    {
-      name: "update_work",
-      description:
-        "Update the state, current activity, or reported position of one of this session's work leases.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          work_id: { type: "string", description: "Work lease id" },
-          state: { type: "string", enum: ["working", "waiting"] },
-          activity: {
-            type: "string",
-            description:
-              "Short current activity; pass an empty string to clear",
-          },
-          progress: {
-            type: ["object", "null"],
-            description:
-              "Reported position; omit to preserve, null to clear. current <= total.",
-            properties: {
-              current: { type: "integer", minimum: 1 },
-              total: { type: "integer", minimum: 1 },
-              label: { type: "string" },
-            },
-            required: ["current"],
-            additionalProperties: false,
-          },
-        },
-        required: ["work_id"],
-      },
-    },
-    {
-      name: "list_work",
-      description:
-        "List exclusive logical-work leases and their owners. Defaults to this " +
-        "project; pass all_projects to answer cross-project ownership questions.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: {
-            type: "string",
-            description: "Optional project directory instead of this project",
-          },
-          all_projects: {
-            type: "boolean",
-            description: "List work across every known project",
-          },
-          resource_type: { type: "string" },
-          owner: {
-            type: "string",
-            description: "Owner session id or display label",
-          },
-        },
-      },
-    },
-    {
-      name: "release_work",
-      description:
-        "Release one of this session's logical-work leases. For a research plan, " +
-        "an optional terminal outcome records why its plan-owned claims ended.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          work_id: { type: "string", description: "Work lease id" },
-          outcome: {
-            type: "string",
-            enum: ["completed", "abandoned"],
-          },
-        },
-        required: ["work_id"],
-      },
-    },
-    {
-      name: "list_coordination",
-      description:
-        "List logical work, path claims, and experiment-number reservations in one health-oriented view. Defaults to this project; pass all_projects for a cross-project view.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          project: {
-            type: "string",
-            description: "Optional project directory instead of this project",
-          },
-          all_projects: {
-            type: "boolean",
-            description: "List coordination across every known project",
-          },
-          kind: {
-            type: "string",
-            enum: ["work", "path-claim", "experiment-claim", "obligation"],
-          },
-          owner: {
-            type: "string",
-            description: "Owner session id or display label",
-          },
-          condition: { type: "string" },
-        },
-      },
-    },
-    {
-      name: "recover_coordination",
-      description:
-        "Release one stale work lease or claim after inspecting its source and related artifacts. Pass authority and reason together to force recovery when the user authorized breaking this specific lock. The declaration is recorded, not verified.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          coordination_id: {
-            type: "string",
-            description: "Work lease or claim id returned by list_coordination",
-          },
-          authority: {
-            type: "string",
-            description:
-              "Who authorized breaking this lock. Use only on explicit user instruction.",
-          },
-          reason: {
-            type: "string",
-            description:
-              "Required justification when authority forces recovery; recorded verbatim.",
-          },
-        },
-        required: ["coordination_id"],
-      },
-    },
-    {
-      name: "request_coordination_transfer",
-      description:
-        "Request an asynchronous transfer of a logical work lease. The current owner may accept or decline; if it does not respond before the deadline, ownership transfers automatically. The request is durable, auditable, idempotent for the same requester and lease version, and returns immediately.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          coordination_id: {
-            type: "string",
-            description: "Logical work lease id from list_coordination",
-          },
-          reason: { type: "string" },
-          timeout_seconds: {
-            type: "number",
-            minimum: 5,
-            maximum: 86400,
-            description: "Deadline delay; default 300 seconds",
-          },
-        },
-        required: ["coordination_id"],
-      },
-    },
-    {
-      name: "respond_coordination_transfer",
-      description:
-        "Accept or decline a pending work-lease transfer request. Only the exact current owner process captured by the request may respond.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          request_id: { type: "string" },
-          decision: { type: "string", enum: ["accept", "decline"] },
-          message: { type: "string" },
-        },
-        required: ["request_id", "decision"],
-      },
-    },
-    {
-      name: "list_coordination_transfers",
-      description:
-        "List durable work-lease transfer requests for this project, including deadlines and final dispositions.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "obligations_announce",
-      description:
-        "Announce that another session, the human operator, a system, or a " +
-        "component's owner owes this session a specific outcome. Announced, " +
-        "not negotiated: this session creates and later closes the record; " +
-        "the named obligor may contest it but never confirms it. A session " +
-        "obligor is resolved like send_mail recipients and gets exactly one " +
-        "notice; a component owner is notified through the session that " +
-        "holds the role; the operator and systems get none (the owed view " +
-        "and the system's own event feed are theirs). Announcing the same " +
-        "open subject twice is an error naming the existing obligation id.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          obligor: {
-            type: "string",
-            description:
-              "Session name or ID that owes the outcome (exact IDs and unique names resolve globally). Exactly one of obligor / to_user / system / component.",
-          },
-          to_user: {
-            type: "boolean",
-            description:
-              "Announce the human operator as the obligor instead of a session. Exactly one of obligor / to_user / system / component.",
-          },
-          system: {
-            type: "string",
-            description:
-              'Name of a wired integration that owes the outcome ("weft", "claims"). Event-settled: it cannot be contested. Issue-ledger needs no announce: every open issue is already an obligation. Exactly one of obligor / to_user / system / component.',
-          },
-          component: {
-            type: "string",
-            description:
-              "Name of the component whose owner owes the outcome (e.g. agent-mail). Resolves at read time to the one responsible session. Exactly one of obligor / to_user / system / component.",
-          },
-          kind: {
-            type: "string",
-            enum: [
-              "claim_release",
-              "decision",
-              "external_fix",
-              "job_completion",
-              "review",
-            ],
-            description:
-              "claim_release settles automatically when the named claim releases; job_completion, review, and external_fix on system or role obligors settle on their system's events; decision awaits a choice",
-          },
-          subject: {
-            type: "string",
-            description:
-              "Short plain-text title, e.g. EXP-238: disposition of F1834. Put findings, settled constraints, and consequences in description; choices in options; evidence pointers in markers.",
-          },
-          description: {
-            type: "string",
-            description:
-              "Optional multiline Markdown context (up to 10,000 characters): why the decision is open, what is settled, and the consequences of each choice. Unicode math symbols are stored verbatim.",
-          },
-          options: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              "Declared choices, each one line (up to 500 characters). Inline Markdown and Unicode math are accepted. Presentation only: closure stays free-text belief; a recommendation is a comment, never a privileged index.",
-          },
-          markers: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                type: { type: "string", enum: ["path", "label"] },
-                value: { type: "string" },
-                label: { type: "string" },
-              },
-              required: ["type", "value"],
-            },
-            description:
-              "Typed background markers: type path is a canonical absolute path (Open/Reveal/Quick Look), type label is reference text resolved against the obligee's lab notebook. Validated for shape, never dereferenced; a missing path shows as missing downstream.",
-          },
-        },
-        required: ["kind", "subject"],
-      },
-    },
-    {
-      name: "obligations_close",
-      description:
-        "Close one of this session's open obligations as satisfied — only the " +
-        "obligee session may close. claim_release subjects settle on their own " +
-        "when the claim releases; use this for decisions and external fixes.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: { type: "string", description: "Obligation id (ob-…)" },
-          resolution: {
-            type: "string",
-            description: "Optional recorded outcome, never edited afterwards",
-          },
-        },
-        required: ["id"],
-      },
-    },
-    {
-      name: "obligations_withdraw",
-      description:
-        "Withdraw one of this session's open obligations — retract the wait " +
-        "without claiming it was satisfied. Only the obligee session may withdraw.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: { type: "string", description: "Obligation id (ob-…)" },
-        },
-        required: ["id"],
-      },
-    },
-    {
-      name: "obligations_contest",
-      description:
-        "As the named session obligor, mark an obligation contested. Contest " +
-        "never closes: the record stays visible and tagged until the obligee " +
-        "withdraws or the operator clears it. Records naming the human " +
-        "operator are refused here; the operator contests them from the CLI " +
-        "with --user.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: { type: "string", description: "Obligation id (ob-…)" },
-          reason: {
-            type: "string",
-            description: "Recorded verbatim on the record",
-          },
-        },
-        required: ["id", "reason"],
-      },
-    },
-    {
-      name: "obligations_adopt",
-      description:
-        "Adopt every open obligation of an offline predecessor session — in " +
-        "both roles: what it was owed, and what it owed. The transfer is " +
-        "atomic and all-or-nothing. Exactly one succession proof is required: " +
-        "resume_id (the predecessor's session id, e.g. from the host command " +
-        "line) or authority with reason (a declared operator authorization, " +
-        "recorded, never verified).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          predecessor: {
-            type: "string",
-            description:
-              "Predecessor session name or ID. Offline sessions resolve only by exact ID; a live predecessor is refused.",
-          },
-          resume_id: {
-            type: "string",
-            description:
-              "The predecessor's session id as carried by THIS session's own host command line (--resume <id> at launch). Validated against it: a typed id that the host command line does not carry is refused. Use authority+reason when the session was not launched with --resume. Exactly one of resume_id / authority.",
-          },
-          authority: {
-            type: "string",
-            description:
-              "Succession proof: who authorized this adoption. Requires reason. Exactly one of resume_id / authority.",
-          },
-          reason: {
-            type: "string",
-            description: "Required justification when authority is declared",
-          },
-        },
-      },
-    },
-    {
-      name: "obligations_clear",
-      description:
-        "Clear an open obligation on declared operator authority — recorded, " +
-        "never verified. Use only on explicit user instruction, typically for " +
-        "a contested record the obligee will not withdraw.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: { type: "string", description: "Obligation id (ob-…)" },
-          authority: {
-            type: "string",
-            description: "Who authorized clearing this obligation",
-          },
-          reason: {
-            type: "string",
-            description: "Required justification; recorded verbatim",
-          },
-        },
-        required: ["id", "authority", "reason"],
-      },
-    },
-    {
-      name: "obligations_update",
-      description:
-        "Amend an open obligation's presentation fields in place — description " +
-        "(multiline decision context), options (declared choices, at least " +
-        "two), and markers (typed: path markers are absolute paths; label " +
-        "markers resolve against the obligee's notebook). Subject, kind, " +
-        "and obligor are the identity of the ask and never change. Only " +
-        "the obligee may amend.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: { type: "string", description: "Obligation id (ob-…)" },
-          description: {
-            type: "string",
-            description:
-              "Multiline Markdown decision context, including Unicode math. Omitting preserves it.",
-          },
-          clear_description: {
-            type: "boolean",
-            description: "Clear the description when true",
-          },
-          options: {
-            type: "array",
-            items: { type: "string" },
-            description:
-              "Declared choices, one line each (up to 500 characters); inline Markdown and Unicode math are accepted. Omitting preserves them.",
-          },
-          clear_options: {
-            type: "boolean",
-            description: "Clear options when true",
-          },
-          markers: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                type: { type: "string", enum: ["path", "label"] },
-                value: { type: "string" },
-                label: { type: "string" },
-              },
-              required: ["type", "value"],
-            },
-            description: "Typed background markers. Omitting preserves them.",
-          },
-          clear_markers: {
-            type: "boolean",
-            description: "Clear markers when true",
-          },
-        },
-        required: ["id"],
-      },
-    },
-    {
-      name: "obligations_comment",
-      description:
-        "Append a note to an open obligation — either end or the operator " +
-        "may comment. Comments are notes, never lifecycle events, and are " +
-        "append-only.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: { type: "string", description: "Obligation id (ob-…)" },
-          text: { type: "string", description: "The comment text" },
-        },
-        required: ["id", "text"],
-      },
-    },
-    {
-      name: "obligations_list",
-      description:
-        "List obligations machine-globally. Defaults to open records in any " +
-        "project, including issue:<id> rows projected read-only from the " +
-        "issue ledger's open issues; owed_filter=human selects the " +
-        "operator's owed view. " +
-        "Contested records stay listed and tagged; liveness of an offline " +
-        "obligee or obligor is a condition on open records, not a status.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          scope: {
-            type: "string",
-            enum: ["open", "all"],
-            description: "Defaults to open",
-          },
-          owed_filter: {
-            type: "string",
-            enum: ["any", "human"],
-            description:
-              "any (default) lists everything; human lists records naming the operator as obligor",
-          },
-        },
-      },
-    },
-  ],
+  tools: TOOLS,
 }));
 
 function describeClaim(claim: Claim): string {
@@ -1547,20 +1558,18 @@ function withConflictGuidance<T>(project: string, operation: () => T): T {
   }
 }
 
-function explicitCanonicalProject(project: string): string {
+function explicitCanonicalProject(tool: string, project: string): string {
   if (!isAbsolute(project)) {
     throw new Error(
-      "claim_path project must be an explicit canonical absolute path",
+      `${tool} project must be an explicit canonical absolute path`,
     );
   }
   if (!existsSync(project) || !statSync(project).isDirectory()) {
-    throw new Error(
-      `claim_path project is not an existing directory: ${project}`,
-    );
+    throw new Error(`${tool} project is not an existing directory: ${project}`);
   }
   const canonical = canonicalProject(project);
   if (canonical !== project) {
-    throw new Error(`claim_path project must be canonical; use ${canonical}`);
+    throw new Error(`${tool} project must be canonical; use ${canonical}`);
   }
   return canonical;
 }
@@ -1658,6 +1667,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   // Every tool call is a sign of life; stamp it so peers see fresh idle times
   // (Codex sessions have no Claude session meta, so this is their only signal).
   touch(cwd, process.pid);
+  const tool = TOOLS.find((candidate) => candidate.name === req.params.name);
+  if (tool) {
+    const undeclared = undeclaredArguments(
+      tool.inputSchema,
+      req.params.arguments,
+    );
+    if (undeclared.length > 0) {
+      throw new Error(
+        `${tool.name} does not accept ${undeclared.join(", ")}; it accepts ${Object.keys(tool.inputSchema.properties ?? {}).join(", ") || "no arguments"}`,
+      );
+    }
+  }
   if (req.params.name === "project_owner") {
     const { action = "show", project = cwd } = (req.params.arguments ?? {}) as {
       action?: string;
@@ -2116,18 +2137,29 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
   }
   if (req.params.name === "claim_experiment") {
-    const { notebook } = (req.params.arguments ?? {}) as { notebook?: string };
+    const { project, notebook } = (req.params.arguments ?? {}) as {
+      project?: string;
+      notebook?: string;
+    };
+    const targetProject =
+      project === undefined
+        ? cwd
+        : explicitCanonicalProject("claim_experiment", project);
     const notebookPath = notebook
-      ? resolve(cwd, notebook)
-      : existsSync(join(cwd, "lab-notebook"))
-        ? join(cwd, "lab-notebook")
-        : cwd;
-    const claim = claims.claimExperiment(cwd, notebookPath, claimOwner);
+      ? resolve(targetProject, notebook)
+      : existsSync(join(targetProject, "lab-notebook"))
+        ? join(targetProject, "lab-notebook")
+        : targetProject;
+    const claim = claims.claimExperiment(
+      targetProject,
+      notebookPath,
+      claimOwner,
+    );
     return {
       content: [
         {
           type: "text",
-          text: `${claim.experimentId} claimed (claim ${claim.id}). Create the experiment file, then release this claim.`,
+          text: `${claim.experimentId} claimed in ${claim.notebook} (project ${claim.project}; claim ${claim.id}). Create the experiment file, then release this claim.`,
         },
       ],
     };
@@ -2154,7 +2186,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       throw new Error("claim_path paths must be a non-empty string array");
     }
     const targetProject =
-      project === undefined ? cwd : explicitCanonicalProject(project);
+      project === undefined
+        ? cwd
+        : explicitCanonicalProject("claim_path", project);
     const requested = path === undefined ? (paths as string[]) : [path];
     const pathType: PathClaimTarget["pathType"] | undefined =
       directory === true ? "directory" : undefined;
@@ -2199,7 +2233,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (project && all_projects) {
       throw new Error("list_claims accepts project or all_projects, not both");
     }
-    const target = project ? explicitCanonicalProject(project) : cwd;
+    const target = project
+      ? explicitCanonicalProject("list_claims", project)
+      : cwd;
     const claimOptions = {
       sessionIsLive: (id: string) =>
         listLive().some((registration) => registration.sessionId === id),
@@ -2236,7 +2272,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const result = claims.release({
       claimId: claim_id,
       releaseToken: release_token,
-      ...(project ? { project: explicitCanonicalProject(project) } : {}),
+      ...(project
+        ? { project: explicitCanonicalProject("release_claim", project) }
+        : {}),
       actor: claimOwner,
       sessionIsLive: (id) =>
         listLive().some((registration) => registration.sessionId === id),
