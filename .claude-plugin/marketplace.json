@@ -6,8 +6,8 @@
   },
   "plugins": [
     {
-      "name": "agent-mail",
-      "source": "./plugins/agent-mail",
+      "name": "agent-loom",
+      "source": "./plugins/agent-loom",
       "description": "Local mail bus channel for Claude Code agents: pushes inbox messages into the session as <channel> events."
     }
   ]

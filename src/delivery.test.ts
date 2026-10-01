@@ -11,7 +11,7 @@ import type { DeliveryReceipt, Message } from "./spool.ts";
 
 const BASE: Message = {
   ts: "2026-08-17T04:54:46.000Z",
-  from: "agent-mail",
+  from: "agent-loom",
   project: "/Users/x/code/weft",
   message: "job done",
 };

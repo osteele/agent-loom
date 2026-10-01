@@ -75,7 +75,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # git+file: exercises the same path as github:osteele/agent-mail — npm
+      # git+file: exercises the same path as github:osteele/agent-loom — npm
       # clones, installs devDependencies, and runs `prepare` to build dist/.
       - name: Install from a git URL
         run: |
@@ -86,12 +86,12 @@ jobs:
       - name: The CLI runs
         run: |
           cd "$RUNNER_TEMP/consumer"
-          ./node_modules/.bin/agent-mail --help
+          ./node_modules/.bin/agent-loom --help
 
       - name: The installer keeps the distribution on Node and built JavaScript
         run: |
           cd "$RUNNER_TEMP/consumer"
-          plan=$(./node_modules/.bin/agent-mail install --dry-run)
+          plan=$(./node_modules/.bin/agent-loom install --dry-run)
           echo "$plan"
           test "$(echo "$plan" | jq -r .schemaVersion)" = 1
           test "$(echo "$plan" | jq -r .runtime)" = "$(command -v node)"
@@ -100,14 +100,14 @@ jobs:
             | all(endswith(".js"))
           '
 
-      # Through `agent-mail mcp`, which is what the README's add-mcp line
+      # Through `agent-loom mcp`, which is what the README's add-mcp line
       # configures a client to run — not the server file behind it.
       - name: The MCP server completes an initialize handshake
         run: |
           cd "$RUNNER_TEMP/consumer"
           request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'
           response=$(printf '%s\n' "$request" \
-            | timeout 30 ./node_modules/.bin/agent-mail mcp 2>/dev/null \
+            | timeout 30 ./node_modules/.bin/agent-loom mcp 2>/dev/null \
             | head -1)
           echo "$response"
           echo "$response" | grep -q '"serverInfo"'
@@ -115,7 +115,7 @@ jobs:
       - name: The dashboard stays off unless asked for
         run: |
           cd "$RUNNER_TEMP/consumer"
-          if ./node_modules/.bin/agent-mail dashboard >/dev/null 2>&1; then
+          if ./node_modules/.bin/agent-loom dashboard >/dev/null 2>&1; then
             echo "dashboard served without being enabled" >&2
             exit 1
           fi

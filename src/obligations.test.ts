@@ -45,7 +45,7 @@ function makeStore(
   live: string[] = [],
   resolveRole?: (role: Role) => string | undefined,
 ) {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligations-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligations-"));
   temporaryDirectories.push(root);
   const liveSessions = new Set(live);
   const notifications: Obligation[] = [];
@@ -239,8 +239,8 @@ test("EventSettles settles system and role obligors on a matching event, never b
     subject: "job-9",
     obligor: {
       kind: "role",
-      role: { kind: "component_owner", component: "agent-mail" },
-      label: "owner of agent-mail",
+      role: { kind: "component_owner", component: "agent-loom" },
+      label: "owner of agent-loom",
     },
   });
   const sessionWait = announce(store, {
@@ -279,11 +279,11 @@ test("EventSettles settles system and role obligors on a matching event, never b
 test("a role obligor announces when exactly one responsible session holds the role and is refused otherwise", () => {
   const componentOwner = {
     kind: "role" as const,
-    role: { kind: "component_owner" as const, component: "agent-mail" },
-    label: "owner of agent-mail",
+    role: { kind: "component_owner" as const, component: "agent-loom" },
+    label: "owner of agent-loom",
   };
   const resolved = makeStore([ALICE.sessionId, BOB.sessionId], (role) =>
-    role.kind === "component_owner" && role.component === "agent-mail"
+    role.kind === "component_owner" && role.component === "agent-loom"
       ? "bob"
       : undefined,
   );
@@ -297,7 +297,7 @@ test("a role obligor announces when exactly one responsible session holds the ro
   // session is notified, not the role.
   expect(resolved.notifications.map((o) => o.id)).toEqual([record.id]);
   expect(resolved.notifiedTargets).toEqual([
-    { kind: "session", sessionId: "bob", label: "owner of agent-mail" },
+    { kind: "session", sessionId: "bob", label: "owner of agent-loom" },
   ]);
 
   const unresolvable = makeStore([ALICE.sessionId], () => undefined);
@@ -347,8 +347,8 @@ test("an artifact role obligee announces through its executor and the side const
     announce(store, {
       obligee: {
         kind: "role",
-        role: { kind: "component_owner", component: "agent-mail" },
-        label: "owner of agent-mail",
+        role: { kind: "component_owner", component: "agent-loom" },
+        label: "owner of agent-loom",
       },
       subject: "s2",
     }),
@@ -404,8 +404,8 @@ test("ObligorMayContest: system and role obligors have no contest path", () => {
   const roleWait = announce(store, {
     obligor: {
       kind: "role",
-      role: { kind: "component_owner", component: "agent-mail" },
-      label: "owner of agent-mail",
+      role: { kind: "component_owner", component: "agent-loom" },
+      label: "owner of agent-loom",
     },
     subject: "am17",
     kind: "external_fix",
@@ -436,8 +436,8 @@ test("role and system ends are never adoption candidates", () => {
   const store = helper.store;
   const roleObligorParty = {
     kind: "role" as const,
-    role: { kind: "component_owner" as const, component: "agent-mail" },
-    label: "owner of agent-mail",
+    role: { kind: "component_owner" as const, component: "agent-loom" },
+    label: "owner of agent-loom",
   };
   // The predecessor is the session obligee, the obligor a role: the record
   // transfers because Alice is its obligee, but the role END does not move —
@@ -584,16 +584,16 @@ test("views render a role obligor's resolution provenance, or unresolvable", () 
   const record = announce(store, {
     obligor: {
       kind: "role",
-      role: { kind: "component_owner", component: "agent-mail" },
-      label: "owner of agent-mail",
+      role: { kind: "component_owner", component: "agent-loom" },
+      label: "owner of agent-loom",
     },
     kind: "external_fix",
     subject: "am17",
   });
-  expect(store.describeObligor(record)).toBe("owner of agent-mail → bob");
+  expect(store.describeObligor(record)).toBe("owner of agent-loom → bob");
   holder = undefined;
   expect(store.describeObligor(record)).toBe(
-    "owner of agent-mail (unresolvable: owner of agent-mail resolves to no single responsible session)",
+    "owner of agent-loom (unresolvable: owner of agent-loom resolves to no single responsible session)",
   );
   // Session and human obligors render as they always did.
   expect(store.describeObligor(announce(store, { subject: "s2" }))).toBe(
@@ -1020,7 +1020,7 @@ test("ContestedStaysVisible and HumanOwedIsComplete: listings keep contested and
 // ---------------------------------------------------------------------------
 
 test("the wired resolver resolves component owner, plan executor, and experiment claimer", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligations-resolve-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligations-resolve-"));
   temporaryDirectories.push(root);
   // A component name that cannot collide with a cwd-relative directory:
   // resolution matches it against live registrations by basename.
@@ -1092,7 +1092,7 @@ test("the wired resolver resolves component owner, plan executor, and experiment
 // ---------------------------------------------------------------------------
 
 test("releasing a path claim settles the obligation waiting on it", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligations-e2e-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligations-e2e-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -1134,7 +1134,7 @@ test("releasing a path claim settles the obligation waiting on it", () => {
 
 test("recovering and cleaning up experiment claims settle their waiting obligations", () => {
   const root = mkdtempSync(
-    join(tmpdir(), "agent-mail-obligations-experiments-"),
+    join(tmpdir(), "agent-loom-obligations-experiments-"),
   );
   temporaryDirectories.push(root);
   const project = join(root, "project");
@@ -1179,7 +1179,7 @@ test("recovering and cleaning up experiment claims settle their waiting obligati
 // ---------------------------------------------------------------------------
 
 test("announce stores options and typed markers, canonicalizing paths against the base directory", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligations-markers-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligations-markers-"));
   temporaryDirectories.push(root);
   mkdirSync(join(root, "docs"), { recursive: true });
   const { store } = makeStore([ALICE.sessionId, BOB.sessionId]);
@@ -1396,8 +1396,8 @@ test("a role obligor's current responsible session may comment after handoff", (
   const record = announce(store, {
     obligor: {
       kind: "role",
-      role: { kind: "component_owner", component: "agent-mail" },
-      label: "owner of agent-mail",
+      role: { kind: "component_owner", component: "agent-loom" },
+      label: "owner of agent-loom",
     },
     subject: "fix am22",
   });

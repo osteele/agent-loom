@@ -188,7 +188,7 @@ export interface LedgerObligationView {
   subject: string;
   component: string;
   obligor: PartyView;
-  /** Sessions watching the issue through `agent-mail:` tokens. */
+  /** Sessions watching the issue through `agent-loom:` tokens. */
   obligees: string[];
   source: "issue-ledger";
   observedAt: string;

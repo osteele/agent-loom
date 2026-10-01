@@ -450,7 +450,7 @@ export function orphansForProject(
     const submitter = group.submitterSession;
     if (!group.unattributedSession && submitter !== null) {
       if (liveSessionIds.has(submitter)) continue; // owned
-      // A submitter agent-mail has never registered is unknown ownership, not
+      // A submitter agent-loom has never registered is unknown ownership, not
       // an absent owner — the third form of the same asymmetry. Codex spawns
       // its MCP child without a session env var, so that child mints an id no
       // sibling can learn while weft records the shell's own id; the two never

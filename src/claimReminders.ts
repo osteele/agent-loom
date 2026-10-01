@@ -168,7 +168,7 @@ function reminderMessage(entries: CoordinationEntry[], nowMs: number): string {
   ).length;
   const count = entries.length;
   const sentences = [
-    `Agent-mail coordination reminder: you still hold ${count} ${count === 1 ? "claim" : "claims"}; oldest ${formatAge(oldest)}.`,
+    `Agent-loom coordination reminder: you still hold ${count} ${count === 1 ? "claim" : "claims"}; oldest ${formatAge(oldest)}.`,
   ];
   if (materialized > 0) {
     sentences.push(

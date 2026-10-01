@@ -1,15 +1,16 @@
 {
-  "name": "agent-mail",
+  "name": "agent-loom",
   "version": "0.1.0",
   "description": "Durable local messaging and coordination between coding-agent sessions",
   "license": "MIT",
   "type": "module",
   "bin": {
+    "agent-loom": "dist/cli.js",
     "agent-mail": "dist/cli.js"
   },
   "scripts": {
-    "check": "biome check src/ examples/oh-my-pi/agent-mail-push/ && tsc --noEmit",
-    "fix": "biome check --write src/ examples/oh-my-pi/agent-mail-push/",
+    "check": "biome check src/ examples/oh-my-pi/agent-loom-push/ && tsc --noEmit",
+    "fix": "biome check --write src/ examples/oh-my-pi/agent-loom-push/",
     "test": "sh scripts/test.sh",
     "build": "./node_modules/.bin/tsc -p tsconfig.build.json",
     "prepare": "./node_modules/.bin/tsc -p tsconfig.build.json"
@@ -32,8 +33,8 @@
   "files": [
     "dist",
     ".claude-plugin",
-    "plugins/agent-mail/.claude-plugin",
-    "plugins/agent-mail/skills",
+    "plugins/agent-loom/.claude-plugin",
+    "plugins/agent-loom/skills",
     "docs",
     "examples",
     "README.md",

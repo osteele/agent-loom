@@ -1,6 +1,6 @@
-/** Shared filesystem layout for agent-mail.
+/** Shared filesystem layout for agent-loom.
  *
- * State root: ~/.claude/agent-mail/
+ * State root: ~/.claude/agent-loom/
  *   inbox/<slug>.jsonl     per-project message spools (source of truth)
  *   read/<slug>.json        per-project read message ids
  *   receipts/<slug>.jsonl  append-only delivery state changes
@@ -20,7 +20,7 @@
  *   mcp-startup-failures.jsonl sanitized pre-handshake MCP failure records
  *   channel-lifecycle.jsonl channel-server attach, shutdown, exit, and prune records
  *   daemon.pid, daemon.log daemon state
- * Config:     ~/.config/agent-mail/config.toml
+ * Config:     ~/.config/agent-loom/config.toml
  */
 
 import { createHash } from "node:crypto";
@@ -28,7 +28,7 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export const STATE_DIR = join(homedir(), ".claude", "agent-mail");
+export const STATE_DIR = join(homedir(), ".claude", "agent-loom");
 export const INBOX_DIR = join(STATE_DIR, "inbox");
 export const READ_DIR = join(STATE_DIR, "read");
 /** Disposable projection of the append-only message and read-marker logs. */
@@ -51,7 +51,7 @@ export const TRANSFERS_DIR = join(STATE_DIR, "transfers");
 /** Machine-global obligation records (specs/obligations.allium): unlike
  * claims and work these are not project-scoped — a wait spans projects. */
 export const OBLIGATIONS_DIR = join(STATE_DIR, "obligations");
-export const CONFIG_DIR = join(homedir(), ".config", "agent-mail");
+export const CONFIG_DIR = join(homedir(), ".config", "agent-loom");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.toml");
 export const PID_PATH = join(STATE_DIR, "daemon.pid");
 export const LOG_PATH = join(STATE_DIR, "daemon.log");
@@ -82,14 +82,14 @@ export const CLAIM_REMINDER_STATE_PATH = join(
 );
 /** Daemon bookkeeping for bounded unacknowledged-delivery reminders. */
 export const ACK_REMINDER_STATE_PATH = join(STATE_DIR, "ack-reminders.json");
-/** Rate-limited diagnostics from `agent-mail remind` (stale/missing summary).
+/** Rate-limited diagnostics from `agent-loom remind` (stale/missing summary).
  * Appended to, never read by code; stdout of the hook stays machine-clean. */
 export const REMIND_DIAGNOSTICS_PATH = join(
   STATE_DIR,
   "remind-diagnostics.log",
 );
 /** Sanitized failures before an MCP server completes initialization. This is
- * agent-mail's durable copy of evidence that hosts commonly discard with the
+ * agent-loom's durable copy of evidence that hosts commonly discard with the
  * subprocess stderr stream. */
 export const MCP_STARTUP_FAILURES_PATH = join(
   STATE_DIR,
@@ -112,7 +112,7 @@ export const FORCED_RECOVERY_LOG_PATH = join(
 );
 
 export const DEFAULT_PORT = 8377;
-export const LAUNCHD_LABEL = "com.osteele.agent-mail";
+export const LAUNCHD_LABEL = "com.osteele.agent-loom";
 
 export function ensureDirs(): void {
   for (const dir of [

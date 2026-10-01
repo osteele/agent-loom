@@ -35,7 +35,7 @@ test("lifecycle records omit fields that were not supplied", () => {
 });
 
 test("an unwritable log path does not throw on the exit path", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-lifecycle-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-lifecycle-"));
   try {
     const record = channelLifecycleRecord({
       event: "exit",
@@ -52,7 +52,7 @@ test("an unwritable log path does not throw on the exit path", () => {
 test("attach then shutdown records one line each, and a repeat is ignored", () => {
   // The pair is what tells a clean exit from a kill: a server that logged
   // `attached` and later only `pruned` never ran its shutdown path.
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-lifecycle-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-lifecycle-"));
   const path = join(root, "nested", "lifecycle.jsonl");
   try {
     const identity = { sessionId: "s1", cwd: "/proj", client: "claude-code" };

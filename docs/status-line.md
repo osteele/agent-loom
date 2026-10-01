@@ -1,6 +1,6 @@
 # Status line reference
 
-`agent-mail status-line` prints the current session's display name. The
+`agent-loom status-line` prints the current session's display name. The
 [README](../README.md#status-lines) shows the Claude Code and Kimi Code setup;
 this page specifies identity resolution, `--json`, `--fields`, and each
 client's rendering constraints.
@@ -31,7 +31,7 @@ It resolves the session in this order:
 Claude Code supplies `session_id` and a workspace path in its payload. Kimi
 supplies `cwd`, while a launcher supplies `AGENT_SESSION_ID`. Kimi's native
 `sessionId` is deliberately ignored: it belongs to a different namespace from
-the identity inherited by the agent-mail MCP process. Treating the two as the
+the identity inherited by the agent-loom MCP process. Treating the two as the
 same would display a plausible but incorrect address.
 
 The resolved ID is then reconciled against the registry, because the two can
@@ -58,14 +58,14 @@ session cannot report another session's unread count or weft jobs. An empty
 name where one is expected means either that the session has no channel server
 or that it could not be identified in its own project. `--debug` says which.
 Restarting the session fixes both, by respawning its channel server.
-`agent-mail logs --lifecycle` records when channel servers attach, shut down,
+`agent-loom logs --lifecycle` records when channel servers attach, shut down,
 exit, and are pruned from the registry. A session whose server has vanished
 shows there as an `attached` record followed by a `pruned` record with no
 `shutdown` or `exit` between them.
 
 ## `--json`
 
-`agent-mail status-line --json` prints the version-1
+`agent-loom status-line --json` prints the version-1
 [SessionStatus document](http-api.md#session-status) with the resolved
 `project`, `sessionId`, epoch-millisecond `generatedAt`, `name`, `nameNoun`,
 `peers`, `unread`, `delivery`, `unprocessed`, `running`, and `work`.
@@ -105,7 +105,7 @@ leave running counts unavailable. The CLI never launches Weft.
 `--fields` prints one tab-separated line carrying the name, peer count, unread
 messages, whether mail reaches this session on its own, and unprocessed weft
 jobs this session submitted. A status line can show all five from one
-invocation instead of reimplementing agent-mail's registry and spool semantics
+invocation instead of reimplementing agent-loom's registry and spool semantics
 in shell:
 
 ```
@@ -151,7 +151,7 @@ Codex, Kimi, Gemini, and OpenCode sessions are pull-only. A Claude Code session
 can also hold a channel it cannot use because its host was launched without the
 channel or under an identity the host will not authorize.
 
-`agent-mail status` distinguishes those causes. Both require the reader to
+`agent-loom status` distinguishes those causes. Both require the reader to
 check mail instead of waiting for a push. A session cannot diagnose this from
 its own successful sends.
 
@@ -159,7 +159,7 @@ its own successful sends.
 
 The fifth field counts unprocessed weft jobs whose submitter session is this
 one. It is read from a snapshot the daemon refreshes every 60 seconds
-(`~/.claude/agent-mail/weft-jobs.json`), never by running weft on the status-line
+(`~/.claude/agent-loom/weft-jobs.json`), never by running weft on the status-line
 path. The field is empty when no usable snapshot exists, which covers a stopped
 daemon, a snapshot older than three minutes, and a weft installation that has
 never run. Empty and `0` are different claims: `0` says weft was checked and
@@ -167,11 +167,11 @@ this session has nothing pending.
 
 ## Shared script rules
 
-- Guard on `command -v agent-mail`. A global status-line script also runs in
-  projects where agent-mail may not be installed.
+- Guard on `command -v agent-loom`. A global status-line script also runs in
+  projects where agent-loom may not be installed.
 - Redirect stderr. `--debug` reports the resolved project, session ID, and peer
   recency there; ordinary status lines should not render it.
-- Keep one `agent-mail status-line --json` call for structured consumers.
+- Keep one `agent-loom status-line --json` call for structured consumers.
   Existing positional consumers can retain `--fields` and optional `--work`.
   Separate calls repeat startup and can observe different snapshots.
 - Name and TSV modes exit 0 on errors and print nothing. JSON mode exits
@@ -202,15 +202,15 @@ roughly 300 ms update interval.
 
 ## Kimi Code adapter
 
-Kimi Code passes a JSON snapshot whose `cwd` selects the agent-mail project.
+Kimi Code passes a JSON snapshot whose `cwd` selects the agent-loom project.
 The checked-in [Kimi formatter](../examples/status-lines/kimi.sh) passes that
-snapshot to one `agent-mail status-line --fields` call and renders the
-agent-mail fields on Kimi's first footer row.
+snapshot to one `agent-loom status-line --fields` call and renders the
+agent-loom fields on Kimi's first footer row.
 
-The formatter requires the same `AGENT_SESSION_ID` that the agent-mail MCP
+The formatter requires the same `AGENT_SESSION_ID` that the agent-loom MCP
 process inherited when Kimi started. A launcher should mint a fresh value for
 each Kimi invocation and clear any parent agent's native session variables
-before starting the child. The formatter omits agent-mail fields when that
+before starting the child. The formatter omits agent-loom fields when that
 identity is unavailable.
 
 Kimi renders only the first stdout line. It runs the command at most once per
@@ -220,8 +220,8 @@ measure changes before adding filesystem or process scans.
 
 ## Clients without an external command slot
 
-OpenCode, Codex, and Gemini can host the agent-mail MCP server, but their native
-footers do not currently accept an external command or custom agent-mail field.
+OpenCode, Codex, and Gemini can host the agent-loom MCP server, but their native
+footers do not currently accept an external command or custom agent-loom field.
 Gemini and Codex can display their own session identifiers. Those built-in
-identifiers do not expose the agent-mail display name, peer count, unread
+identifiers do not expose the agent-loom display name, peer count, unread
 messages, delivery mode, or weft jobs.

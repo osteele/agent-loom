@@ -99,7 +99,7 @@ function syllable(bytes: Buffer, offset: number): string {
  *
  * Files are keyed by the Claude Code REPL pid, not the sessionId, so we read
  * each file and index by its `sessionId` field. Live-ness is not checked here;
- * cross-reference the agent-mail registry (which is pid-pruned) for that. */
+ * cross-reference the agent-loom registry (which is pid-pruned) for that. */
 export function claudeSessions(): Map<string, ClaudeSessionMeta> {
   const map = new Map<string, ClaudeSessionMeta>();
   if (!existsSync(CLAUDE_SESSIONS_DIR)) return map;
@@ -391,7 +391,7 @@ function pruneHostPidBreadcrumbs(directory: string, nowMs: number): void {
   }
 }
 
-/** Whether agent-mail has ever registered a session under this id.
+/** Whether agent-loom has ever registered a session under this id.
  *
  * Read-only: unlike `assignedGeneratedSessionName` it never mints an
  * assignment, so asking the question cannot create the evidence that answers
@@ -401,7 +401,7 @@ function pruneHostPidBreadcrumbs(directory: string, nowMs: number): void {
  * This is what separates "the submitter is gone" from "the submitter was never
  * ours". Agents whose channel server is spawned without a session env var mint
  * an id no sibling process can learn, so their weft jobs carry a submitter id
- * agent-mail has never seen — and treating that as an absent owner would
+ * agent-loom has never seen — and treating that as an absent owner would
  * report every such job as unowned. */
 export function hasSeenSession(
   sessionId: string,
@@ -812,7 +812,7 @@ function ompRecord(
 /** OMP's session id for the terminal this process is attached to.
  *
  * OMP exports no session id: not in its own environment, and not in the `env`
- * block of the agent-mail entry in its mcp.json. So every earlier step of the
+ * block of the agent-loom entry in its mcp.json. So every earlier step of the
  * chain finds nothing and the id would be minted at random, giving one session
  * a different name on every launch — including each time it is resumed.
  *

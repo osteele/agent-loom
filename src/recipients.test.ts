@@ -14,12 +14,12 @@ import { processInfo } from "./registry.ts";
 
 test("CLI and HTTP route global IDs and names, disambiguate by project, and reject unavailable recipients", async () => {
   const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "agent-mail-recipients-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-recipients-")),
   );
   const home = join(root, "home");
   const source = join(root, "scratch");
   const target = join(root, "mailbox");
-  const registry = join(home, ".claude", "agent-mail", "registry");
+  const registry = join(home, ".claude", "agent-loom", "registry");
   const metadata = join(home, ".claude", "sessions");
   for (const path of [source, target, registry, metadata])
     mkdirSync(path, { recursive: true });
@@ -60,9 +60,9 @@ test("CLI and HTTP route global IDs and names, disambiguate by project, and reje
     ...process.env,
     HOME: home,
     CLAUDE_CONFIG_DIR: join(home, ".claude"),
-    AGENT_MAIL_PORT: String(port),
+    AGENT_LOOM_PORT: String(port),
   };
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   const watcher = watch(state);
   const ready = new Promise<void>((resolve, reject) => {
     watcher.on("change", () => {

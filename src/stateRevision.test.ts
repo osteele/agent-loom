@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 // paths.ts fixes STATE_DIR from HOME at load, so each scenario runs in a child.
 test("the state revision moves with state's inputs and not with snapshot ticks", () => {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-rev-")));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-rev-")));
   // Claude's session directory follows CLAUDE_CONFIG_DIR, which must not
   // point the child at the developer's real sessions.
   const { CLAUDE_CONFIG_DIR: _real, ...env } = process.env;

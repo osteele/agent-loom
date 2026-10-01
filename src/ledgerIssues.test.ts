@@ -12,6 +12,7 @@ import {
   parseLedgerIssueRows,
   projectLedgerObligations,
   readLedgerIssuesSnapshot,
+  watcherSessionIds,
   writeLedgerIssuesSnapshot,
 } from "./ledgerIssues.ts";
 import type { Role } from "./obligations.ts";
@@ -19,7 +20,7 @@ import { summarizeObligations } from "./sessionStatus.ts";
 
 function tempSnapshotPath(): string {
   return join(
-    mkdtempSync(join(tmpdir(), "agent-mail-ledger-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-ledger-")),
     "ledger-issues.json",
   );
 }
@@ -34,7 +35,7 @@ function snapshot(
 const AM17 = {
   id: "am17",
   title: "fix the retry loop",
-  component: "agent-mail",
+  component: "agent-loom",
   watchers: [] as string[],
 };
 
@@ -124,16 +125,16 @@ test("open rows parse; closed rows and malformed documents do not project", () =
     {
       id: "am17",
       title: "open one",
-      component: "agent-mail",
+      component: "agent-loom",
       status: "open",
     },
     {
       id: "am18",
       title: "closed one",
-      component: "agent-mail",
+      component: "agent-loom",
       status: "closed",
     },
-    { id: "am19", title: "no status field", component: "agent-mail" },
+    { id: "am19", title: "no status field", component: "agent-loom" },
   ]);
   expect(rows?.map((row) => row.id)).toEqual(["am17", "am19"]);
   // A document this build does not recognise is refused whole: a partially
@@ -146,7 +147,7 @@ test("open rows parse; closed rows and malformed documents do not project", () =
         id: "am17",
         title: "t",
         component: "c",
-        watchers: ["agent-mail:x", 7],
+        watchers: ["agent-loom:x", 7],
       },
     ]),
   ).toBeUndefined();
@@ -156,7 +157,7 @@ test("rows from the current ledger output parse with defaults", () => {
   // `watchers` and `component_path` postdate the first consumers: a row that
   // omits them parses with [] and unknown respectively.
   const rows = parseLedgerIssueRows([
-    { id: "am17", title: "fix the retry loop", component: "agent-mail" },
+    { id: "am17", title: "fix the retry loop", component: "agent-loom" },
   ]);
   expect(rows).toEqual([AM17]);
 });
@@ -169,17 +170,17 @@ test("watcher tokens map to obligees; foreign prefixes are ignored", () => {
       {
         id: "am17",
         title: "fix the retry loop",
-        component: "agent-mail",
+        component: "agent-loom",
         watchers: [
-          "agent-mail:sess-t",
-          // Longer than the agent-mail: prefix, so dropping the prefix check
+          "agent-loom:sess-t",
+          // Longer than the agent-loom: prefix, so dropping the prefix check
           // would leave a non-empty suffix rather than filtering it by luck.
           "other-tool:session-0123456789",
-          "agent-mail:sess-t",
-          "agent-mail:",
+          "agent-loom:sess-t",
+          "agent-loom:",
         ],
       },
-      { id: "am18", title: "unwatched", component: "agent-mail", watchers: [] },
+      { id: "am18", title: "unwatched", component: "agent-loom", watchers: [] },
     ]),
     1_000,
     () => "sess-s",
@@ -194,7 +195,7 @@ test("watcher tokens map to obligees; foreign prefixes are ignored", () => {
   expect(watched.source).toBe("issue-ledger");
   expect(watched.observedAt).toBe(1_000);
   expect(watched.stale).toBe(false);
-  // An issue with no agent-mail watcher still appears — the owner owes the
+  // An issue with no agent-loom watcher still appears — the owner owes the
   // fix — with no obligee.
   expect(unwatched.obligees).toEqual([]);
 });
@@ -206,8 +207,8 @@ test("the obligor role takes component_path when present, the name otherwise", (
       {
         id: "am17",
         title: "pathed",
-        component: "agent-mail",
-        componentPath: "/code/agent-mail",
+        component: "agent-loom",
+        componentPath: "/code/agent-loom",
         watchers: [],
       },
       { id: "am18", title: "named", component: "weft", watchers: [] },
@@ -219,7 +220,7 @@ test("the obligor role takes component_path when present, the name otherwise", (
     },
   );
   expect(seen).toEqual([
-    { kind: "component_owner", component: "/code/agent-mail" },
+    { kind: "component_owner", component: "/code/agent-loom" },
     { kind: "component_owner", component: "weft" },
   ]);
   // An unmatched or ambiguous component leaves the obligor unresolved — the
@@ -251,8 +252,8 @@ test("renderings tag the source and a stale snapshot's age", () => {
   const watched = {
     id: "am17",
     title: "fix the retry loop",
-    component: "agent-mail",
-    watchers: ["agent-mail:sess-t"],
+    component: "agent-loom",
+    watchers: ["agent-loom:sess-t"],
   };
   const [row] = projectLedgerObligations(
     snapshot([watched]),
@@ -261,7 +262,7 @@ test("renderings tag the source and a stale snapshot's age", () => {
   );
   const text = describeLedgerObligation(row, 1_000);
   expect(text).toContain("issue:am17 external_fix am17: fix the retry loop");
-  expect(text).toContain("owed to sess-t by owner of agent-mail → sess-s");
+  expect(text).toContain("owed to sess-t by owner of agent-loom → sess-s");
   expect(text).toContain("[issue-ledger]");
   expect(text).not.toContain("stale");
   const staleAt = 1_000 + LEDGER_ISSUES_SNAPSHOT_TTL_MS + 30 * 60_000;
@@ -313,7 +314,7 @@ test("currentLedgerObligations reads only the snapshot file", () => {
     expect(missing.obligations).toEqual([]);
     expect(missing.diagnostic).toContain("ledger obligations unavailable");
     writeLedgerIssuesSnapshot(
-      { issues: [{ ...AM17, watchers: ["agent-mail:sess-t"] }] },
+      { issues: [{ ...AM17, watchers: ["agent-loom:sess-t"] }] },
       1_000,
       path,
     );
@@ -334,8 +335,8 @@ test("an issue adds to its owner's owed and each watcher's waiting", () => {
       {
         id: "am17",
         title: "fix the retry loop",
-        component: "agent-mail",
-        watchers: ["agent-mail:sess-t"],
+        component: "agent-loom",
+        watchers: ["agent-loom:sess-t"],
       },
     ]),
     1_000,
@@ -407,4 +408,17 @@ test("a mutating verb on an issue: id refuses with the ledger's command", () => 
   expect(ledgerObligationRefusal("issue:am17", "comment")).toContain(
     "issues note am17",
   );
+});
+
+// Issues keep the tokens they were given before the rename from agent-mail,
+// so a stored agent-mail: watcher still names a waiting session.
+test("watcher tokens from before the rename still name their session", () => {
+  expect(
+    watcherSessionIds([
+      "agent-mail:sess-old",
+      "agent-loom:sess-new",
+      "agent-mail:sess-new",
+      "other-tool:session-0123456789",
+    ]),
+  ).toEqual(["sess-old", "sess-new"]);
 });

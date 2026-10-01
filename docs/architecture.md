@@ -1,14 +1,14 @@
 # Architecture
 
-How agent-mail works underneath: where state lives, how sessions are
+How agent-loom works underneath: where state lives, how sessions are
 addressed, what the delivery guarantees actually are, and how the coordination
 primitives behave. The [README](../README.md) covers installation and daily
 use; this is the reference behind it.
 
 - **Spool files are the source of truth.** Each project has an append-only JSONL
-  file at `~/.claude/agent-mail/inbox/<slug>.jsonl`.
+  file at `~/.claude/agent-loom/inbox/<slug>.jsonl`.
 - **Receipts record state transitions.** They use an append-only JSONL file at
-  `~/.claude/agent-mail/receipts/<slug>.jsonl`. A message starts as `spooled`.
+  `~/.claude/agent-loom/receipts/<slug>.jsonl`. A message starts as `spooled`.
   Live intended recipients receive `pending`; a known channel setup failure
   records `push-unreachable`. Sessions then report `held`, `pushed`, `read`,
   `refused`, or `expired`.
@@ -19,21 +19,21 @@ use; this is the reference behind it.
   Codex, Kimi Code, Gemini CLI, and OpenCode run `src/channel.ts` over stdio.
   It exposes messaging, receipts, policy, presence, and coordination tools. In
   a channel-enabled Claude Code session, it also tails the project spool and
-  pushes new messages as `<channel source="agent-mail">` events.
+  pushes new messages as `<channel source="agent-loom">` events.
 - **Startup instructions announce an existing backlog.** Each MCP server scans
   its session-filtered spool once and adds a fixed-text unread count to the
   initialization instructions when mail is waiting. Pull-only clients then get
   hook reminders for later arrivals: the daemon publishes counts to
-  `unread-summary.json`, and `agent-mail remind` injects them on turn events.
+  `unread-summary.json`, and `agent-loom remind` injects them on turn events.
   Snapshot and announcement state are presentation data, not delivery
   receipts: `pushed` keeps meaning channel delivery or an inbox pull.
 - **The registry tracks attached sessions.** Entries under
-  `~/.claude/agent-mail/registry/` record `cwd`, `pid`, `sessionId`, and `name`.
+  `~/.claude/agent-loom/registry/` record `cwd`, `pid`, `sessionId`, and `name`.
   A listing prunes an entry when the process is gone or its pid belongs to a
   different process. The process start time distinguishes a recycled pid from
   the original process.
 - **Session names persist.** Assignments under
-  `~/.claude/agent-mail/session-names/` are keyed by session ID. They survive
+  `~/.claude/agent-loom/session-names/` are keyed by session ID. They survive
   listener restarts and keep existing names stable across naming upgrades. New
   names draw from credited 256-word Glitch adjective and noun lists. Minting is
   serialized, excludes nouns held by registered sessions, and prefers nouns
@@ -41,10 +41,10 @@ use; this is the reference behind it.
   least-recently minted available noun may recycle; see
   [ADR 0012](decisions/0012-allow-friendly-session-names-to-recycle.md).
 - **Claims are filesystem transactions.** Per-project entries under
-  `~/.claude/agent-mail/claims/` reserve lab-notebook experiment numbers and
+  `~/.claude/agent-loom/claims/` reserve lab-notebook experiment numbers and
   files or directories. Claims do not depend on the daemon.
 - **Work leases assign logical responsibility.** Per-project entries under
-  `~/.claude/agent-mail/work/` exclusively assign logical work without
+  `~/.claude/agent-loom/work/` exclusively assign logical work without
   restricting file edits. They also do not depend on the daemon.
 - **Dashboards read the files directly.** `src/dashboard.ts` and
   `src/slackDashboard.ts` use the shared aggregation in `src/dashboardData.ts`
@@ -94,7 +94,7 @@ registering under a guess ([0018](decisions/0018-a-transport-attaches-to-an-iden
 Subagents do not participate in mail; a subagent shares its parent's process and
 channel server, so its mail is its parent's. CLI, MCP, and HTTP ingress share
 this routing implementation.
-These names belong to agent-mail; they are not aliases for the separate agent
+These names belong to agent-loom; they are not aliases for the separate agent
 IDs returned by Claude's native `ListAgents`, and must not be passed to native
 `SendMessage`.
 Claude Code supplies its ID in `CLAUDE_CODE_SESSION_ID`; current Codex supplies
@@ -115,7 +115,7 @@ session-targeted message is visible only to the addressed session.
 unread. OMP steering push also marks read because its exact-session
 acknowledgement attests that the custom message entered session context.
 `mark_read` covers mail handled from other channel pushes, which do not mark
-anything read themselves. The CLI `agent-mail inbox` and HTTP `/inbox` endpoint
+anything read themselves. The CLI `agent-loom inbox` and HTTP `/inbox` endpoint
 are project-spool views: they show the stored messages without session-local
 filtering and mark nothing read.
 
@@ -159,22 +159,22 @@ attached with nobody home. Every surface (`list_sessions`, `listeners`,
 `[busy]` (Claude reports it mid-turn), `[active]` (signs of life within the
 last two minutes), or `[idle <age>]`, flagged `stale?` after a day. Recency uses
 the latest of Claude Code's session-activity timestamp, the session's last
-agent-mail tool call, and its registration time. Treat long-idle sessions as
+agent-loom tool call, and its registration time. Treat long-idle sessions as
 probably vacant rather than as active agents. The same recency rule decides the
 peer count the [status line](../README.md#status-lines) reports. A peer idle
 past a day no longer counts as company.
 
 Channel-enabled sessions receive push delivery. Running sessions without the
 flag can arm a Monitor on their spool file. Other sessions read the spool on
-their next `agent-mail inbox` or `check_inbox` call.
+their next `agent-loom inbox` or `check_inbox` call.
 
 ## Muting
 
 A session can pause its channel push from inside the agent with the
-`mute_notifications` tool. A user or script can also run `agent-mail mute` and
+`mute_notifications` tool. A user or script can also run `agent-loom mute` and
 target `--session <name-or-id>`, `--project <dir>`, or both. While muted, mail
-still spools (and stays visible to `check_inbox` / `agent-mail inbox`) but is
-not pushed as a `<channel>` event. `unmute_notifications` / `agent-mail unmute`
+still spools (and stays visible to `check_inbox` / `agent-loom inbox`) but is
+not pushed as a `<channel>` event. `unmute_notifications` / `agent-loom unmute`
 delivers everything held during the mute at once, then resumes normal push.
 Muting only affects an agent's push. It does not change the configured
 `slack_echo` policy or a message's `--no-slack` override. Mute is per-session
@@ -194,11 +194,11 @@ Each session has an independent inbound policy:
 - `hold` keeps mail out of the agent context while retaining it for later; and
 - `refuse` records refusal without delivering the message to that session.
 
-Set it from an agent with `set_inbound_policy`, or externally with `agent-mail
+Set it from an agent with `set_inbound_policy`, or externally with `agent-loom
 inbound --policy ...`. The default comes from `inbound_policy`. A held queue is
 bounded. When it fills, the oldest held message is refused.
 
-Senders can supply an idempotency key and TTL. agent-mail also suppresses
+Senders can supply an idempotency key and TTL. agent-loom also suppresses
 identical bodies from one sender during a short window and applies a rolling
 per-sender rate limit. Set either limit to zero to disable it. Expired and
 native-audit messages remain visible to dashboards but never enter an inbox.
@@ -212,7 +212,7 @@ transit, and the message is stored exactly once. `rate limited; retry in <n>s`
 stored nothing. Through the MCP tool, each of these also names the audience, and
 counts any recipients whose channel push cannot reach them.
 
-Use the `delivery_status` MCP tool or `agent-mail receipts` to inspect the
+Use the `delivery_status` MCP tool or `agent-loom receipts` to inspect the
 append-only state changes. A `spooled` receipt confirms durable local storage.
 At admission, each live intended session receives `pending`, or
 `push-unreachable` when its registered channel setup is known not to land the
@@ -225,7 +225,7 @@ Receipts report transport state, not attention or completed work.
 ## Threads
 
 To answer a message, pass its ID as `reply_to` to the `send_mail` tool (IDs are
-shown by `check_inbox`), or `--reply-to <id>` on `agent-mail notify`. The reply
+shown by `check_inbox`), or `--reply-to <id>` on `agent-loom notify`. The reply
 addresses the original sender's stamped session in its live project mailbox,
 including when that mailbox belongs to another project. It also inherits the
 original's thread; inbox readbacks mark it with `↩`. MCP replies carry a parent
@@ -243,13 +243,13 @@ is also an error, never a project broadcast.
 ## Addressing one session from an automation
 
 A project inbox is shared by every session in that directory, so by default
-`agent-mail notify` reaches all of them — useful for an announcement, noisy when
+`agent-loom notify` reaches all of them — useful for an announcement, noisy when
 a build or job notifier fires while several sessions are open, since each one
 wakes to read it.
 
 Pass `--session <name-or-id>` to address a single session instead. The name may
 be its id, its full name (`augur-quiet-lantern`), or its display name
-(`Quiet Lantern`, matched case-insensitively); `agent-mail listeners` lists them.
+(`Quiet Lantern`, matched case-insensitively); `agent-loom listeners` lists them.
 An addressed message is hidden from every other session in the project.
 Exact IDs and unique human names select their live registered mailbox globally.
 `--project` disambiguates name collisions. The stored `project` is the recipient mailbox;
@@ -331,12 +331,12 @@ Released path claims remain available for idempotent release and optional
 history listing for 30 days. Normal listing reads active records only.
 
 ```bash
-agent-mail claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
-agent-mail claim-path --path <path> [--path <path> ...] [--directory] \
+agent-loom claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
+agent-loom claim-path --path <path> [--path <path> ...] [--directory] \
   [--project <dir>] [--owner <label>] \
   [--plan <stem> [--plan-project <dir>]]
-agent-mail claims [--project <dir> | --all] [--history]
-agent-mail release-claim (--id <claim-id> | --token <release-token>) \
+agent-loom claims [--project <dir> | --all] [--history]
+agent-loom release-claim (--id <claim-id> | --token <release-token>) \
   [--project <dir>]
 ```
 
@@ -418,14 +418,14 @@ inspect jobs and artifacts that may already use its ID.
 Forced recovery requires both an `authority` and a `reason`:
 
 ```bash
-agent-mail coordination recover --id <coordination-id> \
+agent-loom coordination recover --id <coordination-id> \
   --authority "operator: session ended" \
   --reason "terminal was closed before cleanup"
 ```
 
-Agent-mail records both values verbatim and does not verify them. The operation
+Agent-loom records both values verbatim and does not verify them. The operation
 appends the record identity, owner status, authority, and reason to
-`~/.claude/agent-mail/forced-recoveries.jsonl` before release. Failure to write
+`~/.claude/agent-loom/forced-recoveries.jsonl` before release. Failure to write
 the audit record refuses recovery. Claims are advisory (see
 [decision 0004](docs/decisions/0004-authority-forced-recovery.md)).
 
@@ -436,7 +436,7 @@ Listings show the owner ID, session/PID identity, owner status, and the
 session's last tool-call heartbeat when one exists. The lease `updated` time is
 separate: it changes only on `acquire_work` or `update_work`. Legacy CLI records
 that contain a PID but no session ID are process-owned rather than manual;
-agent-mail uses process start time to reject a recycled PID and makes the record
+agent-loom uses process start time to reject a recycled PID and makes the record
 recoverable once the original process is gone.
 
 ### Manual owner expiry
@@ -464,7 +464,7 @@ answers with `respond_coordination_transfer` (`accept` or `decline`). An
 unchanged lease transfers automatically after the deadline. Any intervening
 lease update, release, or ownership change makes the request `superseded`
 instead, so stale requests cannot overwrite newer work. Requests and final
-dispositions remain under `~/.claude/agent-mail/transfers/` for audit.
+dispositions remain under `~/.claude/agent-loom/transfers/` for audit.
 
 Transfers apply to logical work leases. A plan-owned path claim stays with the
 plan, so an accepted lease transfer changes which executor may release it.
@@ -473,15 +473,15 @@ Session and manual claims do not transfer.
 CLI equivalents support inspection, manual ownership, and recovery:
 
 ```bash
-agent-mail work list [--project <dir> | --all] [--type <type>] [--owner <owner>]
-agent-mail work acquire --type <type> --key <key> [--label <label>] [--source <path>] [--owner <label>]
-agent-mail work update --id <work-id> [--state working|waiting] [--activity <text>]
-agent-mail work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]
-agent-mail coordination list [--project <dir> | --all] [--kind <kind>] [--json]
-agent-mail coordination recover --id <coordination-id> [--authority <text> --reason <text>]
-agent-mail coordination request-transfer --id <work-id> [--reason <text>] [--timeout <seconds>]
-agent-mail coordination respond-transfer --id <request-id> --decision accept|decline [--message <text>]
-agent-mail coordination transfers [--project <dir> | --all] [--json]
+agent-loom work list [--project <dir> | --all] [--type <type>] [--owner <owner>]
+agent-loom work acquire --type <type> --key <key> [--label <label>] [--source <path>] [--owner <label>]
+agent-loom work update --id <work-id> [--state working|waiting] [--activity <text>]
+agent-loom work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]
+agent-loom coordination list [--project <dir> | --all] [--kind <kind>] [--json]
+agent-loom coordination recover --id <coordination-id> [--authority <text> --reason <text>]
+agent-loom coordination request-transfer --id <work-id> [--reason <text>] [--timeout <seconds>]
+agent-loom coordination respond-transfer --id <request-id> --decision accept|decline [--message <text>]
+agent-loom coordination transfers [--project <dir> | --all] [--json]
 ```
 
 ## Obligations
@@ -501,18 +501,18 @@ by adoption, proven by the host resume id or declared operator authority.
 Open issue-ledger issues are obligations without a stored record: the ledger
 is the source of truth, and every open issue is owed by the owner of its
 component. The daemon snapshots `issues list --json` once a minute to
-`~/.claude/agent-mail/ledger-issues.json` (keeping the previous rows and the
+`~/.claude/agent-loom/ledger-issues.json` (keeping the previous rows and the
 error when a refresh fails), and every view projects the snapshot at read
 time — rows tagged `[issue-ledger]`, marked stale with their age past the
 snapshot TTL, or replaced by one diagnostic line when no snapshot exists.
-Watcher tokens of the form `agent-mail:<session-id>` on an issue name its
+Watcher tokens of the form `agent-loom:<session-id>` on an issue name its
 obligees. The projected rows are read-only: the mutating verbs refuse an
 `issue:<id>` and name the ledger's own command (`issues close`, `issues
 note`, `issues unwatch`). A reopened issue reappears on its own — the ledger
 lists it as open again, so there is nothing to re-announce.
 
 `coordination list --all` joins them, `state --json` and the status line
-carry per-session `waiting`/`owed` counts, and `agent-mail obligations`
+carry per-session `waiting`/`owed` counts, and `agent-loom obligations`
 is the CLI. The full contract — party constraints, settlement rules, and
 the duplicate and visibility invariants — is `specs/obligations.allium`;
 the decisions are in `docs/decisions/log.md`.
@@ -532,8 +532,8 @@ spool mediates, Slack echoes, and each client reads by its own route:
 sequenceDiagram
     autonumber
     participant QL as Quiet Lantern<br/>Claude, project augur
-    participant Spool as agent-mail spool
-    participant Slack as Slack agent-mail channel
+    participant Spool as agent-loom spool
+    participant Slack as Slack agent-loom channel
     participant SO as Silver Otter<br/>Codex, project augur
 
     QL->>Spool: send_mail to Silver Otter<br/>"Can you verify the latency table?"

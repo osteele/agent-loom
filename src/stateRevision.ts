@@ -1,4 +1,4 @@
-/** A cheap change signal for `agent-mail state`.
+/** A cheap change signal for `agent-loom state`.
  *
  * No single process sees every mutation: spools and read logs are O_APPEND
  * files written by whichever process sends or reads, and the coordination
@@ -11,7 +11,7 @@
  *
  * Not covered: time alone (a manual owner expires, an age advances; the
  * digest does carry each snapshot's freshness bit), and coordination
- * conditions derived from files outside agent-mail's state (an experiment
+ * conditions derived from files outside agent-loom's state (an experiment
  * file appearing, a work lease's source path disappearing). Consumers
  * reconcile those on a slow interval. */
 import { createHash } from "node:crypto";
@@ -38,6 +38,7 @@ import { PROCESS_SNAPSHOT_TTL_MS } from "./processSnapshot.ts";
 import { CLAUDE_SESSIONS_DIR } from "./sessions.ts";
 
 export interface StateRevision {
+  /** A wire identifier pollers match on; it keeps the pre-rename name. */
   kind: "agent_mail_state_revision";
   version: 1;
   /** Opaque; compare for equality only. */

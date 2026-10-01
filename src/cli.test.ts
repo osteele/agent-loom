@@ -23,7 +23,7 @@ test("notify --no-slack suppresses only that message's Slack echo", async () => 
       return Response.json({ ok: true, status: "spooled", id: "test" });
     },
   });
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-cli-test-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-cli-test-"));
   const cli = join(import.meta.dir, "cli.ts");
 
   try {
@@ -40,7 +40,7 @@ test("notify --no-slack suppresses only that message's Slack echo", async () => 
           ...extra,
         ],
         {
-          env: { ...process.env, AGENT_MAIL_PORT: String(server.port) },
+          env: { ...process.env, AGENT_LOOM_PORT: String(server.port) },
           stdout: "pipe",
           stderr: "pipe",
         },
@@ -64,7 +64,7 @@ function registerLiveSession(
   project: string,
   sessionId: string,
 ): void {
-  const registry = join(home, ".claude", "agent-mail", "registry");
+  const registry = join(home, ".claude", "agent-loom", "registry");
   mkdirSync(registry, { recursive: true });
   const procStart = processInfo([process.pid]).get(process.pid)?.start;
   expect(procStart).toBeTruthy();
@@ -89,7 +89,7 @@ test("status-line prints nothing and exits 0 without a registered session", asyn
   // reject with "no live recipient", so naming it would advertise a session
   // nobody can reach. Being alone in the project is different: a registered
   // session's name is its address elsewhere, so it prints with no peers nearby.
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-statusline-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-statusline-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -143,7 +143,7 @@ test("status-line prints nothing and exits 0 without a registered session", asyn
 });
 
 test("status-line accepts Kimi cwd payload and launcher session id", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-kimi-statusline-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-kimi-statusline-"));
   const home = join(root, "home");
   const project = join(root, "project");
   const cli = join(import.meta.dir, "cli.ts");
@@ -187,11 +187,11 @@ test("status-line accepts Kimi cwd payload and launcher session id", async () =>
   }
 });
 test("agy reminder uses workspacePaths and stops after one injected edge", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-agy-remind-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-agy-remind-"));
   const home = join(root, "home");
   const project = join(root, "project");
   const hookCwd = join(home, ".gemini", "config");
-  const stateRoot = join(home, ".claude", "agent-mail");
+  const stateRoot = join(home, ".claude", "agent-loom");
   const sessionId = "agy-session";
   const cli = join(import.meta.dir, "cli.ts");
   mkdirSync(project, { recursive: true });
@@ -260,7 +260,7 @@ test("agy reminder uses workspacePaths and stops after one injected edge", async
       injectSteps: [
         {
           ephemeralMessage: expect.stringContaining(
-            "Agent-mail: 1 unread message(s)",
+            "Agent-loom: 1 unread message(s)",
           ),
         },
       ],
@@ -284,7 +284,7 @@ test("agy reminder uses workspacePaths and stops after one injected edge", async
 });
 
 test("status-line exposes this session's work through an opt-in versioned field", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-statusline-work-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-statusline-work-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -292,14 +292,14 @@ test("status-line exposes this session's work through an opt-in versioned field"
   const workDirectory = join(
     home,
     ".claude",
-    "agent-mail",
+    "agent-loom",
     "work",
     projectSlug(canonical),
   );
   mkdirSync(workDirectory, { recursive: true });
-  mkdirSync(join(home, ".claude", "agent-mail"), { recursive: true });
+  mkdirSync(join(home, ".claude", "agent-loom"), { recursive: true });
   writeFileSync(
-    join(home, ".claude", "agent-mail", "presence.json"),
+    join(home, ".claude", "agent-loom", "presence.json"),
     JSON.stringify({
       version: 1,
       generatedAt: Date.now(),
@@ -436,10 +436,10 @@ test("status-line exposes this session's work through an opt-in versioned field"
 });
 
 test("listeners --no-sync emits snapshot JSON without pruning registry", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-listeners-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-listeners-"));
   const home = join(root, "home");
   const project = join(root, "project");
-  const data = join(home, ".claude", "agent-mail");
+  const data = join(home, ".claude", "agent-loom");
   const registry = join(data, "registry");
   mkdirSync(project, { recursive: true });
   mkdirSync(registry, { recursive: true });
@@ -514,10 +514,10 @@ test("listeners --no-sync emits snapshot JSON without pruning registry", async (
 });
 
 test("session-address resolves only fresh project-scoped identity without writes", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-address-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-address-"));
   const home = join(root, "home");
   const project = join(root, "project");
-  const data = join(home, ".claude", "agent-mail");
+  const data = join(home, ".claude", "agent-loom");
   const registry = join(data, "registry");
   mkdirSync(project, { recursive: true });
   mkdirSync(registry, { recursive: true });
@@ -706,7 +706,7 @@ test("session-address resolves only fresh project-scoped identity without writes
 }, 45_000);
 
 test("session-address requires explicit absolute project, raw session, and JSON", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-address-args-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-address-args-"));
   const home = join(root, "home");
   mkdirSync(home);
   const file = join(root, "file");
@@ -751,10 +751,10 @@ test("session-address requires explicit absolute project, raw session, and JSON"
 });
 
 test("state --no-sync emits versioned aggregate data without pruning", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-state-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-state-"));
   const home = join(root, "home");
   const project = join(root, "project");
-  const data = join(home, ".claude", "agent-mail");
+  const data = join(home, ".claude", "agent-loom");
   const registry = join(data, "registry");
   const inbox = join(data, "inbox");
   mkdirSync(project, { recursive: true });
@@ -830,7 +830,7 @@ test("state --no-sync emits versioned aggregate data without pruning", async () 
 });
 
 test("claim-path groups repeated path flags under one claim id", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-claims-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-claims-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(home);
@@ -888,7 +888,7 @@ test("claim-path groups repeated path flags under one claim id", async () => {
 });
 
 test("unregistered coordination acquisition requires a manual owner label", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-owner-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-owner-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(home);
@@ -929,7 +929,7 @@ test("unregistered coordination acquisition requires a manual owner label", asyn
 });
 
 test("work CLI lists logical ownership across projects", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-work-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-work-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(home);
@@ -989,7 +989,7 @@ test("work CLI lists logical ownership across projects", async () => {
 });
 
 test("work conflicts explain manual ownership and the recovery path", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-conflict-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-conflict-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(home);
@@ -1042,7 +1042,7 @@ test("work conflicts explain manual ownership and the recovery path", async () =
 });
 
 test("work transfer CLI records and accepts an auditable handoff", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-transfer-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-transfer-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(home);
@@ -1117,12 +1117,12 @@ test("work transfer CLI records and accepts an auditable handoff", async () => {
     expect(response.actualOwner?.label).toBe("requester");
 
     const transferFiles = readdirSync(
-      join(home, ".claude", "agent-mail", "transfers"),
+      join(home, ".claude", "agent-loom", "transfers"),
     ).filter((name) => name.endsWith(".json"));
     expect(transferFiles).toHaveLength(1);
     const stored = JSON.parse(
       readFileSync(
-        join(home, ".claude", "agent-mail", "transfers", transferFiles[0]),
+        join(home, ".claude", "agent-loom", "transfers", transferFiles[0]),
         "utf8",
       ),
     ) as { requestNotifiedAt?: string; resolutionNotifiedAt?: string };
@@ -1134,10 +1134,10 @@ test("work transfer CLI records and accepts an auditable handoff", async () => {
 });
 
 test("work CLI attaches ownership to its registered Codex session", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-session-work-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-session-work-"));
   const home = join(root, "home");
   const project = join(root, "project");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   const registry = join(state, "registry");
   mkdirSync(project, { recursive: true });
   mkdirSync(registry, { recursive: true });
@@ -1216,7 +1216,7 @@ async function notifyRequest(
     const child = Bun.spawn(
       [process.execPath, join(import.meta.dir, "cli.ts"), "notify", ...args],
       {
-        env: { ...process.env, ...env, AGENT_MAIL_PORT: String(server.port) },
+        env: { ...process.env, ...env, AGENT_LOOM_PORT: String(server.port) },
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1229,12 +1229,12 @@ async function notifyRequest(
 }
 
 test("notify --session routes to the live mailbox despite an unrelated project", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-session-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-notify-session-"));
   const home = join(root, "home");
   const project = join(root, "project");
   const sourceProject = join(root, "scratch");
   mkdirSync(sourceProject, { recursive: true });
-  const registry = join(home, ".claude", "agent-mail", "registry");
+  const registry = join(home, ".claude", "agent-loom", "registry");
   mkdirSync(project, { recursive: true });
   mkdirSync(registry, { recursive: true });
   // A registration is only live if its pid AND process start time still match,
@@ -1280,7 +1280,7 @@ test("notify --session routes to the live mailbox despite an unrelated project",
 });
 
 test("notify never broadens an empty or unresolved explicit session to a broadcast", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-unresolved-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-notify-unresolved-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -1307,11 +1307,11 @@ test("notify never broadens an empty or unresolved explicit session to a broadca
 });
 
 test("notify --reply-to returns cross-project mail to the sender", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-reply-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-reply-"));
   const home = join(root, "home");
   const callerProject = join(root, "caller");
   const answerProject = join(root, "answer");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   const registry = join(state, "registry");
   mkdirSync(callerProject, { recursive: true });
   mkdirSync(answerProject, { recursive: true });
@@ -1340,7 +1340,7 @@ test("notify --reply-to returns cross-project mail to the sender", async () => {
         env: {
           ...process.env,
           HOME: home,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: sessionId,
           AGENT_SESSION_ID: "",
@@ -1418,10 +1418,10 @@ test("notify reports delivery when the daemon stored the message but lost its re
   // own line in the shared spool, and reported "duplicate suppressed" — telling
   // the caller their message was dropped when it had been delivered. Those call
   // for opposite reactions, so they must not render the same.
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-lost-reply-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-lost-reply-"));
   const home = join(root, "home");
   const project = join(root, "project");
-  const inbox = join(home, ".claude", "agent-mail", "inbox");
+  const inbox = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(project, { recursive: true });
   mkdirSync(inbox, { recursive: true });
   const canonical = realpathSync(project);
@@ -1463,7 +1463,7 @@ test("notify reports delivery when the daemon stored the message but lost its re
         env: {
           ...process.env,
           HOME: home,
-          AGENT_MAIL_PORT: String(server.port),
+          AGENT_LOOM_PORT: String(server.port),
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -1496,7 +1496,7 @@ test("a daemon duplicate is read by reason, not just by status", async () => {
     },
     { reason: "content-window", expect: /already sent as dup-1/ },
   ];
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-dup-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-dup-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     for (const testCase of cases) {
@@ -1521,7 +1521,7 @@ test("a daemon duplicate is read by reason, not just by status", async () => {
             "a message sent once",
           ],
           {
-            env: { ...process.env, AGENT_MAIL_PORT: String(server.port) },
+            env: { ...process.env, AGENT_LOOM_PORT: String(server.port) },
             stdout: "pipe",
             stderr: "pipe",
           },
@@ -1539,9 +1539,9 @@ test("a daemon duplicate is read by reason, not just by status", async () => {
 });
 
 test("CLI recognizes source and packaged daemon entry points, but not unrelated pids", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-daemonpid-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-daemonpid-"));
   const home = join(root, "home");
-  const data = join(home, ".claude", "agent-mail");
+  const data = join(home, ".claude", "agent-loom");
   mkdirSync(data, { recursive: true });
   const cli = join(import.meta.dir, "cli.ts");
   // Daemon identity does not depend on the user's Claude plugin installation.
@@ -1593,9 +1593,9 @@ test("CLI recognizes source and packaged daemon entry points, but not unrelated 
 }, 30_000);
 
 test("logs selects its file by flag and refuses arguments it does not know", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-logs-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-logs-"));
   const home = join(root, "home");
-  const data = join(home, ".claude", "agent-mail");
+  const data = join(home, ".claude", "agent-loom");
   mkdirSync(data, { recursive: true });
   const cli = join(import.meta.dir, "cli.ts");
   const env = { ...process.env, HOME: home, PATH: "/usr/bin:/bin" };
@@ -1660,7 +1660,7 @@ function seedInbox(
 } {
   const home = join(root, "home");
   const project = join(root, "project");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   mkdirSync(project, { recursive: true });
   mkdirSync(join(state, "inbox"), { recursive: true });
   mkdirSync(join(state, "receipts"), { recursive: true });
@@ -1720,11 +1720,11 @@ const INBOX_READER_ENV = {
 };
 
 test("triage-candidates protects live and recently active recipients", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-triage-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-triage-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     const { home, project, slug } = seedInbox(root);
-    const inbox = join(home, ".claude", "agent-mail", "inbox", `${slug}.jsonl`);
+    const inbox = join(home, ".claude", "agent-loom", "inbox", `${slug}.jsonl`);
     const messages = [
       {
         id: "broadcast",
@@ -1788,7 +1788,7 @@ test("triage-candidates protects live and recently active recipients", async () 
       },
     ];
     writeFileSync(
-      join(home, ".claude", "agent-mail", "receipts", `${slug}.jsonl`),
+      join(home, ".claude", "agent-loom", "receipts", `${slug}.jsonl`),
       `${receipts.map((receipt) => JSON.stringify(receipt)).join("\n")}\n`,
     );
 
@@ -1854,7 +1854,7 @@ test("triage-candidates protects live and recently active recipients", async () 
 });
 
 test("mark-read accepts an exact set through repeated id flags", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-mark-read-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-mark-read-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     const { home, project } = seedInbox(root);
@@ -1905,7 +1905,7 @@ test("mark-read accepts an exact set through repeated id flags", async () => {
 });
 
 test("mark-read rejects a value-less id combined with all", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-mark-read-guard-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-mark-read-guard-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     const { home, project } = seedInbox(root);
@@ -1954,11 +1954,11 @@ test("mark-read rejects a value-less id combined with all", async () => {
 });
 
 test("inbox read with a session id records the pull and marks messages read", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-read-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-inbox-read-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     const { home, project, slug } = seedInbox(root);
-    const state = join(home, ".claude", "agent-mail");
+    const state = join(home, ".claude", "agent-loom");
     const child = Bun.spawn(
       [process.execPath, cli, "inbox", "--project", project],
       {
@@ -2013,7 +2013,7 @@ test("inbox read with a session id records the pull and marks messages read", as
 });
 
 test("inbox text and JSON preserve sender identity", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-json-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-inbox-json-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     const { home, project } = seedInbox(root);
@@ -2071,14 +2071,14 @@ test("inbox text and JSON preserve sender identity", async () => {
 });
 
 test("inbox read cannot acknowledge mail directed to a sibling session", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-sibling-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-inbox-sibling-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     const { home, project, slug } = seedInbox(root);
     const inboxPath = join(
       home,
       ".claude",
-      "agent-mail",
+      "agent-loom",
       "inbox",
       `${slug}.jsonl`,
     );
@@ -2115,7 +2115,7 @@ test("inbox read cannot acknowledge mail directed to a sibling session", async (
     const receiptsPath = join(
       home,
       ".claude",
-      "agent-mail",
+      "agent-loom",
       "receipts",
       `${slug}.jsonl`,
     );
@@ -2132,11 +2132,11 @@ test("inbox read cannot acknowledge mail directed to a sibling session", async (
 });
 
 test("inbox --peek leaves messages unread and appends no receipt", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-peek-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-inbox-peek-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     const { home, project, slug } = seedInbox(root);
-    const state = join(home, ".claude", "agent-mail");
+    const state = join(home, ".claude", "agent-loom");
     const child = Bun.spawn(
       [process.execPath, cli, "inbox", "--project", project, "--peek"],
       {
@@ -2157,7 +2157,7 @@ test("inbox --peek leaves messages unread and appends no receipt", async () => {
 });
 
 test("an indirect registered host cannot attribute a CLI read without a session id", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-anon-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-inbox-anon-"));
   const cli = join(import.meta.dir, "cli.ts");
   const {
     CLAUDE_CODE_SESSION_ID: _claude,
@@ -2167,7 +2167,7 @@ test("an indirect registered host cannot attribute a CLI read without a session 
   } = process.env;
   try {
     const { home, project, slug } = seedInbox(root);
-    const state = join(home, ".claude", "agent-mail");
+    const state = join(home, ".claude", "agent-loom");
     const nested = join(root, "nested.ts");
     writeFileSync(
       nested,
@@ -2204,7 +2204,7 @@ test("an indirect registered host cannot attribute a CLI read without a session 
 });
 
 test("notify without a resolving sender stamps no identity and keeps the label", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-notify-anon-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-notify-anon-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -2247,14 +2247,14 @@ test("notify without a resolving sender stamps no identity and keeps the label",
 });
 
 test("an inherited session id is not adopted without a host-process match", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-inherited-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-inbox-inherited-"));
   const cli = join(import.meta.dir, "cli.ts");
   try {
     // A live registration for "cli-reader" whose host agent is not an ancestor
     // of the CLI child — the shape a script or daemon launched from an agent
     // shell has, carrying that shell's session id without belonging to it.
     const { home, project, slug } = seedInbox(root, 999_999);
-    const state = join(home, ".claude", "agent-mail");
+    const state = join(home, ".claude", "agent-loom");
     const child = Bun.spawn(
       [process.execPath, cli, "inbox", "--project", project],
       {
@@ -2277,7 +2277,7 @@ test("an inherited session id is not adopted without a host-process match", asyn
 });
 
 test("a second inbox read does not re-stamp receipts it already settled", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-inbox-twice-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-inbox-twice-"));
   const cli = join(import.meta.dir, "cli.ts");
   const read = async (home: string, project: string) => {
     const child = Bun.spawn(
@@ -2296,7 +2296,7 @@ test("a second inbox read does not re-stamp receipts it already settled", async 
     const receiptsPath = join(
       home,
       ".claude",
-      "agent-mail",
+      "agent-loom",
       "receipts",
       `${slug}.jsonl`,
     );
@@ -2313,7 +2313,7 @@ test("a second inbox read does not re-stamp receipts it already settled", async 
 });
 
 test("--help after a subcommand explains rather than acts", async () => {
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-cli-help-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-cli-help-"));
   const cli = join(import.meta.dir, "cli.ts");
 
   // `inbox --help` printed the inbox, which is how a reader discovered mail
@@ -2327,7 +2327,7 @@ test("--help after a subcommand explains rather than acts", async () => {
     );
     const out = await new Response(child.stdout).text();
     expect(await child.exited).toBe(0);
-    expect(out).toContain("Usage: agent-mail <command>");
+    expect(out).toContain("Usage: agent-loom <command>");
     // Every dispatched command must appear here, because this same string is
     // what `<command> --help` prints: a command missing from it is one whose
     // own help says nothing about it.
@@ -2335,12 +2335,12 @@ test("--help after a subcommand explains rather than acts", async () => {
   }
 
   // The spool stays empty: `notify --help` must not have sent anything.
-  const spool = join(project, ".agent-mail");
+  const spool = join(project, ".agent-loom");
   expect(existsSync(spool)).toBe(false);
 });
 
 test("inbox names the scope its count answers", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-scope-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-scope-"));
   const cli = join(import.meta.dir, "cli.ts");
   const { home, project } = seedInbox(root);
 
@@ -2373,7 +2373,7 @@ test("inbox names the scope its count answers", async () => {
 });
 
 test("notify refuses unresolved replies instead of falling back to broadcast", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-reply-refusal-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-reply-refusal-"));
   try {
     const { home, project } = seedInbox(root);
     for (const args of [
@@ -2410,7 +2410,7 @@ test("notify refuses unresolved replies instead of falling back to broadcast", a
 
 test("status JSON reports unresolved identity as null instead of empty success output", async () => {
   const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "agent-mail-json-unresolved-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-json-unresolved-")),
   );
   try {
     const home = join(root, "home");
@@ -2480,7 +2480,7 @@ function obligationsRun(
 }
 
 test("obligations CLI announces, lists, closes, and contests as the operator", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-obligations-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-obligations-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -2632,7 +2632,7 @@ test("obligations CLI announces, lists, closes, and contests as the operator", a
 }, 30_000);
 
 test("obligations CLI resolves a session obligor, pushes one notice, and adopts", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-obligor-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-obligor-"));
   const home = join(root, "home");
   const callerProject = join(root, "caller");
   const obligorProject = join(root, "obligor");
@@ -2646,7 +2646,7 @@ test("obligations CLI resolves a session obligor, pushes one notice, and adopts"
   // is UUID-shaped: real session ids are, and adoption accepts only
   // UUID-shaped ids that no live registry or name store can resolve.
   const predecessorId = "0eedd1a5-0000-4000-8000-00000000dead";
-  const obligationsDir = join(home, ".claude", "agent-mail", "obligations");
+  const obligationsDir = join(home, ".claude", "agent-loom", "obligations");
   mkdirSync(obligationsDir, { recursive: true });
   writeFileSync(
     join(obligationsDir, "ob-deadbeef.json"),
@@ -2688,7 +2688,7 @@ test("obligations CLI resolves a session obligor, pushes one notice, and adopts"
     const spoolPath = join(
       home,
       ".claude",
-      "agent-mail",
+      "agent-loom",
       "inbox",
       `${projectSlug(obligorProject)}.jsonl`,
     );
@@ -2772,7 +2772,7 @@ test("obligations CLI resolves a session obligor, pushes one notice, and adopts"
 }, 30_000);
 
 test("obligations CLI announces a system obligor and settles the wait on the weft event", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-obligation-system-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-obligation-system-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -2857,7 +2857,7 @@ test("obligations CLI announces a system obligor and settles the wait on the wef
 
 test("obligations CLI announces a component owner, notifies the resolved session, and refuses its contest", async () => {
   const root = mkdtempSync(
-    join(tmpdir(), "agent-mail-cli-obligation-component-"),
+    join(tmpdir(), "agent-loom-cli-obligation-component-"),
   );
   const home = join(root, "home");
   const project = join(root, "resolve-component");
@@ -2887,7 +2887,7 @@ test("obligations CLI announces a component owner, notifies the resolved session
     const spoolPath = join(
       home,
       ".claude",
-      "agent-mail",
+      "agent-loom",
       "inbox",
       `${projectSlug(realpathSync(project))}.jsonl`,
     );
@@ -2922,7 +2922,7 @@ test("obligations CLI announces a component owner, notifies the resolved session
 }, 30_000);
 
 test("obligations CLI projects ledger issues, refuses their mutation, and refuses announcing them", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cli-ledger-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cli-ledger-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -2939,7 +2939,7 @@ test("obligations CLI projects ledger issues, refuses their mutation, and refuse
 
     // Publish a snapshot the way the daemon would: one open issue whose
     // component resolves to this project, watched by the caller session.
-    const stateDir = join(home, ".claude", "agent-mail");
+    const stateDir = join(home, ".claude", "agent-loom");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(
       join(stateDir, "ledger-issues.json"),
@@ -2952,7 +2952,7 @@ test("obligations CLI projects ledger issues, refuses their mutation, and refuse
             id: "am17",
             title: "fix the retry loop",
             component: "project",
-            watchers: ["agent-mail:caller-session", "slack:U123"],
+            watchers: ["agent-loom:caller-session", "slack:U123"],
           },
         ],
       }),

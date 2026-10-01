@@ -1,9 +1,9 @@
 ---
-name: agent-mail-triage
-description: Triage every unread agent-mail message that is not owned by an accepting live or recently active session. Use when the user asks to process unattended mail, handle messages for terminated sessions, triage the project mailbox except mail owned by running agents, or clear unowned agent-mail.
+name: agent-loom-triage
+description: Triage every unread agent-loom message that is not owned by an accepting live or recently active session. Use when the user asks to process unattended mail, handle messages for terminated sessions, triage the project mailbox except mail owned by running agents, or clear unowned agent-loom.
 ---
 
-# Triage unattended agent-mail
+# Triage unattended agent-loom
 
 A project spool contains broadcasts and direct mail for several sessions. This workflow handles messages that have no accepting current or recently active exclusive recipient while leaving owned direct mail untouched.
 
@@ -12,14 +12,14 @@ A project spool contains broadcasts and direct mail for several sessions. This w
 Run the supported versioned interface from the target project:
 
 ```bash
-agent-mail triage-candidates --project <project>
+agent-loom triage-candidates --project <project>
 ```
 
-Require `schemaVersion: 1`. The command performs the recipient-to-session join inside agent-mail and returns every currently unread broadcast, direct mail whose exact recipient has no current or recent delivery activity, and direct mail its live recipient refused. It excludes direct mail owned by registered live sessions and conservatively protects sessions that stamped any delivery receipt during the previous hour despite a missing registry entry. The response identifies the latter in `recentlyActiveUnregisteredSessions` and the complete exclusion set in `protectedRecipientSessionIds`. Audit records and TTL-expired mail are not candidates.
+Require `schemaVersion: 1`. The command performs the recipient-to-session join inside agent-loom and returns every currently unread broadcast, direct mail whose exact recipient has no current or recent delivery activity, and direct mail its live recipient refused. It excludes direct mail owned by registered live sessions and conservatively protects sessions that stamped any delivery receipt during the previous hour despite a missing registry entry. The response identifies the latter in `recentlyActiveUnregisteredSessions` and the complete exclusion set in `protectedRecipientSessionIds`. Audit records and TTL-expired mail are not candidates.
 
 The response contains the oldest 20 candidates by default. `counts.candidates` is the total matching set; `returned` and `truncated` describe the current batch. Keep batches bounded because every returned message includes its full body. Use a smaller positive `--limit` when necessary; do not use `--limit 0` for unattended triage.
 
-Never reconstruct this set from spool files, dashboard output, `check_inbox`, or session names. Do not use `agent-mail mark-read --all`; that would consume direct mail still owned by live sessions.
+Never reconstruct this set from spool files, dashboard output, `check_inbox`, or session names. Do not use `agent-loom mark-read --all`; that would consume direct mail still owned by live sessions.
 
 ## Triage the returned snapshot
 
@@ -49,7 +49,7 @@ A message is handled when its request is complete, verified as already complete,
 Mark handled messages by exact ID, using repeatable `--id` flags:
 
 ```bash
-agent-mail mark-read --project <project> \
+agent-loom mark-read --project <project> \
   --id <message-id> \
   --id <message-id>
 ```

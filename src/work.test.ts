@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 function fixture(): { project: string; workRoot: string; store: WorkStore } {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-work-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-work-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);
@@ -367,7 +367,7 @@ test("invalid reported position cannot change a lease or displace its owner", ()
 });
 
 test("plan claims require the current lease executor and follow lease outcomes", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-plan-claims-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-plan-claims-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);
@@ -418,7 +418,7 @@ test("plan claims require the current lease executor and follow lease outcomes",
 });
 
 test("plan lease transfer preserves claims and changes release authority", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-plan-transfer-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-plan-transfer-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);

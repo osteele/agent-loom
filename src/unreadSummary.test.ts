@@ -12,7 +12,7 @@ import {
 } from "./unreadSummary.ts";
 
 function makeProject(): string {
-  return canonicalProject(mkdtempSync(join(tmpdir(), "agent-mail-summary-")));
+  return canonicalProject(mkdtempSync(join(tmpdir(), "agent-loom-summary-")));
 }
 
 let counter = 0;
@@ -79,7 +79,7 @@ test("muted sessions and sessions without an id are omitted entirely", () => {
 
 function tempSnapshotPath(): string {
   return join(
-    mkdtempSync(join(tmpdir(), "agent-mail-unread-summary-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-unread-summary-")),
     "unread-summary.json",
   );
 }

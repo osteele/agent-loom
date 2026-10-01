@@ -161,17 +161,17 @@ entity Obligation {
 --
 -- Every open issue in the issue ledger IS an obligation, projected at read
 -- time from the daemon's snapshot of `issues list --json` and never stored:
--- the ledger is the record, and agent-mail holds only the raw rows of its
+-- the ledger is the record, and agent-loom holds only the raw rows of its
 -- last read. The projection is a pure function of (snapshot, now, role
 -- resolution); it re-derives on every read, so a reopened issue reappears
 -- because the ledger lists it as open again — there is no stored record to
 -- re-announce. Event notices are separate from that projection:
--- The watcher hook prints agent-mail:<session-id> only for a caller with a
+-- The watcher hook prints agent-loom:<session-id> only for a caller with a
 -- proved registered host-process ancestor; otherwise it prints nothing.
 -- Reported, recurred, and reopened send one notice to the component_owner
 -- resolved with component_path or else the component name, naming id, title,
 -- severity, and `issues show <id>`. Unresolved owners are diagnosed, never
--- guessed. Closed sends each agent-mail: watcher the issue and close reason;
+-- guessed. Closed sends each agent-loom: watcher the issue and close reason;
 -- recurred and reopened also notify watchers. Foreign tokens are ignored,
 -- and unregistered or offline watcher sessions are diagnosed and skipped.
 -- Sighted, noted, watched, and unwatched send no notices. Every valid event
@@ -188,7 +188,7 @@ value LedgerObligation {
                           -- resolved exactly; unresolvable renders as such,
                           -- never guessed
     obligees: List<claims/Session>  -- the sessions named by the issue's
-                                    -- "agent-mail:<session-id>" watcher
+                                    -- "agent-loom:<session-id>" watcher
                                     -- tokens; other token prefixes belong to
                                     -- other tools and are ignored. Empty is
                                     -- not absent: the fix is still owed,
@@ -511,7 +511,7 @@ invariant HumanOwedIsComplete {
 invariant ResolvedOwedIsComplete {
     -- A session's owed view includes every open Obligation whose obligor is
     -- a role resolving to that session, rendered with its resolution
-    -- provenance ("owner of agent-mail"). An unresolvable role renders as
+    -- provenance ("owner of agent-loom"). An unresolvable role renders as
     -- unresolvable — never guessed, never silently dropped.
 }
 

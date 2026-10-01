@@ -38,7 +38,7 @@ function buildBlocks(state: DashboardState): object[] {
   const blocks: object[] = [
     {
       type: "header",
-      text: { type: "plain_text", text: "📬 agent-mail", emoji: true },
+      text: { type: "plain_text", text: "📬 agent-loom", emoji: true },
     },
     {
       type: "context",
@@ -150,12 +150,12 @@ export async function refreshSlackDashboard(config: Config): Promise<string> {
   if (!token || !channel) {
     throw new SlackDashboardUnconfigured(
       "slack dashboard needs slack_bot_token and slack_channel " +
-        "(config.toml or AGENT_MAIL_SLACK_BOT_TOKEN / AGENT_MAIL_SLACK_CHANNEL)",
+        "(config.toml or AGENT_LOOM_SLACK_BOT_TOKEN / AGENT_LOOM_SLACK_CHANNEL)",
     );
   }
 
   const blocks = buildBlocks(buildState());
-  const text = "agent-mail dashboard";
+  const text = "agent-loom dashboard";
   const ref = loadRef();
 
   if (ref && ref.channel === channel) {

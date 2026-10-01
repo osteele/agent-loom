@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** agent-mail daemon: localhost HTTP ingress + Slack echo.
+/** agent-loom daemon: localhost HTTP ingress + Slack echo.
  *
  * Endpoints (127.0.0.1 only):
  *   POST /notify   {project, from, message, meta?} -> append spool, echo Slack
@@ -17,6 +17,8 @@
  * SIGTERM: graceful stop. SIGHUP: reload config (Slack webhook, echo mode).
  */
 
+// First: adopts agent-mail's environment names and state directories (legacyName.ts).
+import "./legacyName.ts";
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -467,7 +469,7 @@ function tickAckReminders(): void {
       const result = appendMessageGuarded(
         {
           ts: new Date(nowMs).toISOString(),
-          from: "agent-mail-delivery",
+          from: "agent-loom-delivery",
           project: reminder.project,
           message: reminder.message,
           origin: {
@@ -537,7 +539,7 @@ function tickClaimReminders(): void {
       const result = appendMessageGuarded(
         {
           ts: new Date(nowMs).toISOString(),
-          from: "agent-mail-coordination",
+          from: "agent-loom-coordination",
           project: reminder.project,
           message: reminder.message,
           origin: {
@@ -588,7 +590,7 @@ let missingWeftLogged = false;
 
 /** Absolute path to weft, or undefined when it cannot be found. */
 function resolveWeft(): string | undefined {
-  return resolveInstalledTool("weft", process.env.AGENT_MAIL_WEFT_BIN);
+  return resolveInstalledTool("weft", process.env.AGENT_LOOM_WEFT_BIN);
 }
 
 let refreshingRunning = false;
@@ -690,7 +692,7 @@ let lastWeftTotal = -1;
 /** Publish the open issue-ledger issues every obligation view projects from.
  *
  * An open issue IS an obligation (specs/obligations.allium): the owner of the
- * issue's component owes the fix, and the ledger is the record — agent-mail
+ * issue's component owes the fix, and the ledger is the record — agent-loom
  * stores nothing for it. Views read only the snapshot written here, so this
  * tick owns the `issues list --json` spawn, on its own slow timer or when
  * asked by a committed ledger event, never on the 10s presence tick. The
@@ -709,9 +711,9 @@ let missingIssuesLogged = false;
 let lastLedgerDiagnosticMs = 0;
 
 /** Absolute path to the issue-ledger CLI, or undefined when it cannot be
- * found. `AGENT_MAIL_ISSUES_BIN` pins it for tests and unusual installs. */
+ * found. `AGENT_LOOM_ISSUES_BIN` pins it for tests and unusual installs. */
 function resolveIssues(): string | undefined {
-  return resolveInstalledTool("issues", process.env.AGENT_MAIL_ISSUES_BIN);
+  return resolveInstalledTool("issues", process.env.AGENT_LOOM_ISSUES_BIN);
 }
 
 function logLedgerDiagnostic(message: string): void {

@@ -1,9 +1,0 @@
-{
-  "name": "agent-mail-oh-my-pi",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Push durable agent-mail messages into exact Oh My Pi sessions.",
-  "omp": {
-    "extensions": ["./index.ts"]
-  }
-}

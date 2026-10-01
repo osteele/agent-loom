@@ -1,9 +1,9 @@
 import { expect, spyOn, test } from "bun:test";
 import { realpathSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import agentMailExtension, {
-  agentMailContextMessageId,
-  agentMailSessionId,
+import agentLoomExtension, {
+  agentLoomContextMessageId,
+  agentLoomSessionId,
   parseMailStatus,
   renderStatus,
   wakeRecipient,
@@ -118,13 +118,13 @@ test("OMP validates work data even though its bundled renderer does not display 
 });
 
 test("OMP shares a launcher identity only when minted for this process", () => {
-  expect(agentMailSessionId("omp-native", "launcher-shared", "42", 42)).toBe(
+  expect(agentLoomSessionId("omp-native", "launcher-shared", "42", 42)).toBe(
     "launcher-shared",
   );
-  expect(agentMailSessionId("omp-native", "parent-agent", "41", 42)).toBe(
+  expect(agentLoomSessionId("omp-native", "parent-agent", "41", 42)).toBe(
     "omp-native",
   );
-  expect(agentMailSessionId("omp-native", "  ", "42", 42)).toBe("omp-native");
+  expect(agentLoomSessionId("omp-native", "  ", "42", 42)).toBe("omp-native");
 });
 
 test("OMP distinguishes sender workspaces from the recipient mailbox", () => {
@@ -200,7 +200,7 @@ test("OMP uses legacy source paths but never guesses a missing sender workspace"
   expect(contents[1]).not.toContain("/projects/recipient");
 });
 
-test("OMP recognizes its typed agent-mail context event", () => {
+test("OMP recognizes its typed agent-loom context event", () => {
   const message = {
     role: "custom" as const,
     customType: "agent-mail",
@@ -210,22 +210,22 @@ test("OMP recognizes its typed agent-mail context event", () => {
     timestamp: Date.parse("2026-09-02T12:00:00.000Z"),
     details: { messageId: "message-id" },
   };
-  expect(agentMailContextMessageId(message)).toBe("message-id");
+  expect(agentLoomContextMessageId(message)).toBe("message-id");
   expect(
-    agentMailContextMessageId({
+    agentLoomContextMessageId({
       ...message,
       customType: "another-extension",
     }),
   ).toBeUndefined();
   expect(
-    agentMailContextMessageId({
+    agentLoomContextMessageId({
       ...message,
       details: {},
     }),
   ).toBeUndefined();
 });
 
-test("OMP uses its native status slot for agent-mail and Weft state", () => {
+test("OMP uses its native status slot for agent-loom and Weft state", () => {
   expect(
     renderStatus({
       mail: parseMailStatus(statusPayload(), "/project", "route-a"),
@@ -335,14 +335,14 @@ function statusHarness() {
         });
       },
     });
-    return new Response(body, { headers: { "x-agent-mail-protocol": "3" } });
+    return new Response(body, { headers: { "x-agent-loom-protocol": "3" } });
   }) as typeof fetch);
-  agentMailExtension(pi);
+  agentLoomExtension(pi);
   const childCallbacks = new Map<
     string,
     (event: unknown, ctx: ExtensionContext) => void
   >();
-  agentMailExtension({
+  agentLoomExtension({
     ...pi,
     on: (
       event: string,

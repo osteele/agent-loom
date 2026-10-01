@@ -16,11 +16,11 @@ type Notice = {
 };
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-issue-hook-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-issue-hook-"));
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
-  const registry = join(home, ".claude", "agent-mail", "registry");
+  const registry = join(home, ".claude", "agent-loom", "registry");
   mkdirSync(registry, { recursive: true });
   const register = (sessionId: string, parentPid = process.pid) => {
     writeFileSync(
@@ -44,7 +44,7 @@ function fixture() {
       env: {
         ...process.env,
         HOME: home,
-        AGENT_MAIL_PORT: "0",
+        AGENT_LOOM_PORT: "0",
         CLAUDE_CODE_SESSION_ID: sessionId,
         CODEX_THREAD_ID: "",
         AGENT_SESSION_ID: "",
@@ -93,7 +93,7 @@ test("watcher-token requires a live host ancestor, not merely an inherited id", 
     f.register("inherited");
     expect(await f.run("watcher-token")).toMatchObject({
       code: 0,
-      stdout: "agent-mail:inherited\n",
+      stdout: "agent-loom:inherited\n",
     });
     f.register("inherited", 987654321);
     expect(await f.run("watcher-token")).toMatchObject({
@@ -148,7 +148,7 @@ test("reported sends exactly one owner notice via exact-session automation deliv
       env: {
         ...process.env,
         HOME: f.home,
-        AGENT_MAIL_PORT: String(server.port),
+        AGENT_LOOM_PORT: String(server.port),
         CLAUDE_CODE_SESSION_ID: "owner-session",
         CODEX_THREAD_ID: "",
         AGENT_SESSION_ID: "",
@@ -203,7 +203,7 @@ test("unresolved owner warns without sending; no daemon is harmless", async () =
         env: {
           ...process.env,
           HOME: f.home,
-          AGENT_MAIL_PORT: String(server.port),
+          AGENT_LOOM_PORT: String(server.port),
         },
         stdin: "pipe",
         stdout: "pipe",
@@ -221,7 +221,7 @@ test("unresolved owner warns without sending; no daemon is harmless", async () =
   }
 });
 
-test("closed notifies only live agent-mail watchers; quiet events never send", async () => {
+test("closed notifies only live agent-loom watchers; quiet events never send", async () => {
   const f = fixture();
   const bodies: Notice[] = [];
   const server = Bun.serve({
@@ -240,7 +240,7 @@ test("closed notifies only live agent-mail watchers; quiet events never send", a
         env: {
           ...process.env,
           HOME: f.home,
-          AGENT_MAIL_PORT: String(server.port),
+          AGENT_LOOM_PORT: String(server.port),
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: "",
           AGENT_SESSION_ID: "",
@@ -252,9 +252,9 @@ test("closed notifies only live agent-mail watchers; quiet events never send", a
       child.stdin.write(
         JSON.stringify({
           ...issue(f.project, [
-            "agent-mail:live-watcher",
+            "agent-loom:live-watcher",
             "foreign:peer",
-            "agent-mail:offline",
+            "agent-loom:offline",
           ]),
           event,
         }),
@@ -290,16 +290,16 @@ test("closed notifies only live agent-mail watchers; quiet events never send", a
   }
 });
 
-// A foreign token longer than the agent-mail: prefix, so dropping the prefix
+// A foreign token longer than the agent-loom: prefix, so dropping the prefix
 // check would leave a non-empty suffix that routes a notice to a bogus
 // session rather than being filtered out by accident.
-test("only agent-mail: tokens name watcher sessions", () => {
+test("only agent-loom: tokens name watcher sessions", () => {
   expect(
     issueWatcherSessions([
-      "agent-mail:sess-a",
+      "agent-loom:sess-a",
       "other-tool:session-0123456789",
-      "agent-mail:sess-a",
-      "agent-mail:",
+      "agent-loom:sess-a",
+      "agent-loom:",
     ]),
   ).toEqual(["sess-a"]);
 });

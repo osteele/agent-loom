@@ -365,7 +365,7 @@ function transferMessage(
 ): void {
   appendMessage({
     ts: new Date().toISOString(),
-    from: "agent-mail-transfer",
+    from: "agent-loom-transfer",
     project: request.project,
     message,
     origin: {

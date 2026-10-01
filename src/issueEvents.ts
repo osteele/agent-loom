@@ -1,4 +1,4 @@
-import { AGENT_MAIL_WATCHER_PREFIX } from "./ledgerIssues.ts";
+import { watcherSessionIds } from "./ledgerIssues.ts";
 
 const EVENTS = new Set([
   "reported",
@@ -84,12 +84,5 @@ export function parseIssueLedgerEvent(text: string): IssueLedgerEvent {
 }
 
 export function issueWatcherSessions(tokens: string[]): string[] {
-  return [
-    ...new Set(
-      tokens
-        .filter((token) => token.startsWith(AGENT_MAIL_WATCHER_PREFIX))
-        .map((token) => token.slice(AGENT_MAIL_WATCHER_PREFIX.length))
-        .filter(Boolean),
-    ),
-  ];
+  return watcherSessionIds(tokens);
 }

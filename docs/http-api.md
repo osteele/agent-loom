@@ -23,8 +23,8 @@ other use the MCP tools, and people use the CLI or the dashboards.
 | `POST /api/v1/push/oh-my-pi/ack` | `{deliveryToken}` → record an OMP push and mark it read after exact-session context insertion |
 
 Automation that wants presence or aggregate state should consume
-`agent-mail listeners --no-sync --json`, `agent-mail state --no-sync --json`,
-or `GET /api/v1/state`, never agent-mail's files.
+`agent-loom listeners --no-sync --json`, `agent-loom state --no-sync --json`,
+or `GET /api/v1/state`, never agent-loom's files.
 [automation.md](automation.md) specifies the outputs, their freshness
 semantics, and what presence and receipts do and do not prove.
 
@@ -46,14 +46,14 @@ remains descriptive and cannot grant push authorization or user authority.
 
 The OMP stream verifies the exact protocol version and that `pid` names a
 current process before adding a listener. A protocol mismatch returns 409 with
-the required version in `X-Agent-Mail-Protocol`. The first stream event echoes
+the required version in `X-Agent-Loom-Protocol`. The first stream event echoes
 the requested native OMP id and reports the routing id resolved by an exact
 host-pid join to the MCP registration. Each mail event carries an opaque
 acknowledgement token valid only for its negotiated live stream generation.
-After OMP emits `message_start` for the exact agent-mail custom message, the
+After OMP emits `message_start` for the exact agent-loom custom message, the
 extension acknowledges; the daemon creates a `pushed` receipt, marks the message
 read, and creates a per-session `read` receipt. Consumers must validate the
-`X-Agent-Mail-Protocol: 3` response header, each event's `version`, the echoed
+`X-Agent-Loom-Protocol: 3` response header, each event's `version`, the echoed
 request id, and the exact project and resolved routing-id join. Unknown versions
 are incompatible, not partial data to guess through. The read
 semantics are specified by
@@ -62,7 +62,7 @@ semantics are specified by
 ## Session status
 
 Long-running clients use `GET /api/v1/session-status` instead of repeatedly
-launching `agent-mail status-line`. OMP supplies the canonical project and
+launching `agent-loom status-line`. OMP supplies the canonical project and
 resolved routing session ID from its push handshake. The daemon collects status
 on its 10-second presence tick, sharing unread collection with reminders and
 reading work once per project. Requests only read the cache; they do not launch

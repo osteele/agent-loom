@@ -39,12 +39,12 @@ import {
 
 test("parsePsLine handles macOS lstart (incl. padded day) and spaced commands", () => {
   const parsed = parsePsLine(
-    "12579 Sat Aug  1 10:48:00 2026 /Users/x/.bun/bin/bun /Users/x/code/agent-tools/agent-mail/src/channel.ts",
+    "12579 Sat Aug  1 10:48:00 2026 /Users/x/.bun/bin/bun /Users/x/code/agent-tools/agent-loom/src/channel.ts",
   );
   expect(parsed?.pid).toBe(12579);
   expect(parsed?.info.start).toBe("Sat Aug 1 10:48:00 2026");
   expect(parsed?.info.command).toBe(
-    "/Users/x/.bun/bin/bun /Users/x/code/agent-tools/agent-mail/src/channel.ts",
+    "/Users/x/.bun/bin/bun /Users/x/code/agent-tools/agent-loom/src/channel.ts",
   );
 });
 
@@ -80,7 +80,7 @@ test("a failed process inspection is distinguishable from an empty live set", ()
  * direct query for that pid finds it (a live process the table lost) or exits
  * 1 (a process that really is gone). */
 function fakePs(hiddenPid: number, singlePidAnswers: boolean): string {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-fake-ps-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-fake-ps-"));
   const path = join(root, "ps");
   writeFileSync(
     path,
@@ -127,7 +127,7 @@ test("a pid missing from the whole-table scan is confirmed before it counts as d
 });
 
 test("register does not inherit state from a recycled pid", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-recycled-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-register-recycled-"));
   const project = join(root, "project");
   mkdirSync(project);
   const path = register(project, process.pid, "old-session");
@@ -162,7 +162,7 @@ test("register does not inherit state from a recycled pid", () => {
 });
 
 test("the exact process preserves session state across re-registration", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-same-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-register-same-"));
   const project = join(root, "project");
   mkdirSync(project);
   const path = register(project, process.pid, "same-session");
@@ -195,7 +195,7 @@ test("the exact process preserves session state across re-registration", () => {
 });
 
 test("components of one logical session share policy and presentation", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-components-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-register-components-"));
   const project = join(root, "project");
   mkdirSync(project);
   const mcp = register(
@@ -274,7 +274,7 @@ test("components of one logical session share policy and presentation", async ()
 });
 
 test("a process instance preserves state without a process-start scan", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-instance-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-register-instance-"));
   const project = join(root, "project");
   mkdirSync(project);
   const instanceId = "channel-instance";
@@ -325,9 +325,9 @@ test("a process instance preserves state without a process-start scan", () => {
 });
 
 test("production minting reserves registered nouns after cooldown exhaustion", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-nouns-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-register-nouns-"));
   const home = join(root, "home");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   const names = join(state, "session-names");
   const registry = join(state, "registry");
   const heldNoun = NOUNS[0];
@@ -378,7 +378,7 @@ test("production minting reserves registered nouns after cooldown exhaustion", a
 });
 
 test("registry mutations wait for the entry transaction lock", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-register-lock-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-register-lock-"));
   const project = join(root, "project");
   mkdirSync(project);
   const path = register(project, process.pid, "locked-session");
@@ -428,7 +428,7 @@ test("pruning a dead registration records it in the lifecycle log", () => {
   const pid = exited.pid;
   expect(pid).toBeGreaterThan(0);
   const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "agent-mail-registry-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-registry-")),
   );
   mkdirSync(REGISTRY_DIR, { recursive: true });
   const path = join(REGISTRY_DIR, `${projectSlug(root)}-killed.json`);
@@ -483,14 +483,14 @@ test("listLiveInProject collapses legacy and canonical spellings of one dir", ()
   expect(procStart).toBeTruthy();
 
   const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "agent-mail-registry-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-registry-")),
   );
   const real = join(root, "real");
   mkdirSync(real);
   const link = join(root, "link");
   symlinkSync(real, link);
 
-  // The registry directory exists on any machine that has run agent-mail, so
+  // The registry directory exists on any machine that has run agent-loom, so
   // this test passed locally while failing on a clean checkout. Writing into a
   // shared directory means creating it first, not assuming a prior run.
   mkdirSync(REGISTRY_DIR, { recursive: true });
@@ -676,7 +676,7 @@ test("a running listener with a matching start time stays live", () => {
   expect(
     isCurrentProcess(reg(ZOMBIE_START), {
       start: ZOMBIE_START,
-      command: "bun /Users/x/agent-mail/src/channel.ts",
+      command: "bun /Users/x/agent-loom/src/channel.ts",
     }),
   ).toBe(true);
 });
@@ -690,6 +690,19 @@ test("a recycled pid is not the process that registered", () => {
   ).toBe(false);
 });
 
+// An installed build from before the rename runs as node_modules/agent-mail/
+// dist/channel.js, which names neither agent-loom nor channel.ts; pruning it
+// would unregister a live session that never re-registers.
+test("a pre-rename installed channel server without procStart stays live", () => {
+  expect(
+    isCurrentProcess(reg(), {
+      start: ZOMBIE_START,
+      command:
+        "node /Users/x/.bun/install/global/node_modules/agent-mail/dist/channel.js",
+    }),
+  ).toBe(true);
+});
+
 test("a legacy entry without procStart is judged by its command", () => {
   // Pre-procStart entries survive only while the pid still looks like a channel
   // server. A defunct one no longer does, so the same guard covers them.
@@ -697,7 +710,7 @@ test("a legacy entry without procStart is judged by its command", () => {
   expect(
     isCurrentProcess(legacy, {
       start: ZOMBIE_START,
-      command: "bun /Users/x/agent-mail/src/channel.ts",
+      command: "bun /Users/x/agent-loom/src/channel.ts",
     }),
   ).toBe(true);
   expect(

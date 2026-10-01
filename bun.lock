@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "agent-mail",
+      "name": "agent-loom",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
         "jsonc-parser": "^3.3.1",

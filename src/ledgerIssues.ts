@@ -2,7 +2,7 @@
  * obligations at read time.
  *
  * Every open issue in the ledger IS an obligation — the owner of the issue's
- * component owes the fix — so agent-mail stores nothing for it: the ledger is
+ * component owes the fix — so agent-loom stores nothing for it: the ledger is
  * the record, and this module holds only the daemon's raw read of it. The
  * daemon's periodic `issues list --json` refresh lands here, as does an early
  * refresh an event hook requests; views, the status line, and `state --json`
@@ -28,10 +28,29 @@ import type { ObligationRoleResolver, Role } from "./obligations.ts";
 import { LEDGER_ISSUES_SNAPSHOT_PATH } from "./paths.ts";
 import { formatAge } from "./sessions.ts";
 
-/** Watcher tokens agent-mail mints on an issue name the waiting session as
- * `agent-mail:<session-id>`. Tokens with any other prefix belong to other
+/** Watcher tokens agent-loom mints on an issue name the waiting session as
+ * `agent-loom:<session-id>`. Tokens with any other prefix belong to other
  * tools and are ignored here. */
-export const AGENT_MAIL_WATCHER_PREFIX = "agent-mail:";
+export const AGENT_LOOM_WATCHER_PREFIX = "agent-loom:";
+
+/** The prefix minted before the rename from agent-mail. Issues keep the tokens
+ * they were given, so it is still read, never minted. */
+const LEGACY_WATCHER_PREFIX = "agent-mail:";
+
+/** The session ids named by agent-loom watcher tokens, current or legacy,
+ * deduplicated in first-seen order. */
+export function watcherSessionIds(tokens: string[]): string[] {
+  const ids: string[] = [];
+  for (const token of tokens) {
+    const prefix = [AGENT_LOOM_WATCHER_PREFIX, LEGACY_WATCHER_PREFIX].find(
+      (p) => token.startsWith(p),
+    );
+    if (!prefix) continue;
+    const id = token.slice(prefix.length);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
 
 /** One open issue from `issues list --json`. `watchers` and `componentPath`
  * postdate the first consumers of this file, so a row that omits them parses
@@ -215,7 +234,7 @@ export interface LedgerObligation {
   /** The session the obligor role resolves to right now, or undefined —
    * rendered unresolvable, never guessed. */
   ownerSessionId?: string;
-  /** Sessions watching the issue through `agent-mail:` tokens. Empty when no
+  /** Sessions watching the issue through `agent-loom:` tokens. Empty when no
    * session watches; the fix is still owed. */
   obligees: string[];
   source: "issue-ledger";
@@ -248,14 +267,7 @@ export function projectLedgerObligations(
   return snapshot.issues
     .map((issue) => {
       const role = ledgerIssueOwnerRole(issue);
-      const obligees = [
-        ...new Set(
-          issue.watchers
-            .filter((token) => token.startsWith(AGENT_MAIL_WATCHER_PREFIX))
-            .map((token) => token.slice(AGENT_MAIL_WATCHER_PREFIX.length))
-            .filter((sessionId) => sessionId.length > 0),
-        ),
-      ];
+      const obligees = watcherSessionIds(issue.watchers);
       return {
         id: `issue:${issue.id}`,
         kind: "external_fix" as const,

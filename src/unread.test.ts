@@ -7,7 +7,7 @@ import { type Message, appendMessage, appendReceipt } from "./spool.ts";
 import { unreadVisibleForSession } from "./unread.ts";
 
 function makeProject(): { project: string; cleanup: () => void } {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-unread-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-unread-"));
   return {
     project: canonicalProject(root),
     cleanup: () => rmSync(root, { recursive: true, force: true }),

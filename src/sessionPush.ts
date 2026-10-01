@@ -133,7 +133,7 @@ export type SessionPushJoin =
   | { kind: "none" }
   | { kind: "ambiguous"; sessionIds: string[] };
 
-/** The routing id this transport attaches to: the one its host's agent-mail MCP
+/** The routing id this transport attaches to: the one its host's agent-loom MCP
  * component registered.
  *
  * OMP owns a native conversation id but does not export it to MCP subprocesses.
@@ -216,6 +216,8 @@ export class SessionPushBridge {
         {
           status: 409,
           headers: {
+            "X-Agent-Loom-Protocol": String(SESSION_PUSH_PROTOCOL_VERSION),
+            // Consumers built before the rename read the old header name.
             "X-Agent-Mail-Protocol": String(SESSION_PUSH_PROTOCOL_VERSION),
           },
         },
@@ -254,7 +256,7 @@ export class SessionPushBridge {
         {
           error:
             join.kind === "none"
-              ? `no agent-mail session is registered under ${this.#client.processLabel} pid ${input.pid} yet`
+              ? `no agent-loom session is registered under ${this.#client.processLabel} pid ${input.pid} yet`
               : `${this.#client.processLabel} pid ${input.pid} has several registered sessions (${join.sessionIds.join(", ")}); cannot tell which one this transport belongs to`,
         },
         { status: 503 },
@@ -346,6 +348,8 @@ export class SessionPushBridge {
       headers: {
         "Cache-Control": "no-store",
         "Content-Type": "application/x-ndjson; charset=utf-8",
+        "X-Agent-Loom-Protocol": String(SESSION_PUSH_PROTOCOL_VERSION),
+        // Consumers built before the rename read the old header name.
         "X-Agent-Mail-Protocol": String(SESSION_PUSH_PROTOCOL_VERSION),
       },
     });

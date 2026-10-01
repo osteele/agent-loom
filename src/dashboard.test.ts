@@ -39,13 +39,13 @@ slowTest("the persistent daemon can serve the dashboard page", async () => {
   const response = dashboardResponse(new Request("http://127.0.0.1:8377/"));
   expect(response?.status).toBe(200);
   const page = await response?.text();
-  expect(page).toContain("agent-mail");
+  expect(page).toContain("agent-loom");
   expect(page).toContain("Coordination");
   expect(page).toContain("recover_coordination");
 });
 
 test("state obligationRecords project both ends with resolution and project provenance", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-dashboard-records-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-dashboard-records-"));
   temporaryDirectories.push(root);
   const projectP1 = join(root, "p1");
   const projectP2 = join(root, "p2");
@@ -138,7 +138,7 @@ test("state obligationRecords project both ends with resolution and project prov
 });
 
 test("a project-scoped query still resolves cross-project obligation parties", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-dashboard-scoped-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-dashboard-scoped-"));
   temporaryDirectories.push(root);
   const projectP1 = join(root, "owed-to");
   const projectP2 = join(root, "owed-by");

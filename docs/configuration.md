@@ -1,7 +1,7 @@
 # Configuration
 
 The daemon, the CLI, and the dashboards read
-`~/.config/agent-mail/config.toml`:
+`~/.config/agent-loom/config.toml`:
 
 ```toml
 port = 8377
@@ -27,14 +27,14 @@ project base in full names (e.g. `augur-quiet-lantern` instead of
 `llm-performance-models-quiet-lantern`) across `listeners`, `list_sessions`,
 and both dashboards. Display names such as `Quiet Lantern` omit the project
 base, and a deliberate Claude `/rename` is kept verbatim. Also settable via
-`AGENT_MAIL_SESSION_ALIASES`. Changes are picked up on daemon `graceful`
+`AGENT_LOOM_SESSION_ALIASES`. Changes are picked up on daemon `graceful`
 (SIGHUP) and by each new CLI/dashboard invocation.
 
 The `notify --no-slack` flag suppresses the Slack mirror for that message
 only. The message is still appended to the project inbox, and other messages
 continue to use the configured `slack_echo` policy.
 
-`dashboard` controls whether the daemon and `agent-mail dashboard` expose the
+`dashboard` controls whether the daemon and `agent-loom dashboard` expose the
 read-only web dashboard. It is off by default. Set it to `true` and run
-`agent-mail graceful` to enable it. `AGENT_MAIL_DASHBOARD=1` enables the
+`agent-loom graceful` to enable it. `AGENT_LOOM_DASHBOARD=1` enables the
 standalone dashboard command for one invocation when the daemon is down.

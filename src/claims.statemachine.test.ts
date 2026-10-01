@@ -30,7 +30,7 @@ function makeProject(): {
   notebook: string;
   store: ClaimStore;
 } {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-claims-sm-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-claims-sm-"));
   temporaryDirectories.push(root);
   const project = resolve(join(root, "project"));
   const notebook = resolve(join(project, "lab-notebook"));

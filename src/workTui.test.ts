@@ -33,14 +33,14 @@ afterEach(() => {
 
 function fixture() {
   const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "agent-mail-work-tui-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-work-tui-")),
   );
   roots.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
   mkdirSync(home);
   mkdirSync(project);
-  const workRoot = join(home, ".claude", "agent-mail", "work");
+  const workRoot = join(home, ".claude", "agent-loom", "work");
   const store = new WorkStore(workRoot);
   const owner = {
     id: "owner-route",
@@ -159,7 +159,7 @@ test("once and non-TTY commands read real leases without changing state or pruni
     { type: "plan", key: "visible-plan", sourcePath: source },
     owner,
   );
-  const data = join(home, ".claude", "agent-mail");
+  const data = join(home, ".claude", "agent-loom");
   const registry = join(data, "registry");
   mkdirSync(registry);
   writeFileSync(

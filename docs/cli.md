@@ -1,8 +1,8 @@
 # CLI reference
 
-Every `agent-mail` subcommand, grouped by area. The README's
+Every `agent-loom` subcommand, grouped by area. The README's
 [quick start](../README.md#quick-start) shows the common flows; this page is the
-reference. Running `agent-mail` with no arguments, or `agent-mail help`,
+reference. Running `agent-loom` with no arguments, or `agent-loom help`,
 prints a compact version of the same listing.
 
 These conventions apply except where a command specifies explicit selectors.
@@ -24,7 +24,7 @@ These conventions apply except where a command specifies explicit selectors.
 ### `notify`
 
 ```
-agent-mail notify --project <dir> --message <text> [--from <label>]
+agent-loom notify --project <dir> --message <text> [--from <label>]
   [--session <name-or-id> | --role owner] [--reply-to <id>] [--idempotency-key <key>]
   [--ttl <seconds>] [--no-slack]
 ```
@@ -87,7 +87,7 @@ variables, an indirect or ambiguous host leaves the send unattributed.
 ### `inbox`
 
 ```
-agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek] [--json]
+agent-loom inbox [--project <dir>] [--limit N] [--unread] [--peek] [--json]
 ```
 
 Prints a project's spool, newest messages last. Text rows include the id, read
@@ -104,7 +104,7 @@ unattributed and leaves its read state unchanged.
 ### `triage-candidates`
 
 ```
-agent-mail triage-candidates [--project <dir>] [--limit N]
+agent-loom triage-candidates [--project <dir>] [--limit N]
 ```
 
 Returns a versioned JSON snapshot of unread mail available for project-level
@@ -136,7 +136,7 @@ sessions still own unread direct messages.
 ### `mark-read`
 
 ```
-agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)
+agent-loom mark-read [--project <dir>] (--id <message-id>... | --all)
 ```
 
 Marks one or more messages, or the whole inbox, read. Repeat `--id` to settle a
@@ -145,7 +145,7 @@ triaged set without consuming messages that were excluded from that set.
 ### `receipts`
 
 ```
-agent-mail receipts [--project <dir>] [--id <message-id>] [--limit N]
+agent-loom receipts [--project <dir>] [--id <message-id>] [--limit N]
 ```
 
 Shows the append-only delivery receipts for a project, or for one message with
@@ -163,7 +163,7 @@ covers what each status does and does not establish.
 ### `listeners`
 
 ```
-agent-mail listeners [--project <dir>] [--json] [--no-sync]
+agent-loom listeners [--project <dir>] [--json] [--no-sync]
 ```
 
 Lists the sessions attached to a project, or to every project, with display
@@ -179,7 +179,7 @@ specifies the snapshot output.
 ### `session-address`
 
 ```
-agent-mail session-address --project ABS --session RAW --json
+agent-loom session-address --project ABS --session RAW --json
 ```
 
 Resolves an advisory session identity for companion-pane launchers. All three
@@ -229,7 +229,7 @@ Only a host-fallback query inspects process ancestry.
 ### `mute` / `unmute`
 
 ```
-agent-mail mute|unmute (--session <name-or-id> | --project <dir>)
+agent-loom mute|unmute (--session <name-or-id> | --project <dir>)
 ```
 
 Pauses or resumes channel push for the matching live sessions. Muting holds
@@ -242,7 +242,7 @@ the mechanism.
 ### `inbound`
 
 ```
-agent-mail inbound --policy accept|hold|refuse (--session <name-or-id> | --project <dir>)
+agent-loom inbound --policy accept|hold|refuse (--session <name-or-id> | --project <dir>)
 ```
 
 Sets how the matching live sessions treat incoming mail: `accept` delivers new
@@ -253,7 +253,7 @@ audit record. The default policy comes from the `inbound_policy` config key.
 ### `status-line`
 
 ```
-agent-mail status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
+agent-loom status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
 ```
 
 Prints this session's display name for a supported client status line, or one
@@ -268,7 +268,7 @@ and Kimi Code adapters.
 ### `remind`
 
 ```
-agent-mail remind --format agy|codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
+agent-loom remind --format agy|codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
 ```
 
 Prints an unread-mail reminder for a harness hook or a harness-specific no-op.
@@ -282,7 +282,7 @@ continue response. The `pi` format exposes the exit-2 signal to the example Pi
 extension. All failures fail open with exit 0. Agy receives `{}` on no-op
 paths; other formats print nothing. A stale or missing snapshot also appends a
 rate-limited line to
-`~/.claude/agent-mail/remind-diagnostics.log`. The session id resolves from
+`~/.claude/agent-loom/remind-diagnostics.log`. The session id resolves from
 `--session`, then the stdin hook payload's `session_id`, then
 `GEMINI_SESSION_ID`, then the session identity environment variables. Agy's
 documented `workspacePaths` supplies the project when the hook process runs
@@ -291,7 +291,7 @@ from its global config directory.
 
 ## Coordination claims
 
-Claims are filesystem transactions under `~/.claude/agent-mail/claims/`,
+Claims are filesystem transactions under `~/.claude/agent-loom/claims/`,
 independent of the daemon.
 [architecture.md](architecture.md#coordination-claims) covers the conflict
 rules.
@@ -299,7 +299,7 @@ rules.
 ### `claim-experiment`
 
 ```
-agent-mail claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
+agent-loom claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
 ```
 
 Atomically reserves the next `EXP-NNN` number in a research lab notebook and
@@ -311,7 +311,7 @@ experiment file before releasing the reservation or the number can be reissued.
 ### `claim-path`
 
 ```
-agent-mail claim-path --path <path> [--path <path> ...] [--directory]
+agent-loom claim-path --path <path> [--path <path> ...] [--directory]
   [--project <dir>] [--owner <label>]
   [--plan <stem> [--plan-project <dir>]]
 ```
@@ -330,7 +330,7 @@ research plan the owner and requires the caller to hold that plan's work lease.
 ### `claims`
 
 ```
-agent-mail claims [--project <dir> | --all] [--history]
+agent-loom claims [--project <dir> | --all] [--history]
 ```
 
 Lists active experiment and path claims. `--history` adds path claims released
@@ -339,7 +339,7 @@ within the 30-day retention window. Release tokens are never listed.
 ### `release-claim`
 
 ```
-agent-mail release-claim (--id <claim-id> | --token <release-token>)
+agent-loom release-claim (--id <claim-id> | --token <release-token>)
   [--project <dir>]
 ```
 
@@ -352,7 +352,7 @@ release credentials. Repeated release remains idempotent during retention.
 ### `owner`
 
 ```
-agent-mail owner [show|claim|release] [--project <dir>] [--json]
+agent-loom owner [show|claim|release] [--project <dir>] [--json]
 ```
 
 `show` (the default) reports the owner address and whether it is assigned,
@@ -403,7 +403,7 @@ develops the distinction.
 ### `work list`
 
 ```
-agent-mail work list [--project <dir> | --all] [--type <type>] [--owner <owner>]
+agent-loom work list [--project <dir> | --all] [--type <type>] [--owner <owner>]
 ```
 
 Lists active leases with resource, owner, state, current activity, and an
@@ -413,7 +413,7 @@ id, session id, or label.
 ### `work tui`
 
 ```
-agent-mail work tui --session ID --project /absolute/existing/project [--once]
+agent-loom work tui --session ID --project /absolute/existing/project [--once]
 ```
 
 Shows every work lease whose `owner.sessionId` exactly matches `ID` in the
@@ -481,7 +481,7 @@ are preserved, CRLF becomes LF, and tabs become four spaces.
 ### `work acquire`
 
 ```
-agent-mail work acquire --type <type> --key <key> [--label <label>]
+agent-loom work acquire --type <type> --key <key> [--label <label>]
   [--source <path>] [--state working|waiting] [--activity <text>]
   [--project <dir>] [--owner <label>]
   [--step N [--steps TOTAL] [--step-label TEXT] | --clear-progress]
@@ -498,7 +498,7 @@ proven dead. Run inside a registered agent shell, or pass `--owner`.
 ### `work update`
 
 ```
-agent-mail work update --id <work-id> [--state working|waiting] [--activity <text>]
+agent-loom work update --id <work-id> [--state working|waiting] [--activity <text>]
   [--step N [--steps TOTAL] [--step-label TEXT] | --clear-progress]
 ```
 
@@ -523,7 +523,7 @@ completion. Ownership, transfer, recovery, and delivery rules are unchanged.
 ### `work release`
 
 ```
-agent-mail work release --id <work-id> [--project <dir>]
+agent-loom work release --id <work-id> [--project <dir>]
   [--outcome completed|abandoned]
 ```
 
@@ -536,26 +536,26 @@ outcome records lease loss.
 ### `issues watcher-token`
 
 ```
-agent-mail issues watcher-token
+agent-loom issues watcher-token
 ```
 
-Configure with `issues hook set watcher 'agent-mail issues watcher-token'`.
-Prints `agent-mail:<session-id>` and exits 0 when the caller has a live
+Configure with `issues hook set watcher 'agent-loom issues watcher-token'`.
+Prints `agent-loom:<session-id>` and exits 0 when the caller has a live
 registration whose host process is an ancestor (ADR 0014). Otherwise prints
 nothing and exits 0; an inherited environment ID alone is not proof.
 
 ### `issues event`
 
 ```
-agent-mail issues event
+agent-loom issues event
 ```
 
-Configure with `issues hook set event 'agent-mail issues event'`. Reads one
+Configure with `issues hook set event 'agent-loom issues event'`. Reads one
 `issue-ledger-event/v1` JSON document from stdin. Invalid JSON or schema exits
 2 with a diagnostic. Reported, recurred, and reopened issues notify the
 component owner resolved from `component_path` (or the component name), with
 id, title, severity, and `issues show <id>`. Closed issues notify each
-`agent-mail:` watcher with the close reason; recurred and reopened also notify
+`agent-loom:` watcher with the close reason; recurred and reopened also notify
 watchers. Sighted, noted, watched, and unwatched send no notices. Other token
 prefixes are ignored. Unresolved owners and non-live watchers are diagnosed,
 never replaced by a broadcast. Valid events exit 0 even when recipients or the
@@ -580,7 +580,7 @@ exactly one notice.
 Open issue-ledger issues join every open listing without a stored record:
 each is a read-only `issue:<id>` obligation owed by its component's owner,
 projected from the daemon's `issues list --json` snapshot and tagged
-`[issue-ledger]`. The sessions named by `agent-mail:<session-id>` watcher
+`[issue-ledger]`. The sessions named by `agent-loom:<session-id>` watcher
 tokens on the issue are its obligees. The mutating subcommands refuse these
 ids and name the ledger's own verb (`issues close`, `issues note`, `issues
 unwatch`) instead. A snapshot older than its TTL shows its rows marked stale
@@ -590,7 +590,7 @@ line rather than omitting the rows silently.
 ### `obligations announce`
 
 ```
-agent-mail obligations announce (--obligor <name-or-id> | --user |
+agent-loom obligations announce (--obligor <name-or-id> | --user |
                                  --system <name> | --component <name>)
   --kind <claim_release|decision|external_fix|job_completion|review>
   --subject <text>
@@ -613,14 +613,14 @@ Keep `--subject` a short plain-text name for the decision, such as
 constraints, and consequences of each choice in `--description`. The description
 accepts multiline Markdown (up to 10,000 characters); each `--option` accepts
 inline Markdown (one line, up to 500 characters). Unicode math characters such
-as `ρ ∈ [0, 1]` are stored verbatim in both. Agent-mail stores the Markdown
+as `ρ ∈ [0, 1]` are stored verbatim in both. Agent-loom stores the Markdown
 source and leaves rendering to readers. No shorter subject-length limit is
 enforced. Use `--marker` for evidence pointers.
 
 For example:
 
 ```
-agent-mail obligations announce --user --kind decision \
+agent-loom obligations announce --user --kind decision \
   --subject "Review packet format" \
   --description '**Finding:** A PDF export drops table labels. A structured export preserves them but changes the review workflow. Choose a reproducible packet format.' \
   --option 'Tagged **PDF**' --option 'Structured export (`.json`)'
@@ -638,7 +638,7 @@ missing downstream, never as an announce error. `--marker-kind` and
 ### `obligations update`
 
 ```
-agent-mail obligations update --id <obligation-id>
+agent-loom obligations update --id <obligation-id>
   [--description <text> | --clear-description]
   [--option <text> ... | --clear-options]
   [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]
@@ -655,7 +655,7 @@ and re-announcement.
 ### `obligations comment`
 
 ```
-agent-mail obligations comment --id <obligation-id> --text <text> [--user]
+agent-loom obligations comment --id <obligation-id> --text <text> [--user]
 ```
 
 Appends a note to an open record. Either end may comment, and `--user` is
@@ -666,7 +666,7 @@ timestamped notes, and never move the status.
 ### `obligations close`
 
 ```
-agent-mail obligations close --id <obligation-id> [--resolution <text>]
+agent-loom obligations close --id <obligation-id> [--resolution <text>]
 ```
 
 Satisfies an open obligation. Obligee-only; the resolution text is captured
@@ -678,7 +678,7 @@ system reports the event (a weft job finishing).
 ### `obligations withdraw`
 
 ```
-agent-mail obligations withdraw --id <obligation-id>
+agent-loom obligations withdraw --id <obligation-id>
 ```
 
 Withdraws an open obligation. Obligee-only, like `close`.
@@ -686,7 +686,7 @@ Withdraws an open obligation. Obligee-only, like `close`.
 ### `obligations contest`
 
 ```
-agent-mail obligations contest --id <obligation-id> --reason <text> [--user]
+agent-loom obligations contest --id <obligation-id> --reason <text> [--user]
 ```
 
 The named obligor marks the record contested — visible everywhere, tagged,
@@ -698,7 +698,7 @@ evidence or clears by authority.
 ### `obligations adopt`
 
 ```
-agent-mail obligations adopt --predecessor <id>
+agent-loom obligations adopt --predecessor <id>
   (--resume-id <id> | --authority <text> --reason <text>)
 ```
 
@@ -710,7 +710,7 @@ The transfer is atomic, carries contested flags, and skips terminal records.
 ### `obligations owed`
 
 ```
-agent-mail obligations owed
+agent-loom obligations owed
 ```
 
 Lists open obligations naming the operator, across all projects. Records
@@ -720,7 +720,7 @@ naming a session appear in that session's status line and in
 ### `obligations list`
 
 ```
-agent-mail obligations list [--all] [--owed]
+agent-loom obligations list [--all] [--owed]
 ```
 
 Lists obligations; `--all` includes satisfied and withdrawn records within
@@ -729,7 +729,7 @@ the 30-day retention window, `--owed` filters to the operator's.
 ### `obligations clear`
 
 ```
-agent-mail obligations clear --id <obligation-id> --authority <text> --reason <text>
+agent-loom obligations clear --id <obligation-id> --authority <text> --reason <text>
 ```
 
 Withdraws an open obligation under declared user authority — recorded, never
@@ -744,7 +744,7 @@ defines the conditions.
 ### `coordination list`
 
 ```
-agent-mail coordination list [--project <dir> | --all] [--kind <kind>]
+agent-loom coordination list [--project <dir> | --all] [--kind <kind>]
   [--owner <owner>] [--condition <condition>] [--json]
 ```
 
@@ -758,19 +758,19 @@ a versioned object.
 ### `coordination recover`
 
 ```
-agent-mail coordination recover --id <coordination-id>
+agent-loom coordination recover --id <coordination-id>
   [--authority <text> --reason <text>]
 ```
 
 Releases a record after revalidating its lifecycle. A forced recovery requires
-both `--authority` and `--reason`. Agent-mail records both values verbatim in
-`~/.claude/agent-mail/forced-recoveries.jsonl` and does not verify them. Only
+both `--authority` and `--reason`. Agent-loom records both values verbatim in
+`~/.claude/agent-loom/forced-recoveries.jsonl` and does not verify them. Only
 explicit operator instruction can supply the authority.
 
 ### `coordination request-transfer`
 
 ```
-agent-mail coordination request-transfer --id <work-id> [--reason <text>]
+agent-loom coordination request-transfer --id <work-id> [--reason <text>]
   [--timeout <seconds>] [--owner <label>]
 ```
 
@@ -784,7 +784,7 @@ covers the protocol.
 ### `coordination respond-transfer`
 
 ```
-agent-mail coordination respond-transfer --id <request-id> --decision accept|decline
+agent-loom coordination respond-transfer --id <request-id> --decision accept|decline
   [--message <text>] [--owner <label>]
 ```
 
@@ -794,7 +794,7 @@ the request may respond.
 ### `coordination transfers`
 
 ```
-agent-mail coordination transfers [--project <dir> | --all] [--json]
+agent-loom coordination transfers [--project <dir> | --all] [--json]
 ```
 
 Lists transfer requests with status and deadline, settling expired ones first.
@@ -804,7 +804,7 @@ Lists transfer requests with status and deadline, settling expired ones first.
 ### `state`
 
 ```
-agent-mail state [--project <dir>] [--no-sync] [--json]
+agent-loom state [--project <dir>] [--no-sync] [--json]
 ```
 
 Prints versioned aggregate state: presence, coordination, transfers, recent
@@ -818,7 +818,7 @@ reader; `--no-sync` uses that reader directly. The output is JSON either way, so
 ### `dashboard`
 
 ```
-agent-mail dashboard [--port N] [--open] [--no-tui]
+agent-loom dashboard [--port N] [--open] [--no-tui]
 ```
 
 Reports the persistent dashboard URL served by the daemon, opening it with
@@ -826,14 +826,14 @@ Reports the persistent dashboard URL served by the daemon, opening it with
 on the daemon port plus one; an explicit `--port N` always starts the
 fallback. The fallback's terminal controls are `o` to open and `q` to quit;
 `--no-tui` runs a plain long-running server instead. The dashboard is off
-unless `dashboard = true` is set in the config, or `AGENT_MAIL_DASHBOARD=1`
+unless `dashboard = true` is set in the config, or `AGENT_LOOM_DASHBOARD=1`
 for one invocation. Both forms are read-only.
 [dashboards.md](dashboards.md) describes what the dashboard shows.
 
 ### `slack-dashboard`
 
 ```
-agent-mail slack-dashboard [--watch <seconds>]
+agent-loom slack-dashboard [--watch <seconds>]
 ```
 
 Posts the same summary as a single Slack message and edits it in place on each
@@ -850,7 +850,7 @@ LaunchAgent is installed and manage a bare pidfile process otherwise.
 ### `start` / `stop` / `restart`
 
 ```
-agent-mail start|stop|restart
+agent-loom start|stop|restart
 ```
 
 Starts, stops, or restarts the daemon. `start` is a no-op when the daemon is
@@ -860,7 +860,7 @@ only.
 ### `status`
 
 ```
-agent-mail status
+agent-loom status
 ```
 
 Prints daemon health: process and launchd state, port, dashboard URL, Slack
@@ -872,16 +872,16 @@ latency-bound surfaces.
 ### `graceful`
 
 ```
-agent-mail graceful
+agent-loom graceful
 ```
 
 Sends the daemon SIGHUP to reload its config without a restart. Also available
-as `agent-mail reload`.
+as `agent-loom reload`.
 
 ### `logs`
 
 ```
-agent-mail logs [-f] [--mcp|--lifecycle]
+agent-loom logs [-f] [--mcp|--lifecycle]
 ```
 
 Prints the last 50 lines of the daemon log, or follows it with `-f`
@@ -910,7 +910,7 @@ When the selected log does not exist yet, `logs` names the path it looked for.
 ### `mcp`
 
 ```
-agent-mail mcp
+agent-loom mcp
 ```
 
 Runs the MCP server on stdio. Agent configs launch this; you do not run it by
@@ -921,7 +921,7 @@ direct spool append when no daemon answers.
 ### `oh-my-pi-plugin-path`
 
 ```
-agent-mail oh-my-pi-plugin-path
+agent-loom oh-my-pi-plugin-path
 ```
 
 Prints the absolute directory of the bundled Oh My Pi push extension. Pass the
@@ -931,13 +931,13 @@ session identity, native status, and delivery behavior.
 ### `install`
 
 ```
-agent-mail install [--dry-run] [--native-audit] [--no-codex]
+agent-loom install [--dry-run] [--native-audit] [--no-codex]
                    [--replace-claude] [--replace-agy] [--replace-codex]
                    [--replace-kimi] [--replace-gemini] [--replace-opencode]
 ```
 
 On macOS, writes the config template if missing, installs the LaunchAgent and
-bootstraps the daemon to start at boot, and registers agent-mail with Claude
+bootstraps the daemon to start at boot, and registers agent-loom with Claude
 Code and Codex. It also registers Antigravity CLI, Kimi Code, Gemini CLI, and
 OpenCode when their user config directories exist. Existing registrations
 that match this install are preserved; ones that point elsewhere are left
@@ -954,7 +954,7 @@ plugin registration conflict that silently disables channel push.
 ### `hooks`
 
 ```
-agent-mail hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+agent-loom hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
 ```
 
 Installs, removes, or reports unread-mail reminder hooks for pull-only
@@ -975,7 +975,7 @@ hooks, and are fully removed by `uninstall`.
 ### `uninstall`
 
 ```
-agent-mail uninstall
+agent-loom uninstall
 ```
 
 Boots out the LaunchAgent, removes its plist, and removes the Claude, Codex,

@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-owner-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-owner-"));
   roots.push(root);
   const project = join(root, "project");
   mkdirSync(project);

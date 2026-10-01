@@ -48,7 +48,7 @@ function textContent(result: unknown): string {
 }
 
 test("claim_path accepts and releases an atomic path batch over MCP", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -59,7 +59,7 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
   const canonicalSibling = realpathSync(sibling);
   const siblingAlias = join(root, "sibling-alias");
   symlinkSync(canonicalSibling, siblingAlias);
-  const claimsDirectory = join(home, ".claude", "agent-mail", "claims");
+  const claimsDirectory = join(home, ".claude", "agent-loom", "claims");
   const environment = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] => entry[1] !== undefined,
@@ -72,13 +72,13 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     env: { ...environment, HOME: home },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     const instructions = client.getInstructions() ?? "";
-    expect(instructions).not.toContain("Agent-mail backlog:");
+    expect(instructions).not.toContain("Agent-loom backlog:");
     expect(instructions).toContain(
-      'Treat an unqualified user request to check or read "mail" or "the inbox" as an agent-mail request: call check_inbox.',
+      'Treat an unqualified user request to check or read "mail" or "the inbox" as an agent-loom request: call check_inbox.',
     );
     const tools = await client.listTools();
     const claimTool = tools.tools.find((tool) => tool.name === "claim_path");
@@ -107,7 +107,7 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
     expect(textContent(sessions)).toContain("[live pid:");
 
     await client.callTool({ name: "check_inbox" });
-    const registry = join(home, ".claude", "agent-mail", "registry");
+    const registry = join(home, ".claude", "agent-loom", "registry");
     const registrations = readdirSync(registry).map(
       (name) =>
         JSON.parse(readFileSync(join(registry, name), "utf8")) as {
@@ -226,7 +226,7 @@ test("claim_path accepts and releases an atomic path batch over MCP", async () =
 });
 
 test("a live channel restores a missing registry entry without another tool call", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-presence-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-presence-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -250,13 +250,13 @@ test("a live channel restores a missing registry entry without another tool call
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     // Ensure the initialized callback's second registration has completed;
     // any later recreation can only come from the idle poll.
     await client.listTools();
-    const registry = join(home, ".claude", "agent-mail", "registry");
+    const registry = join(home, ".claude", "agent-loom", "registry");
 
     // This integration test crosses a child-process timer; fake timers in
     // the test process cannot advance the channel server's poll interval.
@@ -278,7 +278,7 @@ test("a live channel restores a missing registry entry without another tool call
 }, 20_000);
 
 test("a stale registration is rewritten, not just a missing one", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-stale-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-stale-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -302,11 +302,11 @@ test("a stale registration is rewritten, not just a missing one", async () => {
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     await client.listTools();
-    const registry = join(home, ".claude", "agent-mail", "registry");
+    const registry = join(home, ".claude", "agent-loom", "registry");
     const [name] = readdirSync(registry);
     const path = join(registry, name);
 
@@ -337,7 +337,7 @@ test("a stale registration is rewritten, not just a missing one", async () => {
 }, 20_000);
 
 test("initial MCP instructions report the session's unread backlog only", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-backlog-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-backlog-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -345,7 +345,7 @@ test("initial MCP instructions report the session's unread backlog only", async 
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  const inboxDirectory = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(inboxDirectory, { recursive: true });
   const messages = [
     {
@@ -403,13 +403,13 @@ test("initial MCP instructions report the session's unread backlog only", async 
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
 
   try {
     await client.connect(transport);
     const instructions = client.getInstructions() ?? "";
     expect(instructions).toContain(
-      "Agent-mail backlog: 2 unread messages are waiting for this session. " +
+      "Agent-loom backlog: 2 unread messages are waiting for this session. " +
         "Call check_inbox to read them.",
     );
     expect(instructions).not.toContain("secret-sender");
@@ -421,7 +421,7 @@ test("initial MCP instructions report the session's unread backlog only", async 
     const announcedPath = join(
       home,
       ".claude",
-      "agent-mail",
+      "agent-loom",
       "announced",
       `${slug}-recipient-session.json`,
     );
@@ -434,7 +434,7 @@ test("initial MCP instructions report the session's unread backlog only", async 
     expect(announced.lastNewestId).toBe("direct");
     expect(announced.remindCount).toBe(1);
     expect(
-      readdirSync(join(home, ".claude", "agent-mail", "receipts")),
+      readdirSync(join(home, ".claude", "agent-loom", "receipts")),
     ).toHaveLength(0);
   } finally {
     await client.close();
@@ -442,7 +442,7 @@ test("initial MCP instructions report the session's unread backlog only", async 
 });
 
 test("logical work can be acquired, updated, listed, and released over MCP", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-work-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-work-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -460,7 +460,7 @@ test("logical work can be acquired, updated, listed, and released over MCP", asy
     env: { ...environment, HOME: home },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
 
   try {
     await client.connect(transport);
@@ -480,7 +480,7 @@ test("logical work can be acquired, updated, listed, and released over MCP", asy
     expect(acquiredText).toContain("Pilot campaign");
     const workId = /acquired ([0-9a-f-]+)/.exec(acquiredText)?.[1];
     expect(workId).toBeDefined();
-    const workRoot = join(home, ".claude", "agent-mail", "work");
+    const workRoot = join(home, ".claude", "agent-loom", "work");
     const [workProject] = readdirSync(workRoot);
     const [workFile] = readdirSync(join(workRoot, workProject));
     const stored = JSON.parse(
@@ -515,7 +515,7 @@ test("logical work can be acquired, updated, listed, and released over MCP", asy
 });
 
 test("coordination recovery starts grace for an offline session claim", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-recovery-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-recovery-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -523,7 +523,7 @@ test("coordination recovery starts grace for an offline session claim", async ()
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const claimDirectory = join(home, ".claude", "agent-mail", "claims", slug);
+  const claimDirectory = join(home, ".claude", "agent-loom", "claims", slug);
   mkdirSync(claimDirectory, { recursive: true });
   const now = new Date().toISOString();
   writeFileSync(
@@ -560,7 +560,7 @@ test("coordination recovery starts grace for an offline session claim", async ()
     env: { ...environment, HOME: home },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
 
   try {
     await client.connect(transport);
@@ -587,7 +587,7 @@ test("coordination recovery starts grace for an offline session claim", async ()
 });
 
 test("a channel push carries the acknowledgement it cannot perform", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-instruct-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-instruct-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -595,7 +595,7 @@ test("a channel push carries the acknowledgement it cannot perform", async () =>
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  const inboxDirectory = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(inboxDirectory, { recursive: true });
   writeFileSync(
     join(inboxDirectory, `${slug}.jsonl`),
@@ -625,7 +625,7 @@ test("a channel push carries the acknowledgement it cannot perform", async () =>
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     // The pull renders the same stored message. The instruction belongs to the
@@ -635,14 +635,14 @@ test("a channel push carries the acknowledgement it cannot perform", async () =>
       name: "check_inbox",
       arguments: { peek: true },
     });
-    expect(textContent(pulled)).not.toContain("[agent-mail] handled?");
+    expect(textContent(pulled)).not.toContain("[agent-loom] handled?");
   } finally {
     await client.close();
   }
 }, 20_000);
 
 test("the unread count separates pushed-but-unread from never-pushed", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-split-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-split-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -650,7 +650,7 @@ test("the unread count separates pushed-but-unread from never-pushed", async () 
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  const inboxDirectory = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(inboxDirectory, { recursive: true });
   const seeded = ["p1", "p2"].map((id, index) => ({
     id,
@@ -667,7 +667,7 @@ test("the unread count separates pushed-but-unread from never-pushed", async () 
   // One message has a push receipt but may still be queued, may have entered
   // context, or may already be handled. The other has no push receipt. Both
   // remain unread and outstanding.
-  const receiptDirectory = join(home, ".claude", "agent-mail", "receipts");
+  const receiptDirectory = join(home, ".claude", "agent-loom", "receipts");
   mkdirSync(receiptDirectory, { recursive: true });
   writeFileSync(
     join(receiptDirectory, `${slug}.jsonl`),
@@ -698,7 +698,7 @@ test("the unread count separates pushed-but-unread from never-pushed", async () 
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     const pulled = await client.callTool({
@@ -714,7 +714,7 @@ test("the unread count separates pushed-but-unread from never-pushed", async () 
 }, 20_000);
 
 test("refusal counts only what it refused, and still reports what the limit withheld", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-refuse-count-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-refuse-count-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -722,7 +722,7 @@ test("refusal counts only what it refused, and still reports what the limit with
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  const inboxDirectory = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(inboxDirectory, { recursive: true });
   const seeded = ["m1", "m2", "m3"].map((id, index) => ({
     id,
@@ -753,7 +753,7 @@ test("refusal counts only what it refused, and still reports what the limit with
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
 
@@ -784,7 +784,7 @@ test("refusal counts only what it refused, and still reports what the limit with
 }, 20_000);
 
 test("refused mail is reported as refused, not as a page the limit withheld", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-refuse-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-refuse-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -792,7 +792,7 @@ test("refused mail is reported as refused, not as a page the limit withheld", as
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  const inboxDirectory = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(inboxDirectory, { recursive: true });
   writeFileSync(
     join(inboxDirectory, `${slug}.jsonl`),
@@ -822,7 +822,7 @@ test("refused mail is reported as refused, not as a page the limit withheld", as
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     await client.callTool({
@@ -846,7 +846,7 @@ test("refused mail is reported as refused, not as a page the limit withheld", as
 }, 20_000);
 
 test("check_inbox marks returned messages read unless peek", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-markread-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-markread-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -854,7 +854,7 @@ test("check_inbox marks returned messages read unless peek", async () => {
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  const inboxDirectory = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(inboxDirectory, { recursive: true });
   const messages = [
     {
@@ -896,7 +896,7 @@ test("check_inbox marks returned messages read unless peek", async () => {
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
 
@@ -939,7 +939,7 @@ test("check_inbox marks returned messages read unless peek", async () => {
     expect(againText).not.toContain("marked");
 
     const receipts = readFileSync(
-      join(home, ".claude", "agent-mail", "receipts", `${slug}.jsonl`),
+      join(home, ".claude", "agent-loom", "receipts", `${slug}.jsonl`),
       "utf8",
     );
     expect(receipts).toContain('"status":"read"');
@@ -949,7 +949,7 @@ test("check_inbox marks returned messages read unless peek", async () => {
 });
 
 test("cli-origin senders without a stamped session render as labels, not addresses", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-label-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-label-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -957,7 +957,7 @@ test("cli-origin senders without a stamped session render as labels, not address
   mkdirSync(project);
   const canonical = realpathSync(project);
   const slug = `${project.split("/").pop()}-${createHash("sha256").update(canonical).digest("hex").slice(0, 10)}`;
-  const inboxDirectory = join(home, ".claude", "agent-mail", "inbox");
+  const inboxDirectory = join(home, ".claude", "agent-loom", "inbox");
   mkdirSync(inboxDirectory, { recursive: true });
   const cliOrigin = {
     kind: "automation",
@@ -1016,7 +1016,7 @@ test("cli-origin senders without a stamped session render as labels, not address
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     const pulled = await client.callTool({
@@ -1041,7 +1041,7 @@ test("cli-origin senders without a stamped session render as labels, not address
 });
 
 test("send_mail replies cross projects without broadcasting to bystanders", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-reply-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-reply-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const callerProject = join(root, "caller");
@@ -1056,7 +1056,7 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
   );
   const clients: Client[] = [];
   async function connect(project: string, sessionId: string) {
-    const client = new Client({ name: "agent-mail-test", version: "1" });
+    const client = new Client({ name: "agent-loom-test", version: "1" });
     clients.push(client);
     await client.connect(
       new StdioClientTransport({
@@ -1066,7 +1066,7 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
         env: {
           ...environment,
           HOME: home,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: sessionId,
           AGENT_SESSION_ID: "",
@@ -1192,7 +1192,7 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
     // A persisted alias must not give CLI lookup a different address from MCP.
     const alias = join(root, "legacy-caller");
     symlinkSync(callerProject, alias);
-    const registry = join(home, ".claude", "agent-mail", "registry");
+    const registry = join(home, ".claude", "agent-loom", "registry");
     for (const file of readdirSync(registry)) {
       const path = join(registry, file);
       const registration = JSON.parse(readFileSync(path, "utf8"));
@@ -1227,7 +1227,7 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
         env: {
           ...environment,
           HOME: home,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: "answerer",
           AGENT_SESSION_ID: "",
@@ -1310,7 +1310,7 @@ test("send_mail replies cross projects without broadcasting to bystanders", asyn
 }, 45_000);
 
 test("owner addressing refuses ambiguity and pins delivery across an accepted handoff", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-owner-routing-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-owner-routing-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -1324,14 +1324,14 @@ test("owner addressing refuses ambiguity and pins delivery across an accepted ha
   const env = {
     ...environment,
     HOME: home,
-    AGENT_MAIL_PORT: "0",
+    AGENT_LOOM_PORT: "0",
     CLAUDE_CODE_SESSION_ID: "",
     AGENT_SESSION_ID: "",
     AGENT_SESSION_PID: "",
   };
   const clients: Client[] = [];
   async function connect(cwd: string, sessionId: string) {
-    const client = new Client({ name: "agent-mail-test", version: "1" });
+    const client = new Client({ name: "agent-loom-test", version: "1" });
     clients.push(client);
     await client.connect(
       new StdioClientTransport({
@@ -1511,7 +1511,7 @@ test("owner addressing refuses ambiguity and pins delivery across an accepted ha
 }, 45_000);
 
 test("obligations can be announced, listed, contested, and closed over MCP", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-obligations-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-obligations-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -1524,7 +1524,7 @@ test("obligations can be announced, listed, contested, and closed over MCP", asy
   );
   const clients: Client[] = [];
   async function connect(sessionId: string) {
-    const client = new Client({ name: "agent-mail-test", version: "1" });
+    const client = new Client({ name: "agent-loom-test", version: "1" });
     clients.push(client);
     await client.connect(
       new StdioClientTransport({
@@ -1534,7 +1534,7 @@ test("obligations can be announced, listed, contested, and closed over MCP", asy
         env: {
           ...environment,
           HOME: home,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: sessionId,
           AGENT_SESSION_ID: "",
@@ -1616,7 +1616,7 @@ test("obligations can be announced, listed, contested, and closed over MCP", asy
     const recordPath = join(
       home,
       ".claude",
-      "agent-mail",
+      "agent-loom",
       "obligations",
       `${obligationId}.json`,
     );
@@ -1727,7 +1727,7 @@ test("obligations can be announced, listed, contested, and closed over MCP", asy
 }, 45_000);
 
 test("obligations announce accepts system and component obligors over MCP", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-party-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-party-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -1740,7 +1740,7 @@ test("obligations announce accepts system and component obligors over MCP", asyn
   );
   const clients: Client[] = [];
   async function connect(sessionId: string) {
-    const client = new Client({ name: "agent-mail-test", version: "1" });
+    const client = new Client({ name: "agent-loom-test", version: "1" });
     clients.push(client);
     await client.connect(
       new StdioClientTransport({
@@ -1750,7 +1750,7 @@ test("obligations announce accepts system and component obligors over MCP", asyn
         env: {
           ...environment,
           HOME: home,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: sessionId,
           AGENT_SESSION_ID: "",
@@ -1854,7 +1854,7 @@ test("obligations announce accepts system and component obligors over MCP", asyn
 }, 45_000);
 
 test("ledger obligations are read-only over MCP and never announced", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-ledger-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-ledger-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -1865,7 +1865,7 @@ test("ledger obligations are read-only over MCP and never announced", async () =
       (entry): entry is [string, string] => entry[1] !== undefined,
     ),
   );
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(
       new StdioClientTransport({
@@ -1875,7 +1875,7 @@ test("ledger obligations are read-only over MCP and never announced", async () =
         env: {
           ...environment,
           HOME: home,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: "watcher-session",
           AGENT_SESSION_ID: "",
@@ -1939,7 +1939,7 @@ test("ledger obligations are read-only over MCP and never announced", async () =
     expect(listed).toContain("ledger obligations unavailable");
 
     // The store stayed empty through every refusal.
-    const obligationsDir = join(home, ".claude", "agent-mail", "obligations");
+    const obligationsDir = join(home, ".claude", "agent-loom", "obligations");
     expect(
       existsSync(obligationsDir) ? readdirSync(obligationsDir) : [],
     ).toEqual([]);
@@ -1949,7 +1949,7 @@ test("ledger obligations are read-only over MCP and never announced", async () =
 }, 45_000);
 
 test("obligations_list shows projected ledger obligations from the snapshot", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-ledger-list-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-ledger-list-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -1957,7 +1957,7 @@ test("obligations_list shows projected ledger obligations from the snapshot", as
   mkdirSync(project);
   // Publish a snapshot the way the daemon would: one open issue whose
   // component resolves to this project's sole live session, watched by it.
-  const stateDir = join(home, ".claude", "agent-mail");
+  const stateDir = join(home, ".claude", "agent-loom");
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(
     join(stateDir, "ledger-issues.json"),
@@ -1970,7 +1970,7 @@ test("obligations_list shows projected ledger obligations from the snapshot", as
           id: "am17",
           title: "fix the retry loop",
           component: "project",
-          watchers: ["agent-mail:watcher-session", "slack:U123"],
+          watchers: ["agent-loom:watcher-session", "slack:U123"],
         },
       ],
     }),
@@ -1980,7 +1980,7 @@ test("obligations_list shows projected ledger obligations from the snapshot", as
       (entry): entry is [string, string] => entry[1] !== undefined,
     ),
   );
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(
       new StdioClientTransport({
@@ -1990,7 +1990,7 @@ test("obligations_list shows projected ledger obligations from the snapshot", as
         env: {
           ...environment,
           HOME: home,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: "watcher-session",
           AGENT_SESSION_ID: "",
@@ -2015,7 +2015,7 @@ test("obligations_list shows projected ledger obligations from the snapshot", as
 }, 45_000);
 
 test("shutdown unregisters and releases work if experiment settlement fails", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-shutdown-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-shutdown-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
@@ -2035,7 +2035,7 @@ test("shutdown unregisters and releases work if experiment settlement fails", as
     env: {
       ...environment,
       HOME: home,
-      AGENT_MAIL_PORT: "0",
+      AGENT_LOOM_PORT: "0",
       CLAUDE_CODE_SESSION_ID: "",
       CODEX_THREAD_ID: "shutdown-test-session",
       AGENT_SESSION_ID: "",
@@ -2043,7 +2043,7 @@ test("shutdown unregisters and releases work if experiment settlement fails", as
     },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
     await client.callTool({ name: "claim_experiment", arguments: {} });
@@ -2052,7 +2052,7 @@ test("shutdown unregisters and releases work if experiment settlement fails", as
       name: "acquire_work",
       arguments: { resource_type: "pilot", resource_key: "cleanup" },
     });
-    const stateDir = join(home, ".claude", "agent-mail");
+    const stateDir = join(home, ".claude", "agent-loom");
     const registryDir = join(stateDir, "registry");
     expect(readdirSync(registryDir)).toHaveLength(1);
     const claimRoot = join(stateDir, "claims");
@@ -2093,7 +2093,7 @@ test("shutdown unregisters and releases work if experiment settlement fails", as
 }, 20_000);
 
 test("claim_experiment honors an explicit project and refuses undeclared arguments", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-channel-experiment-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-channel-experiment-"));
   temporaryDirectories.push(root);
   const home = join(root, "home");
   const here = join(root, "here");
@@ -2117,7 +2117,7 @@ test("claim_experiment honors an explicit project and refuses undeclared argumen
     env: { ...environment, HOME: home },
     stderr: "pipe",
   });
-  const client = new Client({ name: "agent-mail-test", version: "1" });
+  const client = new Client({ name: "agent-loom-test", version: "1" });
   try {
     await client.connect(transport);
 

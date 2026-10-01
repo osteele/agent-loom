@@ -1,7 +1,7 @@
-/** Config loading: ~/.config/agent-mail/config.toml (flat key = "value" TOML).
+/** Config loading: ~/.config/agent-loom/config.toml (flat key = "value" TOML).
  *
  * Slack webhook resolution order:
- *   1. AGENT_MAIL_SLACK_WEBHOOK env var
+ *   1. AGENT_LOOM_SLACK_WEBHOOK env var
  *   2. slack_webhook in config.toml
  */
 
@@ -18,7 +18,7 @@ export interface Config {
   slackBotToken: string | null;
   /** Channel id the Slack dashboard posts/updates in (e.g. C0123ABCD). */
   slackChannel: string | null;
-  /** Default per-session treatment of incoming agent-mail messages. */
+  /** Default per-session treatment of incoming agent-loom messages. */
   inboundPolicy: "accept" | "hold" | "refuse";
   /** Duplicate body suppression window. */
   duplicateWindowSeconds: number;
@@ -31,7 +31,7 @@ export interface Config {
   /** Whether the HTTP dashboard is served at all. Off by default: it renders
    * every project's sessions and message subjects, and the daemon's port is
    * reachable by any local process, so it is opened deliberately rather than
-   * inherited by anyone who installs agent-mail. */
+   * inherited by anyone who installs agent-loom. */
   dashboard: boolean;
 }
 
@@ -58,13 +58,13 @@ function parseFlatToml(text: string): Record<string, string> {
 /** Short display aliases for project bases in session labels, so a long project
  * name reads compactly (e.g. `llm-performance-models` -> `augur`). Configured as
  * a comma list of `from=to` pairs in `session_aliases`, or the
- * `AGENT_MAIL_SESSION_ALIASES` env var. Keyed by the project directory basename. */
+ * `AGENT_LOOM_SESSION_ALIASES` env var. Keyed by the project directory basename. */
 export function loadSessionAliases(): Map<string, string> {
   const raw = existsSync(CONFIG_PATH)
     ? parseFlatToml(readFileSync(CONFIG_PATH, "utf8"))
     : {};
   const spec =
-    process.env.AGENT_MAIL_SESSION_ALIASES ?? raw.session_aliases ?? "";
+    process.env.AGENT_LOOM_SESSION_ALIASES ?? raw.session_aliases ?? "";
   const map = new Map<string, string>();
   for (const pair of spec.split(",")) {
     const [from, to] = pair.split("=").map((s) => s.trim());
@@ -77,42 +77,42 @@ export function loadConfig(): Config {
   const raw = existsSync(CONFIG_PATH)
     ? parseFlatToml(readFileSync(CONFIG_PATH, "utf8"))
     : {};
-  const port = Number(process.env.AGENT_MAIL_PORT ?? raw.port ?? DEFAULT_PORT);
+  const port = Number(process.env.AGENT_LOOM_PORT ?? raw.port ?? DEFAULT_PORT);
   const slackWebhook =
-    process.env.AGENT_MAIL_SLACK_WEBHOOK ?? raw.slack_webhook ?? null;
+    process.env.AGENT_LOOM_SLACK_WEBHOOK ?? raw.slack_webhook ?? null;
   const slackEcho = (raw.slack_echo ?? "all") === "none" ? "none" : "all";
   const slackBotToken =
-    process.env.AGENT_MAIL_SLACK_BOT_TOKEN ?? raw.slack_bot_token ?? null;
+    process.env.AGENT_LOOM_SLACK_BOT_TOKEN ?? raw.slack_bot_token ?? null;
   const slackChannel =
-    process.env.AGENT_MAIL_SLACK_CHANNEL ?? raw.slack_channel ?? null;
+    process.env.AGENT_LOOM_SLACK_CHANNEL ?? raw.slack_channel ?? null;
   const policy =
-    process.env.AGENT_MAIL_INBOUND_POLICY ?? raw.inbound_policy ?? "accept";
+    process.env.AGENT_LOOM_INBOUND_POLICY ?? raw.inbound_policy ?? "accept";
   const inboundPolicy =
     policy === "hold" || policy === "refuse" ? policy : "accept";
   const duplicateWindowSeconds = positiveNumber(
-    process.env.AGENT_MAIL_DUPLICATE_WINDOW_SECONDS ??
+    process.env.AGENT_LOOM_DUPLICATE_WINDOW_SECONDS ??
       raw.duplicate_window_seconds,
     10,
   );
   const messageRateLimitPerMinute = positiveNumber(
-    process.env.AGENT_MAIL_RATE_LIMIT_PER_MINUTE ??
+    process.env.AGENT_LOOM_RATE_LIMIT_PER_MINUTE ??
       raw.message_rate_limit_per_minute,
     60,
   );
   const ttlSpec =
-    process.env.AGENT_MAIL_DEFAULT_TTL_SECONDS ??
+    process.env.AGENT_LOOM_DEFAULT_TTL_SECONDS ??
     raw.default_message_ttl_seconds;
   const defaultMessageTtlSeconds = ttlSpec
     ? positiveNumber(ttlSpec, 0) || null
     : null;
   const heldMessageLimit = positiveNumber(
-    process.env.AGENT_MAIL_HELD_MESSAGE_LIMIT ?? raw.held_message_limit,
+    process.env.AGENT_LOOM_HELD_MESSAGE_LIMIT ?? raw.held_message_limit,
     100,
   );
   // Opt-in, and only to an explicit affirmative. Anything else — including a
   // misspelling — leaves it off, because the failure that matters is a
   // dashboard served by someone who did not mean to serve one.
-  const dashboard = isTrue(process.env.AGENT_MAIL_DASHBOARD ?? raw.dashboard);
+  const dashboard = isTrue(process.env.AGENT_LOOM_DASHBOARD ?? raw.dashboard);
   return {
     port,
     slackWebhook,

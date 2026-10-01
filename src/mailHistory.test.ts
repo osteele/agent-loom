@@ -196,12 +196,12 @@ function diskState(path: string): Record<string, string | number> {
 }
 
 test("history and both one-shot TUI paths never change messages, receipts, read markers or registry", () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-history-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-history-")));
   roots.push(root);
   const home = join(root, "home");
   const project = join(root, "project");
   const other = join(root, "other");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   for (const path of [
     home,
     project,
@@ -293,7 +293,7 @@ test("history and both one-shot TUI paths never change messages, receipts, read 
 
 test("viewing an empty home creates no mail state and refuses implicit selectors", () => {
   const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "agent-mail-empty-history-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-empty-history-")),
   );
   roots.push(root);
   const home = join(root, "home");
@@ -349,10 +349,10 @@ test("the history poller reads the archive only when its inputs change", () => {
 });
 
 test("history input stamps change on a spool or receipt append and not otherwise", () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-stamps-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-stamps-")));
   roots.push(root);
   const home = join(root, "home");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   for (const name of ["inbox", "receipts"])
     mkdirSync(join(state, name), { recursive: true });
   const code = `

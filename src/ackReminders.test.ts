@@ -90,7 +90,7 @@ test("mail inside the grace period is not yet outstanding", () => {
   ).toMatchObject({ pushed: 0, neverPushed: 0 });
 });
 
-test("read mail and agent-mail's own reminders are never counted", () => {
+test("read mail and agent-loom's own reminders are never counted", () => {
   // A reminder remains unread after push. Counting it would make the condition
   // self-sustaining: the reminder becomes the backlog it reports.
   expect(
@@ -202,7 +202,7 @@ test("a session is not reminded again inside the interval", () => {
 });
 
 test("reminder cooldowns persist per canonical project mailbox", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-ack-mailbox-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-ack-mailbox-"));
   const project = join(root, "one");
   const otherProject = join(root, "two");
   const alias = join(root, "alias");
@@ -273,7 +273,7 @@ test("reminder cooldowns persist per canonical project mailbox", () => {
 });
 
 test("legacy session-only cooldowns cannot suppress a project mailbox", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-ack-upgrade-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-ack-upgrade-"));
   try {
     const path = join(root, "state.json");
     writeFileSync(
@@ -290,9 +290,9 @@ test("legacy session-only cooldowns cannot suppress a project mailbox", () => {
 });
 
 test("the daemon reminds both project mailboxes sharing a session id", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-ack-sweep-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-ack-sweep-"));
   const home = join(root, "home");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   const inbox = join(state, "inbox");
   const registry = join(state, "registry");
   mkdirSync(inbox, { recursive: true });
@@ -339,12 +339,12 @@ test("the daemon reminds both project mailboxes sharing a session id", async () 
     env: {
       ...process.env,
       HOME: home,
-      AGENT_MAIL_PORT: "0",
-      AGENT_MAIL_SLACK_WEBHOOK: "",
-      AGENT_MAIL_SLACK_BOT_TOKEN: "",
-      AGENT_MAIL_SLACK_CHANNEL: "",
-      AGENT_MAIL_WEFT_BIN: join(root, "no-weft"),
-      AGENT_MAIL_DEFAULT_TTL_SECONDS: "",
+      AGENT_LOOM_PORT: "0",
+      AGENT_LOOM_SLACK_WEBHOOK: "",
+      AGENT_LOOM_SLACK_BOT_TOKEN: "",
+      AGENT_LOOM_SLACK_CHANNEL: "",
+      AGENT_LOOM_WEFT_BIN: join(root, "no-weft"),
+      AGENT_LOOM_DEFAULT_TTL_SECONDS: "",
     },
     stdout: "pipe",
     stderr: "pipe",

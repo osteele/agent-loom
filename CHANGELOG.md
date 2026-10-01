@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Rename agent-mail to agent-loom: the package, `agent-loom` command, MCP
+  server and Claude plugin, `~/.claude/agent-loom` state and
+  `~/.config/agent-loom` config, `AGENT_LOOM_*` environment variables, and
+  the `com.osteele.agent-loom` LaunchAgent. `agent-loom install` migrates the
+  old directories and LaunchAgent; `AGENT_MAIL_*` variables, the
+  `agent-mail` command, and the `X-Agent-Mail-Protocol` header keep working.
+  Messaging keeps the name mail (`send_mail`, `check_inbox`).
+
 ### Fixed
 
 - Stop `agent-mail state` failing with `database is locked`. The message index

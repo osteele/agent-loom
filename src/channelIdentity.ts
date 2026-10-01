@@ -4,9 +4,9 @@
  * that emits them, and `mcp.notification()` is fire-and-forget over stdio with
  * no ack — so an unauthorized identity has its events accepted and silently
  * discarded, and the receipt still says "pushed". That failure mode ran for
- * days: agent-mail was registered both as a user-scope `mcpServers` entry and
+ * days: agent-loom was registered both as a user-scope `mcpServers` entry and
  * by the plugin under the same server name, Claude deduped to the user-scope
- * one, and its `server:agent-mail` identity was not in the host's allowlist.
+ * one, and its `server:agent-loom` identity was not in the host's allowlist.
  *
  * The distinguishing signal is cheap and local: the plugin instance is spawned
  * with CLAUDE_PLUGIN_ROOT in its environment and the user-scope instance is
@@ -23,7 +23,7 @@ export type ChannelPushStatus =
 
 export interface ChannelPushDiagnosis {
   status: ChannelPushStatus;
-  /** This server's channel identity, e.g. `plugin:agent-mail`. */
+  /** This server's channel identity, e.g. `plugin:agent-loom`. */
   identity: string;
   /** Channel specs the host was launched with; absent when unreadable. */
   hostChannels?: string[];
@@ -53,7 +53,7 @@ export function channelIdentity(
 }
 
 /** A spec authorizes an identity when they name the same thing. Plugin specs
- * carry a marketplace suffix (`plugin:agent-mail@osteele-local`) that the
+ * carry a marketplace suffix (`plugin:agent-loom@osteele-local`) that the
  * identity cannot know, so it is compared on the plugin name alone. */
 function authorizes(spec: string, identity: string): boolean {
   const [scope, rest] = spec.split(":", 2);

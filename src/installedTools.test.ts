@@ -9,12 +9,12 @@ import { resolveInstalledTool } from "./installedTools.ts";
 // placed in its go/bin is reachable only through the fallback.
 test("a tool off PATH is found in ~/go/bin", () => {
   const bin = join(homedir(), "go", "bin");
-  const tool = join(bin, "agent-mail-fixture-tool");
+  const tool = join(bin, "agent-loom-fixture-tool");
   mkdirSync(bin, { recursive: true });
   writeFileSync(tool, "#!/bin/sh\n");
   chmodSync(tool, 0o755);
   try {
-    expect(resolveInstalledTool("agent-mail-fixture-tool", undefined)).toBe(
+    expect(resolveInstalledTool("agent-loom-fixture-tool", undefined)).toBe(
       tool,
     );
   } finally {
@@ -24,15 +24,15 @@ test("a tool off PATH is found in ~/go/bin", () => {
 
 test("an override is used exactly, and a missing one is not searched past", () => {
   const bin = join(homedir(), "go", "bin");
-  const tool = join(bin, "agent-mail-fixture-tool-2");
+  const tool = join(bin, "agent-loom-fixture-tool-2");
   mkdirSync(bin, { recursive: true });
   writeFileSync(tool, "#!/bin/sh\n");
   chmodSync(tool, 0o755);
   try {
-    expect(resolveInstalledTool("agent-mail-fixture-tool-2", tool)).toBe(tool);
+    expect(resolveInstalledTool("agent-loom-fixture-tool-2", tool)).toBe(tool);
     expect(
       resolveInstalledTool(
-        "agent-mail-fixture-tool-2",
+        "agent-loom-fixture-tool-2",
         join(homedir(), "nowhere", "tool"),
       ),
     ).toBeUndefined();

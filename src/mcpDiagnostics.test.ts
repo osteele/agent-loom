@@ -37,7 +37,7 @@ test("MCP startup diagnostics preserve a sanitized exception", () => {
 });
 
 test("MCP startup diagnostics append as JSONL", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-mcp-diagnostic-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-mcp-diagnostic-"));
   const path = join(root, "nested", "failures.jsonl");
   try {
     const diagnostic = mcpStartupDiagnostic({

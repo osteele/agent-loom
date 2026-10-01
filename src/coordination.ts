@@ -656,7 +656,7 @@ export function coordinationConflictAdvice(entry: CoordinationEntry): string {
     return "wait for the restart-grace deadline";
   }
   if (entry.ownerStatus === "offline") {
-    return `run agent-mail coordination recover --id ${entry.id}`;
+    return `run agent-loom coordination recover --id ${entry.id}`;
   }
   if (entry.ownerStatus === "expired") {
     return "retry the acquisition";
@@ -665,7 +665,7 @@ export function coordinationConflictAdvice(entry: CoordinationEntry): string {
     return "inspect owner liveness from a normal terminal";
   }
   if (entry.ownerStatus === "manual") {
-    return `owner is deliberately manual; obtain operator authority and a reason, then run agent-mail coordination recover --id ${entry.id}`;
+    return `owner is deliberately manual; obtain operator authority and a reason, then run agent-loom coordination recover --id ${entry.id}`;
   }
   if (entry.ownerStatus === "plan") {
     return `ask the current plan executor to release ${entry.id}`;

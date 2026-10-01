@@ -83,7 +83,7 @@ test("an unavailable process scan does not classify a PID owner as offline", () 
 });
 
 test("unavailable PID evidence is surfaced as owner-unverifiable", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-unverifiable-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-unverifiable-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);
@@ -169,7 +169,7 @@ test("legacy PID-only owners become offline after exit or PID recycling", () => 
       [],
       createdAt,
       new Map([
-        [42, { start: "Thu Aug 13 07:00:00 2020", command: "agent-mail" }],
+        [42, { start: "Thu Aug 13 07:00:00 2020", command: "agent-loom" }],
       ]),
     ),
   ).toBe("live");
@@ -186,7 +186,7 @@ test("legacy PID-only owners become offline after exit or PID recycling", () => 
 });
 
 test("coordination makes dead legacy CLI work recoverable", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-coordination-cli-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-coordination-cli-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);
@@ -210,7 +210,7 @@ test("coordination makes dead legacy CLI work recoverable", () => {
 });
 
 test("coordination conditions preserve the different resource lifecycles", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-coordination-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-coordination-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   const notebook = join(project, "lab-notebook");
@@ -271,7 +271,7 @@ test("coordination conditions preserve the different resource lifecycles", () =>
 });
 
 test("plan claim status follows a lease in another project", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-cross-plan-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-cross-plan-"));
   temporaryDirectories.push(root);
   const planProject = join(root, "plans");
   const targetProject = join(root, "target");
@@ -321,7 +321,7 @@ test("plan claim status follows a lease in another project", () => {
 });
 
 test("live-owner conflict advice only offers a transfer for work leases", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-coordination-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-coordination-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   const notebook = join(project, "lab-notebook");
@@ -366,7 +366,7 @@ test("live-owner conflict advice only offers a transfer for work leases", () => 
 });
 
 test("recordForcedRecovery appends one JSON line per forced recovery", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-forced-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-forced-"));
   temporaryDirectories.push(root);
   const logPath = join(root, "nested", "forced-recoveries.jsonl");
   const base = {
@@ -413,7 +413,7 @@ test("recordForcedRecovery appends one JSON line per forced recovery", () => {
 });
 
 test("recordForcedRecovery reports failure instead of throwing", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-forced-fail-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-forced-fail-"));
   temporaryDirectories.push(root);
   // A regular file where the log's parent directory must be: mkdirSync fails.
   const blocker = join(root, "blocker");
@@ -438,7 +438,7 @@ test("recordForcedRecovery reports failure instead of throwing", () => {
 });
 
 test("the store liveness gate is what a forced recovery stands down", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-force-release-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-force-release-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -544,7 +544,7 @@ test("expiry never applies to an owner with a real process identity", () => {
 });
 
 test("an expired manual owner is reported as recoverable", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-expired-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-expired-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);
@@ -637,7 +637,7 @@ function joinEntries(
 }
 
 test("an open obligation joins the cross-project view with the obligor as owner", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-join-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligation-join-"));
   temporaryDirectories.push(root);
   const store = obligationStore(root);
   const decision = seedDecision(store);
@@ -667,7 +667,7 @@ test("an open obligation joins the cross-project view with the obligor as owner"
 });
 
 test("a dead session obligor surfaces owner-offline and never recovery advice", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-dead-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligation-dead-"));
   temporaryDirectories.push(root);
   const store = obligationStore(root);
   const decision = seedDecision(store);
@@ -687,7 +687,7 @@ test("a dead session obligor surfaces owner-offline and never recovery advice", 
 });
 
 test("a contested obligation stays visible and carries its reason", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-contest-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligation-contest-"));
   temporaryDirectories.push(root);
   const store = obligationStore(root);
   const decision = seedDecision(store);
@@ -719,7 +719,7 @@ test("a contested obligation stays visible and carries its reason", () => {
 });
 
 test("a human obligor is owned by the operator without a liveness check", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-human-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligation-human-"));
   temporaryDirectories.push(root);
   const store = obligationStore(root);
   const owed = store.announce(
@@ -752,7 +752,7 @@ test("a human obligor is owned by the operator without a liveness check", () => 
 });
 
 test("obligations list only in the cross-project view and leave it when settled", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-obligation-scope-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-obligation-scope-"));
   temporaryDirectories.push(root);
   const store = obligationStore(root);
   const decision = seedDecision(store);

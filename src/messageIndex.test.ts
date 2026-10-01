@@ -24,7 +24,7 @@ import { appendMessage, markMessagesRead } from "./spool.ts";
 const at = new Date("2026-09-29T12:30:00.000Z");
 
 function projectFixture(fn: (project: string) => void): void {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-index-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-index-"));
   try {
     fn(join(root, "mailbox"));
   } finally {
@@ -33,11 +33,11 @@ function projectFixture(fn: (project: string) => void): void {
 }
 
 function runInIsolatedHome(code: string): unknown {
-  const home = mkdtempSync(join(tmpdir(), "agent-mail-index-home-"));
+  const home = mkdtempSync(join(tmpdir(), "agent-loom-index-home-"));
   try {
     const result = spawnSync("bun", ["-e", code], {
       cwd: join(import.meta.dir, ".."),
-      env: { ...process.env, HOME: home, AGENT_MAIL_PORT: "0" },
+      env: { ...process.env, HOME: home, AGENT_LOOM_PORT: "0" },
       encoding: "utf8",
       timeout: 20_000,
     });

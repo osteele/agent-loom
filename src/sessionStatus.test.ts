@@ -47,7 +47,7 @@ function registration(
   sessionId: string,
   overrides: Partial<Registration> = {},
 ): Registration {
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-status-")));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-status-")));
   directories.push(cwd);
   return {
     cwd,
@@ -479,14 +479,14 @@ test("the obligations summary counts waiting, owed, and the global human debt", 
 test("a role obligor counts toward the session it resolves to, or as unresolved", () => {
   const role = {
     kind: "component_owner",
-    component: "agent-mail",
+    component: "agent-loom",
   } as const;
   const owedByRole = obligation({
     id: "ob-role",
     obligor: {
       kind: "role",
       role,
-      label: "owner of agent-mail",
+      label: "owner of agent-loom",
     },
     kind: "external_fix",
   });
@@ -559,7 +559,7 @@ test("the session summary counts a ledger issue for its owner and its watcher", 
       id: "issue:am17",
       kind: "external_fix",
       subject: "am17: fix the retry loop",
-      component: "agent-mail",
+      component: "agent-loom",
       obligorRole: { kind: "component_owner", component: owner.cwd },
       ownerSessionId: "ledger-owner",
       obligees: ["ledger-watcher"],

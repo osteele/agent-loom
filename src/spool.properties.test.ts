@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 function makeProject(): string {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-spool-prop-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-spool-prop-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);

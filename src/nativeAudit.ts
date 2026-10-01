@@ -2,6 +2,8 @@
 /** Optional Claude Code PostToolUse hook that records native SendMessage calls.
  * Audit entries feed dashboards and Slack, but never enter a recipient inbox. */
 
+// First: adopts agent-mail's environment names and state directories (legacyName.ts).
+import "./legacyName.ts";
 import { loadConfig } from "./config.ts";
 import { canonicalProject } from "./paths.ts";
 import { isEntryPoint, readStdinText } from "./runtime.ts";

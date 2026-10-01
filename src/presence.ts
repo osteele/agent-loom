@@ -49,7 +49,7 @@ export interface PresenceSnapshot {
   sessions: Registration[];
 }
 
-/** Non-mutating view exposed by `agent-mail listeners --no-sync --json`.
+/** Non-mutating view exposed by `agent-loom listeners --no-sync --json`.
  *
  * `fresh: false` deliberately carries no sessions. Consumers that use this
  * for advisory routing must fail closed rather than treating an old process
@@ -317,7 +317,7 @@ export function sessionAddress(
 }
 
 /** How far up the process tree to look for the host agent. The status-line
- * command runs as `claude -> sh -> agent-mail` today; the slack allows for a
+ * command runs as `claude -> sh -> agent-loom` today; the slack allows for a
  * wrapper or two without inviting a walk to pid 1. */
 const HOST_ANCESTOR_DEPTH = 4;
 

@@ -111,10 +111,10 @@ test("mail selectors reuse the exact-session parser and identify their command i
 });
 
 test("the interactive TUI shows new mail on a directory event, not on the reconciliation timer", async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-tui-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-tui-")));
   const home = join(root, "home");
   const project = join(root, "project");
-  const state = join(home, ".claude", "agent-mail");
+  const state = join(home, ".claude", "agent-loom");
   for (const dir of [project, join(state, "inbox"), join(state, "receipts")])
     mkdirSync(dir, { recursive: true });
   const spool = join(state, "inbox", `${projectSlug(project)}.jsonl`);
@@ -168,7 +168,7 @@ test("the interactive TUI shows new mail on a directory event, not on the reconc
 }, 30_000);
 
 test("a directory that cannot be watched leaves no watches, so the TUI polls", () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-watch-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-watch-")));
   const readable = join(root, "readable");
   mkdirSync(readable);
   try {

@@ -13,16 +13,16 @@ function pluginList(entries: unknown[]): string {
 }
 
 const servingEntry = {
-  id: "agent-mail@osteele-local",
+  id: "agent-loom@osteele-local",
   version: "0.1.0",
   enabled: true,
-  mcpServers: { "agent-mail": { command: "bun", args: [SERVER] } },
+  mcpServers: { "agent-loom": { command: "bun", args: [SERVER] } },
 };
 
 describe("findChannelPlugin", () => {
   test("matches the plugin whose server args include this checkout's path", () => {
     expect(findChannelPlugin(pluginList([servingEntry]), SERVER)).toEqual({
-      id: "agent-mail@osteele-local",
+      id: "agent-loom@osteele-local",
       version: "0.1.0",
       enabled: true,
     });
@@ -79,13 +79,13 @@ describe("allowedChannelPluginIds", () => {
     expect(
       allowedChannelPluginIds({
         allowedChannelPlugins: [
-          { marketplace: "osteele-local", plugin: "agent-mail" },
+          { marketplace: "osteele-local", plugin: "agent-loom" },
           "bare-id@somewhere",
           { plugin: "no-marketplace" },
         ],
       }),
     ).toEqual([
-      "agent-mail@osteele-local",
+      "agent-loom@osteele-local",
       "bare-id@somewhere",
       "no-marketplace",
     ]);
@@ -119,7 +119,7 @@ describe("channelsEnabledIn", () => {
 
 describe("describeChannelSetup", () => {
   const installed = {
-    id: "agent-mail@osteele-local",
+    id: "agent-loom@osteele-local",
     version: "0.1.0",
     enabled: true,
   };
@@ -130,10 +130,10 @@ describe("describeChannelSetup", () => {
       channelsEnabled: true,
       pluginAllowed: true,
     }).join("\n");
-    expect(lines).toContain("agent-mail@osteele-local 0.1.0 enabled");
+    expect(lines).toContain("agent-loom@osteele-local 0.1.0 enabled");
     expect(lines).toContain("channels: enabled in managed settings");
     expect(lines).toContain("allowed:  yes");
-    expect(lines).toContain("--channels=plugin:agent-mail@osteele-local");
+    expect(lines).toContain("--channels=plugin:agent-loom@osteele-local");
     expect(lines).not.toContain("marketplace add");
   });
 
@@ -172,7 +172,7 @@ describe("describeChannelSetup", () => {
     expect(lines).toContain("installed but disabled");
     expect(lines).toContain("channels: disabled in managed settings");
     expect(lines).toContain(
-      "add agent-mail@osteele-local to allowedChannelPlugins",
+      "add agent-loom@osteele-local to allowedChannelPlugins",
     );
   });
 });

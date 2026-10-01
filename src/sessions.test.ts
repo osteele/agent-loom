@@ -41,7 +41,7 @@ const CWD = "/Users/x/code/mental-spaces";
 const LEGACY = legacyGeneratedSessionName(SID);
 
 beforeEach(() => {
-  process.env.AGENT_MAIL_SESSION_ALIASES = "";
+  process.env.AGENT_LOOM_SESSION_ALIASES = "";
   resetSessionAliasCache();
 });
 
@@ -87,7 +87,7 @@ test("explicit non-derived nameSource overrides the auto-pattern fallback", () =
 });
 
 test("the project base is mapped through the alias table", () => {
-  process.env.AGENT_MAIL_SESSION_ALIASES = "mental-spaces=ms";
+  process.env.AGENT_LOOM_SESSION_ALIASES = "mental-spaces=ms";
   resetSessionAliasCache();
   expect(sessionFullName(SID, undefined, CWD, LEGACY)).toMatch(/^ms-[a-z]+$/);
 });
@@ -133,7 +133,7 @@ test("new sessions get adjective-noun full and display names", () => {
 });
 
 test("a persisted selection wins over a later requested scheme", () => {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-names-"));
   try {
     const legacy = assignedGeneratedSessionName(SID, true, directory);
     expect(assignedGeneratedSessionName(SID, false, directory)).toEqual(legacy);
@@ -147,7 +147,7 @@ test("a persisted selection wins over a later requested scheme", () => {
 
 test("name minting outwaits the generic two-second transaction budget", async () => {
   expect(SESSION_NAME_LOCK_WAIT_MS).toBeGreaterThan(2_000);
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-name-lock-wait-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-name-lock-wait-"));
   const lockPath = join(root, ".mint.lock");
   const scriptPath = join(root, "holder.ts");
   const lockModule = join(process.cwd(), "src", "lock.ts");
@@ -188,7 +188,7 @@ function sessionWithPreferredNoun(noun: string, prefix: string): string {
 }
 
 test("a newly minted name avoids a recently used noun", () => {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-names-"));
   const nowMs = Date.parse("2026-08-28T12:00:00.000Z");
   try {
     const first = assignedGeneratedSessionName("first", false, directory, {
@@ -209,7 +209,7 @@ test("a newly minted name avoids a recently used noun", () => {
 });
 
 test("a newly minted name never takes a noun held by a current session", () => {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-names-"));
   try {
     const preferred = generatedNameNoun(adjectiveNounSessionName("current"));
     if (!preferred) throw new Error("expected an adjective-noun name");
@@ -223,7 +223,7 @@ test("a newly minted name never takes a noun held by a current session", () => {
 });
 
 test("an exhausted recent pool recycles its least-recently minted noun", () => {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-names-"));
   const nowMs = Date.parse("2026-08-28T12:00:00.000Z");
   try {
     const assignedNouns: string[] = [];
@@ -253,7 +253,7 @@ test("an exhausted recent pool recycles its least-recently minted noun", () => {
 });
 
 test("a noun becomes normally eligible after the recency window", () => {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-names-"));
   const nowMs = Date.parse("2026-08-28T12:00:00.000Z");
   try {
     const first = assignedGeneratedSessionName("old", false, directory, {
@@ -274,7 +274,7 @@ test("a noun becomes normally eligible after the recency window", () => {
 });
 
 test("a malformed assignment blocks minting instead of silently weakening recency", () => {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-names-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-names-"));
   try {
     writeFileSync(join(directory, "corrupt.json"), "not json");
     expect(() =>
@@ -590,8 +590,8 @@ function ompTerminalDir(entries: Record<string, string>): {
   directory: string;
   project: string;
 } {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-omp-"));
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-omp-cwd-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-omp-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-omp-cwd-"));
   for (const [key, sessionFile] of Object.entries(entries)) {
     writeFileSync(join(directory, key), `${project}\n${sessionFile}\n`);
   }
@@ -708,8 +708,8 @@ test("an OMP record without a parseable session file yields nothing", () => {
 });
 
 test("OMP resolves the calling session from the registered process tree", () => {
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
-  const elsewhere = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-proc-"));
+  const elsewhere = mkdtempSync(join(tmpdir(), "agent-loom-proc-"));
   const started = new Date().toISOString();
   const self = { cwd: project, sessionId: "self", pid: 4242, started };
   const other = { cwd: elsewhere, sessionId: "other", pid: 5151, started };
@@ -739,7 +739,7 @@ test("OMP resolves the calling session from the registered process tree", () => 
 });
 
 test("a shell under the host agent resolves through the registration's parentPid", () => {
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-proc-"));
   const started = new Date().toISOString();
   // The channel server's pid is a sibling of the tool shell, never an
   // ancestor; the host agent (parentPid) is the ancestor the shell actually
@@ -794,7 +794,7 @@ test("name shortening is supplied by the generated model and preserves custom na
 });
 
 test("a host pid shared by two registrations is not an identification", () => {
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-proc-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-proc-"));
   const started = new Date().toISOString();
   const first = {
     cwd: project,

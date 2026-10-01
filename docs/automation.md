@@ -7,14 +7,14 @@ change no delivery or coordination records.
 ## The presence snapshot
 
 The daemon republishes the pid-verified live registry to
-`~/.claude/agent-mail/presence.json` every 10 seconds. This snapshot lets
+`~/.claude/agent-loom/presence.json` every 10 seconds. This snapshot lets
 latency-sensitive readers skip the process scan. It is a presentation cache
 with a 30-second TTL, never a routing input.
 `send_mail`, `list_sessions`, and both dashboards keep reading the registry
 directly. That tick is also what prunes registrations whose process has exited.
 
 Automation should use
-`agent-mail listeners --project <dir> --no-sync --json`, not read the snapshot
+`agent-loom listeners --project <dir> --no-sync --json`, not read the snapshot
 file directly. The command returns a versioned JSON object with `source`,
 `fresh`, `generatedAt`, and raw `sessions` (including `sessionId`, `cwd`,
 `client`, `capabilities`, `inboundPolicy`, `muted`, `lastSeen`,
@@ -28,7 +28,7 @@ attention.
 ## Aggregate state
 
 For a normalized cross-surface view, use
-`agent-mail state --no-sync --json` (optionally `--project <dir>`) or
+`agent-loom state --no-sync --json` (optionally `--project <dir>`) or
 `GET /api/v1/state?project=<dir>`. Schema version 1 includes normalized
 presence with process identity and freshness, coordination entries with owner
 status and conditions, transfer requests, recent canonical message IDs and read
@@ -47,7 +47,7 @@ are computed from the full spool history. Additive fields may appear within
 version 1; removing or changing the meaning of a field requires a new schema
 version and endpoint.
 
-Aggregate state reads `~/.claude/agent-mail/message-index.sqlite`, an
+Aggregate state reads `~/.claude/agent-loom/message-index.sqlite`, an
 incremental SQLite projection of the project JSONL spools and append-only read
 markers. The spools remain authoritative. Each state request indexes newly
 appended complete lines before returning; a missing index is built from the
@@ -67,7 +67,7 @@ then omit the newest messages and read marks, which the next request picks up.
 
 ### Change signal
 
-`agent-mail state --revision` (or `GET /api/v1/state/revision`) prints
+`agent-loom state --revision` (or `GET /api/v1/state/revision`) prints
 `{kind:"agent_mail_state_revision", version:1, digest, generatedAt}` in a few
 milliseconds. The digest covers the identity (inode, size, mtime) of every file
 aggregate state is built from: message spools, read logs, claims, work leases,
@@ -84,7 +84,7 @@ on the next revision poll even if the digest has not moved.
 
 Two kinds of change do not move the digest. Time alone: a manual owner
 expires, an age advances. And coordination conditions derived from files
-outside agent-mail's state: an experiment file appearing in a notebook, or a
+outside agent-loom's state: an experiment file appearing in a notebook, or a
 work lease's source path disappearing. Keep a slow reconciliation read
 (minutes) alongside the revision poll to pick those up. No
 process sees every write, so the revision is derived from the files rather
@@ -100,7 +100,7 @@ roles, `resolution` (resolves or unresolvable, with a `reason`), and, where
 the party has a project, `project` with the `projectBasis` that produced it
 (`registered`, `plan`, `ownership`, `claim`; human and system parties have
 none). Sessions also carry `sessionId` and `live`. Grouping by project is the
-consumer's job; the resolution and its provenance are agent-mail's.
+consumer's job; the resolution and its provenance are agent-loom's.
 
 `ledgerObligations` carries the open issue-ledger issues projected as
 read-only obligations (`issue:<id>`), each with its component, resolved
@@ -117,11 +117,11 @@ within schema version 1 and is absent on records without context.
 
 ## What presence and receipts prove
 
-For poll-only sessions, `lastSeen` means only that some agent-mail tool ran; it
+For poll-only sessions, `lastSeen` means only that some agent-loom tool ran; it
 does not imply that the inbox was checked. `lastInboxPoll` is stamped only by
 `check_inbox`, including an empty check, so automation can distinguish recent
 polling from unrelated activity. It still predicts only that the session may
-poll again. For a message already sent, `agent-mail receipts --id <message-id>`
+poll again. For a message already sent, `agent-loom receipts --id <message-id>`
 distinguishes `pushed` (channel delivery or an inbox pull) from `read` (a
 `check_inbox` pull, an explicit mark-read, or protocol-v3 OMP steering
 acknowledgement after exact-session context insertion); neither status proves
@@ -129,16 +129,16 @@ that the recipient completed the requested work.
 
 ## The unread summary and reminder state
 
-The daemon writes `~/.claude/agent-mail/unread-summary.json` on the same
+The daemon writes `~/.claude/agent-loom/unread-summary.json` on the same
 10-second tick as the presence snapshot: per-session unread counts with the
 newest visible message id and timestamp, omitting muted sessions, under a
 30-second TTL. It is a presentation cache with the same rule as
 `presence.json`: never a routing input. Its intended consumer is
-`agent-mail remind`, which treats a missing or stale snapshot as unknown
+`agent-loom remind`, which treats a missing or stale snapshot as unknown
 rather than as zero unread. See [reminders.md](reminders.md).
 
 Reminder bookkeeping lives in
-`~/.claude/agent-mail/announced/<slug>-<sessionId>.json` and records which
+`~/.claude/agent-loom/announced/<slug>-<sessionId>.json` and records which
 newest-message id a session was last reminded about, plus a reminder count
 and timestamps. Announced state is not a delivery receipt: a reminder
 delivers nothing, so `announced/` never feeds `receipts/`, and `pushed`
@@ -147,6 +147,6 @@ needs delivery evidence keeps reading `receipts/`.
 
 Daemon backlog reminders have a separate two-hour cooldown for each canonical
 project and session ID, shared by that mailbox's MCP and push registrations.
-Their bookkeeping is `~/.claude/agent-mail/ack-reminders.json` (version 2).
+Their bookkeeping is `~/.claude/agent-loom/ack-reminders.json` (version 2).
 Version-1 cooldowns are discarded because they lack project identity. Upgrading
 can repeat one reminder per mailbox; it does not change message read state.

@@ -6,7 +6,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 
 const PROTOCOL_VERSION = 3;
-const STATUS_KEY = "agent-mail";
+const STATUS_KEY = "agent-loom";
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:8377";
 const STATUS_REFRESH_MS = 10_000;
 const STATUS_MAX_AGE_MS = 30_000;
@@ -86,12 +86,17 @@ interface PendingAcknowledgement {
 }
 
 function daemonUrl(): URL {
-  const url = new URL(process.env.AGENT_MAIL_DAEMON_URL ?? DEFAULT_DAEMON_URL);
+  // AGENT_MAIL_DAEMON_URL is the name from before the rename to agent-loom.
+  const url = new URL(
+    process.env.AGENT_LOOM_DAEMON_URL ??
+      process.env.AGENT_MAIL_DAEMON_URL ??
+      DEFAULT_DAEMON_URL,
+  );
   if (
     url.protocol !== "http:" ||
     (url.hostname !== "127.0.0.1" && url.hostname !== "localhost")
   ) {
-    throw new Error("AGENT_MAIL_DAEMON_URL must be loopback HTTP.");
+    throw new Error("AGENT_LOOM_DAEMON_URL must be loopback HTTP.");
   }
   return url;
 }
@@ -112,11 +117,13 @@ function renderedMail(event: MailEvent): string {
   ].join("\n");
 }
 
-export function agentMailContextMessageId(
+export function agentLoomContextMessageId(
   message: MessageStartEvent["message"],
 ): string | undefined {
   if (
     message.role !== "custom" ||
+    // The context message type is a wire identifier that other OMP extensions
+    // filter on; it keeps the pre-rename name.
     message.customType !== "agent-mail" ||
     typeof message.details !== "object" ||
     message.details === null
@@ -206,7 +213,7 @@ export function parseMailStatus(
 }
 
 /** Use a proven launcher identity; otherwise request the join with OMP's id. */
-export function agentMailSessionId(
+export function agentLoomSessionId(
   nativeSessionId: string,
   launcherSessionId = process.env.AGENT_SESSION_ID,
   launcherSessionPid = process.env.AGENT_SESSION_PID,
@@ -324,7 +331,7 @@ async function acknowledge(baseUrl: URL, deliveryToken: string): Promise<void> {
     body: JSON.stringify({ deliveryToken }),
   });
   if (!response.ok) {
-    throw new Error(`agent-mail acknowledgement failed (${response.status})`);
+    throw new Error(`agent-loom acknowledgement failed (${response.status})`);
   }
 }
 function acknowledgeContextDelivery(
@@ -388,7 +395,7 @@ async function consumeStream(
 ): Promise<void> {
   const baseUrl = daemonUrl();
   const project = realpathSync(ctx.cwd);
-  const requestedSessionId = agentMailSessionId(
+  const requestedSessionId = agentLoomSessionId(
     ctx.sessionManager.getSessionId(),
   );
   const url = new URL("/api/v1/push/oh-my-pi", baseUrl);
@@ -401,13 +408,13 @@ async function consumeStream(
   if (signal.aborted) return;
   if (!response.ok || !response.body) {
     throw new Error(
-      `agent-mail OMP push connection failed (${response.status}): ${await response.text()}`,
+      `agent-loom OMP push connection failed (${response.status}): ${await response.text()}`,
     );
   }
   if (
-    response.headers.get("x-agent-mail-protocol") !== String(PROTOCOL_VERSION)
+    response.headers.get("x-agent-loom-protocol") !== String(PROTOCOL_VERSION)
   ) {
-    throw new Error("agent-mail returned an unsupported OMP push protocol.");
+    throw new Error("agent-loom returned an unsupported OMP push protocol.");
   }
 
   const reader = response.body.getReader();
@@ -426,17 +433,17 @@ async function consumeStream(
       if (!line) continue;
       const value: unknown = JSON.parse(line);
       if (!isPushEvent(value)) {
-        throw new Error("agent-mail returned a malformed OMP push event.");
+        throw new Error("agent-loom returned a malformed OMP push event.");
       }
       if (value.project !== project) {
         throw new Error(
-          `agent-mail returned project ${JSON.stringify(value.project)} for OMP project ${JSON.stringify(project)}.`,
+          `agent-loom returned project ${JSON.stringify(value.project)} for OMP project ${JSON.stringify(project)}.`,
         );
       }
       if (value.type === "connected") {
         if (value.requestedSessionId !== requestedSessionId) {
           throw new Error(
-            "agent-mail returned a connection for another OMP session.",
+            "agent-loom returned a connection for another OMP session.",
           );
         }
         sessionId = value.sessionId;
@@ -461,7 +468,7 @@ async function consumeStream(
         continue;
       }
       if (!sessionId || value.sessionId !== sessionId) {
-        throw new Error("agent-mail returned mail for another routed session.");
+        throw new Error("agent-loom returned mail for another routed session.");
       }
       const previous = pendingAcknowledgements.get(value.id);
       const pending: PendingAcknowledgement = {
@@ -489,10 +496,10 @@ async function consumeStream(
       }
     }
   }
-  if (!signal.aborted) throw new Error("agent-mail OMP push stream ended.");
+  if (!signal.aborted) throw new Error("agent-loom OMP push stream ended.");
 }
 
-export default function agentMailExtension(pi: ExtensionAPI): void {
+export default function agentLoomExtension(pi: ExtensionAPI): void {
   pi.setLabel("Agent Mail Push");
   let controller: AbortController | undefined;
   const pendingAcknowledgements = new Map<string, PendingAcknowledgement>();
@@ -538,7 +545,7 @@ export default function agentMailExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("message_start", (event) => {
-    const messageId = agentMailContextMessageId(event.message);
+    const messageId = agentLoomContextMessageId(event.message);
     if (!messageId) return;
     const pending = pendingAcknowledgements.get(messageId);
     if (!pending) return;

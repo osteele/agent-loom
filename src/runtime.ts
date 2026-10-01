@@ -1,6 +1,6 @@
 /** Runtime primitives that differ between Bun and Node.
  *
- * agent-mail is developed and run under Bun. This module exists so it can also
+ * agent-loom is developed and run under Bun. This module exists so it can also
  * run under Node, without forking the codebase: every Bun-only API is reached
  * through one of the functions here, which dispatch on the host at import time.
  *

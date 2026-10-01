@@ -276,7 +276,7 @@ test("a reminder is stale when its owner's live claim set changes", () => {
 });
 
 test("claim reminder state round-trips and ignores malformed entries", () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-claim-reminders-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-claim-reminders-"));
   const path = join(root, "state", "claim-reminders.json");
   try {
     const prepared = remindersFor([entry({ age: FIRST_AGE_REMINDER_MS })]);

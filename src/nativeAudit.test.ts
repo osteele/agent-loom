@@ -16,7 +16,7 @@ test("native SendMessage hook input becomes a non-deliverable audit message", ()
   // about the platform rather than about the code. On Linux /tmp is already
   // canonical, so the expectation could not hold. Build the symlink instead so
   // the same claim is tested everywhere.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-audit-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-audit-")));
   const real = join(root, "real");
   mkdirSync(real);
   const link = join(root, "link");

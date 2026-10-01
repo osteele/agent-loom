@@ -289,7 +289,7 @@ function validateDescription(value: string): string {
   return trimmed;
 }
 
-/** The role's display name: "owner of agent-mail", "executor of
+/** The role's display name: "owner of agent-loom", "executor of
  * <project>/<stem>", "claimer of EXP-042". */
 export function describeRole(role: Role): string {
   switch (role.kind) {

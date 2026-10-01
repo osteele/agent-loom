@@ -18,7 +18,7 @@ function fixture(): {
   workStore: WorkStore;
   transferStore: TransferStore;
 } {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-transfers-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-transfers-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   mkdirSync(project);

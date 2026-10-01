@@ -35,7 +35,7 @@ function fixture(): {
   claimRoot: string;
   store: ClaimStore;
 } {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-claims-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-claims-"));
   temporaryDirectories.push(root);
   const project = join(root, "project");
   const notebook = join(project, "lab-notebook");

@@ -1,19 +1,19 @@
 #!/bin/bash
 
 # Kimi renders the first stdout line and falls back to its built-in footer when
-# this command fails or exceeds 300 ms. Keep the path to one agent-mail process.
+# this command fails or exceeds 300 ms. Keep the path to one agent-loom process.
 input=""
 if [ ! -t 0 ]; then
     IFS= read -r -d '' input || true
 fi
 [ -n "$input" ] || exit 0
 
-# The launcher-minted id is the identity registered by Kimi's agent-mail MCP
+# The launcher-minted id is the identity registered by Kimi's agent-loom MCP
 # process. Kimi's native sessionId belongs to a different namespace.
 [ -n "${AGENT_SESSION_ID:-}" ] || exit 0
-command -v agent-mail >/dev/null 2>&1 || exit 0
+command -v agent-loom >/dev/null 2>&1 || exit 0
 
-mail_fields=$(printf '%s' "$input" | agent-mail status-line --fields 2>/dev/null)
+mail_fields=$(printf '%s' "$input" | agent-loom status-line --fields 2>/dev/null)
 [ -n "$mail_fields" ] || exit 0
 
 # A non-whitespace separator preserves empty fields when Bash splits the row.

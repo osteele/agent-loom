@@ -31,7 +31,7 @@ function makeProject(): {
   workStore: WorkStore;
   transferStore: TransferStore;
 } {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-work-sm-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-work-sm-"));
   temporaryDirectories.push(root);
   const project = resolve(join(root, "project"));
   mkdirSync(project);

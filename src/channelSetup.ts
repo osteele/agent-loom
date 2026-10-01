@@ -1,7 +1,7 @@
 /** Observed state of the Claude Code channel opt-in.
  *
  * Channel push needs several independent things to line up, none of which
- * agent-mail controls: a plugin installed from a marketplace, channels enabled
+ * agent-loom controls: a plugin installed from a marketplace, channels enabled
  * and this plugin allowed in managed settings, and each session launched with
  * the channel. Printing the instructions instead of the state is what let a
  * stale flag string survive seven weeks in four places, so every user-facing
@@ -156,7 +156,7 @@ export function describeChannelSetup(
     lines.push(
       `            claude plugin marketplace add ${repoRoot ?? "<this repo>"}`,
     );
-    lines.push("            claude plugin install agent-mail@osteele-local");
+    lines.push("            claude plugin install agent-loom@osteele-local");
   } else if (!facts.plugin.enabled) {
     lines.push(`  plugin:   ${facts.plugin.id} installed but disabled`);
   } else {
@@ -185,7 +185,7 @@ export function describeChannelSetup(
     facts.plugin
       ? `    claude --channels=plugin:${facts.plugin.id}`
       : "    claude --channels=plugin:<plugin>@<marketplace>",
-    "  `agent-mail listeners` tags one that was not {channel:host-not-loaded},",
+    "  `agent-loom listeners` tags one that was not {channel:host-not-loaded},",
     "  from its next launch on.",
   );
   return lines;

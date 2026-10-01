@@ -78,7 +78,7 @@ export interface SessionCapabilities {
    * `channelPush` says this server will emit a notification; this says whether
    * anything can receive it. They diverged silently for days: mail spooled, a
    * `pushed` receipt was written, and nothing reached the session, because the
-   * host had loaded no agent-mail channel. `"unknown"` means process inspection
+   * host had loaded no agent-loom channel. `"unknown"` means process inspection
    * was unavailable — never read it as a failure. */
   channelPushStatus?: ChannelPushStatus;
 }
@@ -760,7 +760,8 @@ export function isCurrentProcess(
   if (!info) return false;
   if (isDefunct(info.command)) return false;
   if (entry.procStart) return entry.procStart === info.start;
-  return /agent-mail|channel\.ts/.test(info.command);
+  // agent-mail: a channel server started by a build from before the rename.
+  return /agent-loom|agent-mail|channel\.ts/.test(info.command);
 }
 
 /** Read and parse registry files, pruning any that no longer parse. `keep`
@@ -880,8 +881,8 @@ export function listLive(): Registration[] {
  *
  * Canonicalize at read time rather than trusting the stored `cwd`: entries
  * written before a directory move still carry the old spelling (this repo has
- * live entries under both `code/utils/agent-mail` and
- * `code/agent-tools/agent-mail`, one a symlink to the other), and comparing raw
+ * live entries under both `code/utils/agent-loom` and
+ * `code/agent-tools/agent-loom`, one a symlink to the other), and comparing raw
  * strings silently splits one project in two. */
 export function listLiveInProject(project: string): Registration[] {
   const canon = canonicalProject(project);

@@ -1,0 +1,14 @@
+{
+  "name": "agent-loom",
+  "description": "Local mail and coordination between coding-agent sessions: pushes agent-loom inbox messages into the session as <channel> events, and exposes tools for mail, path claims, work leases, experiment numbers, and obligations.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Oliver Steele"
+  },
+  "channels": [
+    {
+      "server": "agent-loom",
+      "displayName": "agent-loom"
+    }
+  ]
+}

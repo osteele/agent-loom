@@ -19,7 +19,7 @@ import {
 
 function tempSnapshotPath(): string {
   return join(
-    mkdtempSync(join(tmpdir(), "agent-mail-weft-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-weft-")),
     "weft-jobs.json",
   );
 }
@@ -237,9 +237,9 @@ test("the announcement names an action per line and is silent at zero", () => {
   expect(text).toContain("2 infra_suspected (check weft or the host)");
 });
 
-test("a submitter agent-mail has never seen is not reported as an orphan", () => {
+test("a submitter agent-loom has never seen is not reported as an orphan", () => {
   // The live case on this machine: codex spawns its MCP child with no session
-  // env var, so agent-mail registers a minted id while weft records the
+  // env var, so agent-loom registers a minted id while weft records the
   // shell's own. Across 1402 named sessions the two namespaces have never
   // intersected. Treating "not in the live set" as "gone" would mark every
   // weft job unowned — correct arithmetic, wrong claim, in the direction that

@@ -33,7 +33,7 @@ const NOW = Date.parse("2026-08-10T12:00:00.000Z");
 function scratch(): string {
   // realpath first: macOS mkdtemp returns /var/folders/… which canonicalizes to
   // /private/var/folders/…, so a raw comparison would fail for the wrong reason.
-  return realpathSync(mkdtempSync(join(tmpdir(), "agent-mail-presence-")));
+  return realpathSync(mkdtempSync(join(tmpdir(), "agent-loom-presence-")));
 }
 
 function reg(over: Partial<Registration> & { pid: number }): Registration {
@@ -336,7 +336,7 @@ test("a session with no channel server has no address and no name", () => {
   // The regression: a Claude session whose channel server had exited kept
   // showing its generated name, alone in its project. A peer that read the
   // name off the pane and sent to it got "no live recipient", and concluded
-  // agent-mail's liveness check was wrong — the status line was the part lying.
+  // agent-loom's liveness check was wrong — the status line was the part lying.
   const meta = metaMap({ orphan: { status: "busy", name: "Orphan Name" } });
   expect(sessionAddress([], "orphan", meta, NOW, [99])).toBeUndefined();
   expect(statusLineName("/proj", "orphan", meta, [], [99], NOW)).toBe("");

@@ -11,7 +11,7 @@ import {
   codexEntrySubTables,
   codexRegistrationMatches,
   codexReminderHookEvents,
-  enabledAgentMailPlugin,
+  enabledAgentLoomPlugin,
   geminiReminderHookEvents,
   kimiReminderHookEvents,
   removeNativeAuditHook,
@@ -29,8 +29,8 @@ import {
 } from "./integrations.ts";
 
 const bun = "/opt/bun/bin/bun";
-const audit = "/code/agent-mail/src/nativeAudit.ts";
-const remindBase = `${bun} /code/agent-mail/src/cli.ts remind --format`;
+const audit = "/code/agent-loom/src/nativeAudit.ts";
+const remindBase = `${bun} /code/agent-loom/src/cli.ts remind --format`;
 
 test("native audit hook installation is additive and idempotent", () => {
   const initial = {
@@ -92,9 +92,9 @@ test("Codex probe distinguishes a missing entry from command failure", () => {
       {
         status: 1,
         stdout: "",
-        stderr: "Error: No MCP server named 'agent-mail' found.\n",
+        stderr: "Error: No MCP server named 'agent-loom' found.\n",
       },
-      "agent-mail",
+      "agent-loom",
     ),
   ).toEqual({ status: "absent" });
   expect(
@@ -104,7 +104,7 @@ test("Codex probe distinguishes a missing entry from command failure", () => {
         stdout: "",
         stderr: "Error: failed to parse ~/.codex/config.toml\n",
       },
-      "agent-mail",
+      "agent-loom",
     ),
   ).toEqual({
     status: "failed",
@@ -116,7 +116,7 @@ test("Codex probe rejects malformed successful JSON", () => {
   expect(
     classifyCodexRegistrationProbe(
       { status: 0, stdout: "{", stderr: "" },
-      "agent-mail",
+      "agent-loom",
     ),
   ).toEqual(
     expect.objectContaining({
@@ -126,11 +126,11 @@ test("Codex probe rejects malformed successful JSON", () => {
 });
 
 test("failed Codex replacement restores the exact prior config", () => {
-  const before = `[mcp_servers.agent-mail]
+  const before = `[mcp_servers.agent-loom]
 command = "/old/bun"
 args = ["/old/channel.ts"]
 
-[mcp_servers.agent-mail.tools.send_mail]
+[mcp_servers.agent-loom.tools.send_mail]
 approval_mode = "approve"
 `;
   let config = before;
@@ -171,26 +171,26 @@ test("Claude registration matching requires the exact stdio command", () => {
   ).toBe(false);
 });
 
-test("an enabled agent-mail plugin is found under any marketplace", () => {
+test("an enabled agent-loom plugin is found under any marketplace", () => {
   expect(
-    enabledAgentMailPlugin({
-      enabledPlugins: { "other@mkt": true, "agent-mail@osteele-local": true },
+    enabledAgentLoomPlugin({
+      enabledPlugins: { "other@mkt": true, "agent-loom@osteele-local": true },
     }),
-  ).toBe("agent-mail@osteele-local");
+  ).toBe("agent-loom@osteele-local");
 });
 
-test("a disabled or absent agent-mail plugin does not count", () => {
+test("a disabled or absent agent-loom plugin does not count", () => {
   expect(
-    enabledAgentMailPlugin({ enabledPlugins: { "agent-mail@mkt": false } }),
+    enabledAgentLoomPlugin({ enabledPlugins: { "agent-loom@mkt": false } }),
   ).toBeUndefined();
-  expect(enabledAgentMailPlugin({ enabledPlugins: {} })).toBeUndefined();
-  expect(enabledAgentMailPlugin({})).toBeUndefined();
-  expect(enabledAgentMailPlugin(undefined)).toBeUndefined();
+  expect(enabledAgentLoomPlugin({ enabledPlugins: {} })).toBeUndefined();
+  expect(enabledAgentLoomPlugin({})).toBeUndefined();
+  expect(enabledAgentLoomPlugin(undefined)).toBeUndefined();
 });
 
-test("a plugin whose name merely starts with agent-mail does not count", () => {
+test("a plugin whose name merely starts with agent-loom does not count", () => {
   expect(
-    enabledAgentMailPlugin({ enabledPlugins: { "agent-mailer@mkt": true } }),
+    enabledAgentLoomPlugin({ enabledPlugins: { "agent-loomer@mkt": true } }),
   ).toBeUndefined();
 });
 
@@ -222,7 +222,7 @@ test("standard MCP registration add preserves neighboring settings", () => {
     theme: "dark",
     mcpServers: {
       lore: { command: "lore", args: ["mcp"] },
-      "agent-mail": { command: bun, args: [audit] },
+      "agent-loom": { command: bun, args: [audit] },
     },
   });
   expect(initial).toEqual({
@@ -234,7 +234,7 @@ test("standard MCP registration add preserves neighboring settings", () => {
 test("standard MCP registration preserves conflicts unless replacement is explicit", () => {
   const initial = {
     mcpServers: {
-      "agent-mail": { command: "/other/node", args: ["/other/channel.js"] },
+      "agent-loom": { command: "/other/node", args: ["/other/channel.js"] },
     },
   };
   const conflict = upsertStdioMcpRegistration(initial, bun, audit, false);
@@ -244,7 +244,7 @@ test("standard MCP registration preserves conflicts unless replacement is explic
   const replaced = upsertStdioMcpRegistration(initial, bun, audit, true);
   expect(replaced.status).toBe("replaced");
   expect(replaced.document).toEqual({
-    mcpServers: { "agent-mail": { command: bun, args: [audit] } },
+    mcpServers: { "agent-loom": { command: bun, args: [audit] } },
   });
   expect(
     upsertStdioMcpRegistration(replaced.document, bun, audit, false).status,
@@ -260,7 +260,7 @@ test("standard MCP registration rejects a malformed server map", () => {
 test("standard MCP removal removes owned entries and preserves foreign ones", () => {
   const owned = {
     mcpServers: {
-      "agent-mail": { command: bun, args: [audit] },
+      "agent-loom": { command: bun, args: [audit] },
       lore: { command: "lore", args: ["mcp"] },
     },
   };
@@ -272,7 +272,7 @@ test("standard MCP removal removes owned entries and preserves foreign ones", ()
 
   const foreign = {
     mcpServers: {
-      "agent-mail": { command: "/other/node", args: ["/other/channel.js"] },
+      "agent-loom": { command: "/other/node", args: ["/other/channel.js"] },
     },
   };
   expect(removeStdioMcpRegistration(foreign, bun, audit)).toEqual({
@@ -288,12 +288,12 @@ test("OpenCode registration supports and preserves the 1.x schema", () => {
   };
   const added = upsertOpenCodeMcpRegistration(initial, bun, audit, false);
   expect(added.status).toBe("added");
-  expect(added.path).toEqual(["mcp", "agent-mail"]);
+  expect(added.path).toEqual(["mcp", "agent-loom"]);
   expect(added.document).toEqual({
     theme: "dark",
     mcp: {
       lore: { type: "local", command: ["lore", "mcp"] },
-      "agent-mail": {
+      "agent-loom": {
         type: "local",
         command: [bun, audit],
         enabled: true,
@@ -310,13 +310,13 @@ test("OpenCode registration supports the 2.x schema and respects conflicts", () 
     mcp: {
       disabled: false,
       servers: {
-        "agent-mail": { type: "local", command: ["other", "server"] },
+        "agent-loom": { type: "local", command: ["other", "server"] },
       },
     },
   };
   const conflict = upsertOpenCodeMcpRegistration(initial, bun, audit, false);
   expect(conflict.status).toBe("conflict");
-  expect(conflict.path).toEqual(["mcp", "servers", "agent-mail"]);
+  expect(conflict.path).toEqual(["mcp", "servers", "agent-loom"]);
 
   const replaced = upsertOpenCodeMcpRegistration(initial, bun, audit, true);
   expect(replaced.status).toBe("replaced");
@@ -324,7 +324,7 @@ test("OpenCode registration supports the 2.x schema and respects conflicts", () 
     mcp: {
       disabled: false,
       servers: {
-        "agent-mail": {
+        "agent-loom": {
           type: "local",
           command: [bun, audit],
           disabled: false,
@@ -351,7 +351,7 @@ test("agy reminder hook adds PreInvocation and Stop handlers", () => {
   const result = addReminderHookAgy({}, `${remindBase} agy`);
   expect(result.changed).toBe(true);
   expect(result.document).toEqual({
-    "agent-mail-reminder": {
+    "agent-loom-reminder": {
       PreInvocation: [
         {
           type: "command",
@@ -379,7 +379,7 @@ test("agy reminder hook re-add is a no-op", () => {
 
 test("agy reminder removal preserves neighboring hook configuration", () => {
   const initial = {
-    "agent-mail-reminder": {
+    "agent-loom-reminder": {
       enabled: true,
       PostInvocation: [{ type: "command", command: "other-tool" }],
     },
@@ -505,7 +505,7 @@ test("gemini reminder hook adds BeforeAgent only by default", () => {
         {
           hooks: [
             {
-              name: "agent-mail-remind",
+              name: "agent-loom-remind",
               type: "command",
               command: `${remindBase} gemini --event BeforeAgent`,
               timeout: 5000,
@@ -528,7 +528,7 @@ test("gemini reminder hook adds AfterTool when opted in", () => {
       matcher: "*",
       hooks: [
         {
-          name: "agent-mail-remind",
+          name: "agent-loom-remind",
           type: "command",
           command: `${remindBase} gemini --event AfterTool`,
           timeout: 5000,
@@ -595,7 +595,7 @@ test("kimi reminder hook appends a marked block at EOF", () => {
   expect(result.changed).toBe(true);
   expect(result.document).toBe(
     [
-      "# agent-mail-remind-begin",
+      "# agent-loom-remind-begin",
       "[[hooks]]",
       'event = "UserPromptSubmit"',
       `command = "${remindBase} kimi --event UserPromptSubmit"`,
@@ -605,7 +605,7 @@ test("kimi reminder hook appends a marked block at EOF", () => {
       'event = "Stop"',
       `command = "${remindBase} kimi --event Stop"`,
       "timeout = 5",
-      "# agent-mail-remind-end",
+      "# agent-loom-remind-end",
       "",
     ].join("\n"),
   );
@@ -614,12 +614,12 @@ test("kimi reminder hook appends a marked block at EOF", () => {
 test("kimi reminder hook appends cleanly after another table section", () => {
   // A config ending mid-table (no trailing newline) must still produce valid
   // TOML: the new [[hooks]] header starts its own table.
-  const existing = '[mcp_servers.agent-mail]\ncommand = "bun"';
+  const existing = '[mcp_servers.agent-loom]\ncommand = "bun"';
   const result = addReminderHookKimi(existing, `${remindBase} kimi`);
   expect(result.changed).toBe(true);
   expect(result.document.startsWith(`${existing}\n`)).toBe(true);
   expect(result.document).toContain(
-    '# agent-mail-remind-begin\n[[hooks]]\nevent = "UserPromptSubmit"',
+    '# agent-loom-remind-begin\n[[hooks]]\nevent = "UserPromptSubmit"',
   );
 });
 
@@ -633,12 +633,12 @@ test("kimi reminder hook re-add is a no-op", () => {
 test("kimi reminder hook upgrades the old single-event owned block", () => {
   const legacy = [
     "# before",
-    "# agent-mail-remind-begin",
+    "# agent-loom-remind-begin",
     "[[hooks]]",
     'event = "UserPromptSubmit"',
     `command = "${remindBase} kimi --event UserPromptSubmit"`,
     "timeout = 5",
-    "# agent-mail-remind-end",
+    "# agent-loom-remind-end",
     "[after]",
     "key = 1",
     "",
@@ -646,8 +646,8 @@ test("kimi reminder hook upgrades the old single-event owned block", () => {
   const result = addReminderHookKimi(legacy, `${remindBase} kimi`);
   expect(result.changed).toBe(true);
   expect(result.document).toContain('event = "Stop"');
-  expect(result.document).toContain("# before\n# agent-mail-remind-begin");
-  expect(result.document).toContain("# agent-mail-remind-end\n[after]");
+  expect(result.document).toContain("# before\n# agent-loom-remind-begin");
+  expect(result.document).toContain("# agent-loom-remind-end\n[after]");
 });
 
 test("kimi reminder status reads only the owned marker block", () => {
@@ -685,14 +685,14 @@ test("kimi reminder hook removal is a no-op when the block is absent", () => {
   expect(result.document).toBe(text);
 });
 
-const CODEX_WITH_APPROVALS = `[mcp_servers.agent-mail]
+const CODEX_WITH_APPROVALS = `[mcp_servers.agent-loom]
 command = "/bin/bun"
 args = ["/pkg/dist/channel.js"]
 
-[mcp_servers.agent-mail.tools.send_mail]
+[mcp_servers.agent-loom.tools.send_mail]
 approval_mode = "approve"
 
-[mcp_servers.agent-mail.tools.check_inbox]
+[mcp_servers.agent-loom.tools.check_inbox]
 approval_mode = "approve"
 
 [mcp_servers.other]
@@ -702,14 +702,14 @@ command = "/bin/other"
 test("codex sub-tables are captured without the entry or its neighbours", () => {
   const blocks = codexEntrySubTables(CODEX_WITH_APPROVALS);
   expect(blocks).toEqual([
-    '[mcp_servers.agent-mail.tools.send_mail]\napproval_mode = "approve"',
-    '[mcp_servers.agent-mail.tools.check_inbox]\napproval_mode = "approve"',
+    '[mcp_servers.agent-loom.tools.send_mail]\napproval_mode = "approve"',
+    '[mcp_servers.agent-loom.tools.check_inbox]\napproval_mode = "approve"',
   ]);
 });
 
 test("an entry with no sub-tables captures nothing", () => {
   expect(
-    codexEntrySubTables('[mcp_servers.agent-mail]\ncommand = "/bin/bun"\n'),
+    codexEntrySubTables('[mcp_servers.agent-loom]\ncommand = "/bin/bun"\n'),
   ).toEqual([]);
 });
 
@@ -720,7 +720,7 @@ test("per-tool approvals survive a codex remove-and-add rewrite", () => {
   const rewritten = `[mcp_servers.other]
 command = "/bin/other"
 
-[mcp_servers.agent-mail]
+[mcp_servers.agent-loom]
 command = "/bin/bun"
 args = ["/pkg/dist/channel.js"]
 `;
@@ -738,7 +738,7 @@ test("restoring is a no-op when the sub-tables are already present", () => {
 });
 
 test("restoring nothing leaves the document untouched", () => {
-  const text = '[mcp_servers.agent-mail]\ncommand = "/bin/bun"\n';
+  const text = '[mcp_servers.agent-loom]\ncommand = "/bin/bun"\n';
   const result = restoreCodexEntrySubTables(text, []);
   expect(result.restored).toEqual([]);
   expect(result.document).toBe(text);

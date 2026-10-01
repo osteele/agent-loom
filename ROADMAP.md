@@ -10,13 +10,13 @@ describes one feature of a tool that now also carries session identity, claims,
 leases, experiment numbers, and obligations. Messaging keeps the name "mail".
 
 - Inventory every surface first: GitHub repository and the `npx add-mcp
-  github:osteele/agent-mail` install line; the MCP server name `agent-mail` in
-  each client config (and the `mcp__plugin_agent-mail_agent-mail__*` tool
+  github:osteele/agent-loom` install line; the MCP server name `agent-loom` in
+  each client config (and the `mcp__plugin_agent-loom_agent-loom__*` tool
   prefixes that permission allowlists match); the Claude plugin id; the
-  `agent-mail` CLI; `~/.config/agent-mail`, `~/.claude/agent-mail` state, and
-  the launchd label `com.osteele.agent-mail`; `AGENT_MAIL_*` environment
-  variables; hooks and status-line scripts; the `agent-mail-triage` skill;
-  weft's notify integration; issue-ledger hooks (`agent-mail issues ...`);
+  `agent-loom` CLI; `~/.config/agent-loom`, `~/.claude/agent-loom` state, and
+  the launchd label `com.osteele.agent-loom`; `AGENT_LOOM_*` environment
+  variables; hooks and status-line scripts; the `agent-loom-triage` skill;
+  weft's notify integration; issue-ledger hooks (`agent-loom issues ...`);
   lore and the global agent instructions.
 - Follow the agent-review rename (2026-08): read the old names alongside the
   new ones for a bounded transition, record an old-to-new lookup table, then
@@ -46,7 +46,7 @@ Kimi, and Gemini — if the delivery semantics hold up.
   "queues a turn against the live session"; revisit if it doesn't.
 - **Endpoint registration.** A pinned port collides with concurrent OpenCode
   processes, so `agent-command-guards`' launcher needs dynamic port allocation
-  plus registration of the endpoint in the agent-mail registry (alongside
+  plus registration of the endpoint in the agent-loom registry (alongside
   `capabilities`/`inboundPolicy`), or a shared long-lived server that sessions
   attach to.
 - **Auth is mandatory.** A localhost endpoint that injects prompts into a live
@@ -55,7 +55,7 @@ Kimi, and Gemini — if the delivery semantics hold up.
 - **Fixed system-authored payload only.** `prompt_async` creates something
   resembling a user prompt, so peer-authored mail text sent through it would
   be upgraded into user authority. Push only a fixed "you have unread
-  agent-mail; call `check_inbox`" notification — the same
+  agent-loom; call `check_inbox`" notification — the same
   harness-owned-facts-only rule as the hook reminders (decision 0008).
 - **Fallback:** an OpenCode lifecycle plugin
   (`experimental.chat.system.transform`) if push proves unworkable; plugin
@@ -72,7 +72,7 @@ Kimi, and Gemini — if the delivery semantics hold up.
   `revived`).
 - **Parked-session revival.** Extend the OMP adapter when OMP exposes a
   versioned host API that can enumerate and revive a native session by exact
-  ID. The host should reconstruct the session and inject the message; agent-mail
+  ID. The host should reconstruct the session and inject the message; agent-loom
   must not read OMP's private registry or transcript files. Other harness
   adapters should advertise this capability only when their supported APIs
   provide it.
@@ -80,14 +80,14 @@ Kimi, and Gemini — if the delivery semantics hold up.
   A timeout must leave the reply unread, and the wait must never consume
   unrelated inbox messages.
 - **Native Hub visibility.** Offer a separate, read-only mail-peers and
-  coordination section in compatible harness UIs. Preserve agent-mail and
+  coordination section in compatible harness UIs. Preserve agent-loom and
   native-agent namespaces, show source age and failures, and consume a
-  versioned agent-mail interface.
+  versioned agent-loom interface.
 - **Explicit transport choice.** Let a user choose native immediate messaging
   or durable mail when an exact identity mapping exists. Never fall back
   automatically because a race could deliver the same instruction twice.
 - **Native-message audit.** Allow opt-in recording of successful Hub messages
-  in the flight log and Slack echo without appending them to an agent-mail
+  in the flight log and Slack echo without appending them to an agent-loom
   inbox. Body retention must remain configurable.
 - **Coordination in native inspectors.** Show path claims and work leases beside
   native agent activity. Keep task assignment, logical work ownership, and edit
@@ -112,7 +112,7 @@ Do not replace the spools wholesale yet. Evolve the storage layer in stages:
   read model keyed by file and byte offset. Use it for dashboards, threads,
   receipts, history, and aggregate queries. JSONL remains authoritative, so the
   index can be deleted and rebuilt without recovery work.
-- **Migration criteria:** consider making SQLite authoritative when agent-mail
+- **Migration criteria:** consider making SQLite authoritative when agent-loom
   needs exact transactional admission, efficient retention, session-specific
   unread state, or handoff and lease state machines. Scan latency or background
   query cost becoming noticeable is also a migration signal.
@@ -170,7 +170,7 @@ that session, and `pushed` is a terminal receipt status.
 Retention thresholds warrant a decision record — they are exactly the kind of
 choice a later contributor reverses by mistake.
 
-## Session identity across agent-mail, weft, and Codex
+## Session identity across agent-loom, weft, and Codex
 
 The orphaned-jobs startup announcement is implemented but silent for every job
 submitted from a Codex session, because the two tools disagree about what that
@@ -184,7 +184,7 @@ parent carrying `AGENT_SESSION_ID` whose channel child had no session variable
 at all and registered under a different id, while weft recorded a third value
 (the codex thread id) for jobs submitted from that same shell.
 
-Across 1402 session ids agent-mail has named, not one matches a weft
+Across 1402 session ids agent-loom has named, not one matches a weft
 `submitter_session`. The announcement therefore cannot prove any Codex-submitted
 job is unowned, and correctly says nothing. `hasSeenSession` is what keeps that
 honest — without it every such job reads as an orphan.
@@ -210,7 +210,7 @@ The bot-token plumbing now exists (config `slack_bot_token` / `slack_channel`,
 the Web API helper in `slackDashboard.ts`), so the remaining work is small:
 
 - On echo via the Web API (`chat.postMessage`), persist a `threadId → Slack ts`
-  mapping (a small JSON map under `~/.claude/agent-mail/`, consistent with the
+  mapping (a small JSON map under `~/.claude/agent-loom/`, consistent with the
   filesystem-is-the-bus invariant).
 - A reply whose `threadId` is already mapped posts with that `thread_ts`; a new
   thread records the returned `ts`.
@@ -219,7 +219,7 @@ the Web API helper in `slackDashboard.ts`), so the remaining work is small:
 ## Presence
 
 The registry already tracks attached sessions, protects against recycled pids,
-and combines Claude Code activity with agent-mail `lastSeen` timestamps. The
+and combines Claude Code activity with agent-loom `lastSeen` timestamps. The
 CLI, MCP session listing, dashboards, and Slack routes all use the same readable
 session names and busy/active/idle-age tags. The remaining work is to make that
 presence data directly queryable and useful at send time:
@@ -261,7 +261,7 @@ its claims and work leases release instead of leaking a second resource.
 one parent are always a duplicate, and the registrations that would confirm it
 were removed during a cleanup before they were captured. At least one
 configuration makes the assumption false: a user-scope `mcpServers` entry
-alongside the plugin has one parent legitimately spawning two agent-mail
+alongside the plugin has one parent legitimately spawning two agent-loom
 servers. Terminating listener processes on an unverified premise is the wrong
 trade — capture both registry entries from the next duplicate and check whether
 they share `parentPid` and differ only in `pid` and `started`.
@@ -295,7 +295,7 @@ the standalone command remains a daemon-down fallback. Building on the same
 - **Realtime stream** — a `/api/stream` SSE endpoint so the web dashboard
   updates on append instead of polling; edges in a force-directed graph pulse as
   messages fly (the "flight tracker").
-- **`agent-mail top`** — a pure-terminal live dashboard (presence + sparkline +
+- **`agent-loom top`** — a pure-terminal live dashboard (presence + sparkline +
   scrolling flight log) for when a browser isn't wanted.
 - **Chord diagram / adjacency matrix** — replace the ranked route list with a
   matrix heatmap (scales past ~12 projects) or a chord diagram, with project and

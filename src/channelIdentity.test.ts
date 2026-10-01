@@ -9,23 +9,23 @@ import {
 } from "./channelIdentity.ts";
 
 const PLUGIN_ROOT =
-  "/Users/osteele/code/agent-tools/agent-mail/plugins/agent-mail";
+  "/Users/osteele/code/agent-tools/agent-loom/plugins/agent-loom";
 const HOST_WITH_PLUGIN =
-  "/Users/osteele/.local/bin/claude --channels=plugin:agent-mail@osteele-local --resume f588d728";
+  "/Users/osteele/.local/bin/claude --channels=plugin:agent-loom@osteele-local --resume f588d728";
 
 describe("parseChannelsFlag", () => {
   test("reads the specs off a launch command", () => {
     expect(parseChannelsFlag(HOST_WITH_PLUGIN)).toEqual([
-      "plugin:agent-mail@osteele-local",
+      "plugin:agent-loom@osteele-local",
     ]);
   });
 
   test("accepts the development flag and multiple specs", () => {
     expect(
       parseChannelsFlag(
-        "claude --dangerously-load-development-channels server:agent-mail,plugin:other@mkt",
+        "claude --dangerously-load-development-channels server:agent-loom,plugin:other@mkt",
       ),
-    ).toEqual(["server:agent-mail", "plugin:other@mkt"]);
+    ).toEqual(["server:agent-loom", "plugin:other@mkt"]);
   });
 
   test("distinguishes a missing flag from one selecting nothing", () => {
@@ -36,13 +36,13 @@ describe("parseChannelsFlag", () => {
 
 describe("channelIdentity", () => {
   test("a plugin-spawned server is identified by its plugin", () => {
-    expect(channelIdentity("agent-mail", PLUGIN_ROOT)).toBe(
-      "plugin:agent-mail",
+    expect(channelIdentity("agent-loom", PLUGIN_ROOT)).toBe(
+      "plugin:agent-loom",
     );
   });
 
   test("a config-spawned server is identified by its server name", () => {
-    expect(channelIdentity("agent-mail")).toBe("server:agent-mail");
+    expect(channelIdentity("agent-loom")).toBe("server:agent-loom");
   });
 });
 
@@ -51,7 +51,7 @@ describe("diagnoseChannelPush", () => {
     const d = diagnoseChannelPush({
       hostCommand: HOST_WITH_PLUGIN,
       pluginRoot: PLUGIN_ROOT,
-      serverName: "agent-mail",
+      serverName: "agent-loom",
     });
     expect(d.status).toBe("authorized");
     expect(pushReceiptDetail(d)).toBe("channel:authorized");
@@ -65,18 +65,18 @@ describe("diagnoseChannelPush", () => {
     const d = diagnoseChannelPush({
       hostCommand: HOST_WITH_PLUGIN,
       pluginRoot: undefined,
-      serverName: "agent-mail",
+      serverName: "agent-loom",
     });
     expect(d.status).toBe("identity-unauthorized");
-    expect(d.identity).toBe("server:agent-mail");
+    expect(d.identity).toBe("server:agent-loom");
     expect(pushReceiptDetail(d)).toBe("channel:identity-unauthorized");
     expect(describeChannelPush(d)).toContain("~/.claude.json");
   });
 
   test("an explicit server spec authorizes the user-scope instance", () => {
     const d = diagnoseChannelPush({
-      hostCommand: "claude --channels=server:agent-mail",
-      serverName: "agent-mail",
+      hostCommand: "claude --channels=server:agent-loom",
+      serverName: "agent-loom",
     });
     expect(d.status).toBe("authorized");
   });
@@ -85,7 +85,7 @@ describe("diagnoseChannelPush", () => {
     const d = diagnoseChannelPush({
       hostCommand: "claude --channels=plugin:something-else@osteele-local",
       pluginRoot: PLUGIN_ROOT,
-      serverName: "agent-mail",
+      serverName: "agent-loom",
     });
     expect(d.status).toBe("identity-unauthorized");
   });
@@ -94,7 +94,7 @@ describe("diagnoseChannelPush", () => {
     const d = diagnoseChannelPush({
       hostCommand: "claude --resume abc",
       pluginRoot: PLUGIN_ROOT,
-      serverName: "agent-mail",
+      serverName: "agent-loom",
     });
     expect(d.status).toBe("host-not-loaded");
     expect(pushReceiptDetail(d)).toBe("channel:host-not-loaded");
@@ -103,7 +103,7 @@ describe("diagnoseChannelPush", () => {
   test("an unreadable host command degrades to unknown, not to a verdict", () => {
     const d = diagnoseChannelPush({
       pluginRoot: PLUGIN_ROOT,
-      serverName: "agent-mail",
+      serverName: "agent-loom",
     });
     expect(d.status).toBe("unknown");
     expect(pushReceiptDetail(d)).toBe("channel:unknown");
@@ -122,7 +122,7 @@ test("every push diagnosis annotates its receipt, including the healthy one", ()
     "unknown",
   ];
   for (const status of statuses) {
-    const detail = pushReceiptDetail({ status, identity: "plugin:agent-mail" });
+    const detail = pushReceiptDetail({ status, identity: "plugin:agent-loom" });
     expect(detail).toBe(`channel:${status}`);
   }
 });

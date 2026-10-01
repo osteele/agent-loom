@@ -2,7 +2,7 @@
  *
  * `paths.ts` resolves STATE_DIR from `homedir()` at module load, so a suite run
  * with the real HOME writes spool, read, and receipt files into
- * ~/.claude/agent-mail. Two suites did, leaving ~37k fuzzed files there.
+ * ~/.claude/agent-loom. Two suites did, leaving ~37k fuzzed files there.
  *
  * This cannot fix it — Bun captures HOME at process start and ignores mutation
  * of `process.env.HOME`, so redirecting from a preload is too late. Only
@@ -15,6 +15,6 @@ import { homedir, tmpdir } from "node:os";
 const home = realpathSync(homedir());
 if (!home.startsWith(realpathSync(tmpdir()))) {
   throw new Error(
-    `agent-mail tests must run under a throwaway HOME (got ${home}). Run \`bun run test\` (scripts/test.sh) rather than \`bun test\`: paths.ts resolves the state root from homedir() at module load, so a suite run with your real HOME writes into ~/.claude/agent-mail.`,
+    `agent-loom tests must run under a throwaway HOME (got ${home}). Run \`bun run test\` (scripts/test.sh) rather than \`bun test\`: paths.ts resolves the state root from homedir() at module load, so a suite run with your real HOME writes into ~/.claude/agent-loom.`,
   );
 }

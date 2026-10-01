@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 function projectDirectory(): string {
-  const directory = mkdtempSync(join(tmpdir(), "agent-mail-session-push-"));
+  const directory = mkdtempSync(join(tmpdir(), "agent-loom-session-push-"));
   temporaryDirectories.push(directory);
   return realpathSync(directory);
 }
@@ -114,7 +114,7 @@ test("Oh My Pi push uses its exact session without another routing id", async ()
     heldMessageLimit: 100,
   });
   expect(response.status).toBe(200);
-  expect(response.headers.get("x-agent-mail-protocol")).toBe(
+  expect(response.headers.get("x-agent-loom-protocol")).toBe(
     String(SESSION_PUSH_PROTOCOL_VERSION),
   );
   if (!response.body) throw new Error("OMP push response has no body");
@@ -209,7 +209,7 @@ test("OMP tool shells without session variables carry a working reply address", 
       {
         env: {
           ...process.env,
-          AGENT_MAIL_PORT: "0",
+          AGENT_LOOM_PORT: "0",
           CLAUDE_CODE_SESSION_ID: "",
           CODEX_THREAD_ID: "",
           AGENT_SESSION_ID: "",
@@ -426,7 +426,7 @@ test("Oh My Pi push rejects an incompatible protocol before registering", async 
 
   const rejected = bridge.connect(input);
   expect(rejected.status).toBe(409);
-  expect(rejected.headers.get("x-agent-mail-protocol")).toBe(
+  expect(rejected.headers.get("x-agent-loom-protocol")).toBe(
     String(SESSION_PUSH_PROTOCOL_VERSION),
   );
   await expect(rejected.json()).resolves.toEqual({
@@ -528,7 +528,7 @@ test("a host with no registered session is refused rather than registered", asyn
     });
     expect(refused.status).toBe(503);
     await expect(refused.json()).resolves.toMatchObject({
-      error: expect.stringContaining("no agent-mail session is registered"),
+      error: expect.stringContaining("no agent-loom session is registered"),
     });
     // The point of the refusal: nothing was written, so no second identity and
     // no name for peers to address.

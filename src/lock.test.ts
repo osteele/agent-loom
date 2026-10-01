@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function makeRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-lock-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-lock-"));
   temporaryDirectories.push(root);
   return root;
 }

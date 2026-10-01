@@ -1,7 +1,7 @@
 /* Experimental MCP byte bridge. The peer socket must implement the MCP server.
  * Build: clang -O2 -std=c11 -Wall -Wextra -Werror -pthread -o mcp-bridge examples/mcp-bridge.c
  * Run:   mcp-bridge /path/to/owned/socket
- * No agent-mail client configuration uses this prototype. */
+ * No agent-loom client configuration uses this prototype. */
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>

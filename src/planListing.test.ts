@@ -25,7 +25,7 @@ afterEach(() => {
 
 function fixture() {
   const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "agent-mail-plan-listing-")),
+    mkdtempSync(join(tmpdir(), "agent-loom-plan-listing-")),
   );
   roots.push(root);
   const project = join(root, "project");

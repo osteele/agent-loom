@@ -10,12 +10,12 @@ import { test } from "bun:test";
  *
  * Two controls, and one rule:
  *
- * - `AGENT_MAIL_SLOW_TESTS=skip` drops them, for fast iteration on a loaded
+ * - `AGENT_LOOM_SLOW_TESTS=skip` drops them, for fast iteration on a loaded
  *   machine. They run by default: this repo has no CI yet, so defaulting to
  *   skip would mean nothing ever ran them. Once CI exists it needs no
  *   configuration, since it inherits the default, and a developer opts out
  *   locally rather than CI opting in.
- * - `AGENT_MAIL_SLOW_TEST_TIMEOUT_MS` sets the budget, defaulting high enough
+ * - `AGENT_LOOM_SLOW_TEST_TIMEOUT_MS` sets the budget, defaulting high enough
  *   to survive a loaded machine. A timeout should catch a hang, not a busy
  *   box; on an idle machine these finish in seconds regardless of the ceiling,
  *   so a generous default costs nothing.
@@ -32,19 +32,19 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 export const SLOW_TEST_TIMEOUT_MS = readTimeout();
 
 function readTimeout(): number {
-  const raw = process.env.AGENT_MAIL_SLOW_TEST_TIMEOUT_MS;
+  const raw = process.env.AGENT_LOOM_SLOW_TEST_TIMEOUT_MS;
   if (raw === undefined || raw === "") return DEFAULT_TIMEOUT_MS;
   const parsed = Number.parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
     throw new Error(
-      `AGENT_MAIL_SLOW_TEST_TIMEOUT_MS must be a positive integer, got ${raw}`,
+      `AGENT_LOOM_SLOW_TEST_TIMEOUT_MS must be a positive integer, got ${raw}`,
     );
   }
   return parsed;
 }
 
 export function slowTestsSkipped(): boolean {
-  return process.env.AGENT_MAIL_SLOW_TESTS === "skip";
+  return process.env.AGENT_LOOM_SLOW_TESTS === "skip";
 }
 
 let announced = false;
@@ -64,7 +64,7 @@ export const slowTest: typeof test = ((...args: Parameters<typeof test>) => {
   if (!announced) {
     announced = true;
     console.warn(
-      "agent-mail: SKIPPING slow suites (AGENT_MAIL_SLOW_TESTS=skip). " +
+      "agent-loom: SKIPPING slow suites (AGENT_LOOM_SLOW_TESTS=skip). " +
         "Property-based and daemon tests did not run; unset it before trusting a green result.",
     );
   }

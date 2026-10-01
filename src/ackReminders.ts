@@ -115,7 +115,7 @@ export function ackReminderStatesEqual(
 /** A reminder is itself mail and remains unread after push. Counting it would
  * make the condition self-sustaining: the reminder would become the backlog it
  * reports and fire forever. */
-export function isAgentMailAutomation(message: StoredMessage): boolean {
+export function isAgentLoomAutomation(message: StoredMessage): boolean {
   return (
     message.meta?.coordinationReminder === "true" ||
     message.meta?.ackReminder === "true"
@@ -164,7 +164,7 @@ export function outstandingMail(
   // cannot reach it: `check_inbox` applies this filter and would return none
   // of it.
   for (const message of visibleToSession(messages, receipts, sessionId)) {
-    if (message.read || isAgentMailAutomation(message)) continue;
+    if (message.read || isAgentLoomAutomation(message)) continue;
     // Age from the push when the transport accepted a message, and from the
     // message timestamp when no push occurred.
     const from = pushedAt.get(message.id) ?? Date.parse(message.ts);
@@ -229,7 +229,7 @@ export function prepareAckReminder(
     pushed,
     neverPushed,
     oldestMs,
-    message: `Agent-mail delivery reminder: ${count} ${noun} outstanding for you (${parts.join(", ")}); oldest ${formatAge(oldestMs)}. Call check_inbox to retrieve unread mail, or mark_read only messages you have already handled from a push.`,
+    message: `Agent-loom delivery reminder: ${count} ${noun} outstanding for you (${parts.join(", ")}); oldest ${formatAge(oldestMs)}. Call check_inbox to retrieve unread mail, or mark_read only messages you have already handled from a push.`,
     // One reminder per mailbox per interval, including retries after rate limits.
     idempotencyKey: `ack-reminder:${mailboxKey}:${Math.floor(nowMs / ACK_REMINDER_INTERVAL_MS)}`,
   };

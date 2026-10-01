@@ -11,7 +11,7 @@ import {
 import { canonicalProject } from "./paths.ts";
 
 function makeDirs(): { project: string; dir: string; cleanup: () => void } {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-announced-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-announced-"));
   return {
     project: canonicalProject(root),
     dir: join(root, "announced"),

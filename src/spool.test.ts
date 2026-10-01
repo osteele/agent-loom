@@ -150,7 +150,7 @@ test("known broken channel setup records an unreachable attempt, not a push", ()
 });
 
 test("appendMessage persists intended-recipient evidence without a receiver poll", () => {
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-intent-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-intent-"));
   const instanceId = "intent-test-instance";
   const procStart = processInfo([process.pid]).get(process.pid)?.start;
   if (!procStart) throw new Error("test process liveness unavailable");
@@ -188,7 +188,7 @@ test("appendMessage persists intended-recipient evidence without a receiver poll
 });
 
 test("appendMessage stamps the spooled receipt with the sender session", () => {
-  const project = mkdtempSync(join(tmpdir(), "agent-mail-sender-"));
+  const project = mkdtempSync(join(tmpdir(), "agent-loom-sender-"));
   try {
     appendMessage({
       ...base,
@@ -319,7 +319,7 @@ test("zero disables body deduplication and rate limiting", () => {
 });
 
 test("guarded admission serializes a daemon and direct fallback", async () => {
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-spool-race-"));
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-spool-race-"));
   const project = join(root, "project");
   const marker = join(root, "child-started");
   const script = join(root, "append.ts");
@@ -399,9 +399,9 @@ test("findReceipts locates a sent message's receipts in the recipient's project"
   // sender querying its own project always saw nothing, and an empty result
   // reads as "dropped". Three sessions acted on that in one day. STATE_DIR is
   // resolved at module load from HOME, so this runs in a subprocess.
-  const root = mkdtempSync(join(tmpdir(), "agent-mail-findreceipts-"));
-  const receiptsDir = join(root, ".claude", "agent-mail", "receipts");
-  const inboxDir = join(root, ".claude", "agent-mail", "inbox");
+  const root = mkdtempSync(join(tmpdir(), "agent-loom-findreceipts-"));
+  const receiptsDir = join(root, ".claude", "agent-loom", "receipts");
+  const inboxDir = join(root, ".claude", "agent-loom", "inbox");
   mkdirSync(receiptsDir, { recursive: true });
   mkdirSync(inboxDir, { recursive: true });
   const sender = "/projects/sender";
@@ -462,7 +462,7 @@ let receiptProjectCounter = 0;
 function receiptProject(): string {
   ensureDirs();
   receiptProjectCounter += 1;
-  const project = `/tmp/agent-mail-receipt-tail-${receiptProjectCounter}`;
+  const project = `/tmp/agent-loom-receipt-tail-${receiptProjectCounter}`;
   rmSync(receiptPath(project), { force: true });
   return project;
 }

@@ -1,61 +1,63 @@
 #!/usr/bin/env node
-/** agent-mail CLI.
+/** agent-loom CLI.
  *
  * Messaging:
- *   agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id> | --role owner] [--no-slack]
- *   agent-mail inbox [--project <dir>] [--limit N] [--unread] [--peek]
- *   agent-mail triage-candidates [--project <dir>] [--limit N]
- *   agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)
- *   agent-mail listeners [--project <dir>] [--json] [--no-sync]
- *   agent-mail session-address --project <absolute-dir> --session <raw-id> --json
- *   agent-mail mute|unmute (--session <name-or-id> | --project <dir>)
- *   agent-mail claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
- *   agent-mail claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>] [--plan <stem> [--plan-project <dir>]]
- *   agent-mail claims [--project <dir> | --all] [--history]
- *   agent-mail release-claim (--id <claim-id> | --token <release-token>) [--project <dir>]
- *   agent-mail work list [--project <dir> | --all]
- *   agent-mail work acquire --type <type> --key <key> [--project <dir>] [--owner <label>]
- *   agent-mail work update --id <work-id> [--state working|waiting]
- *   agent-mail work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]
- *   agent-mail coordination list [--project <dir> | --all]
- *   agent-mail coordination recover --id <coordination-id> [--authority <text> --reason <text>]
- *   agent-mail obligations announce (--obligor <name-or-id> | --user |
+ *   agent-loom notify --project <dir> --message <text> [--from <label>] [--session <name-or-id> | --role owner] [--no-slack]
+ *   agent-loom inbox [--project <dir>] [--limit N] [--unread] [--peek]
+ *   agent-loom triage-candidates [--project <dir>] [--limit N]
+ *   agent-loom mark-read [--project <dir>] (--id <message-id>... | --all)
+ *   agent-loom listeners [--project <dir>] [--json] [--no-sync]
+ *   agent-loom session-address --project <absolute-dir> --session <raw-id> --json
+ *   agent-loom mute|unmute (--session <name-or-id> | --project <dir>)
+ *   agent-loom claim-experiment [--project <dir>] [--notebook <dir>] [--owner <label>]
+ *   agent-loom claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>] [--plan <stem> [--plan-project <dir>]]
+ *   agent-loom claims [--project <dir> | --all] [--history]
+ *   agent-loom release-claim (--id <claim-id> | --token <release-token>) [--project <dir>]
+ *   agent-loom work list [--project <dir> | --all]
+ *   agent-loom work acquire --type <type> --key <key> [--project <dir>] [--owner <label>]
+ *   agent-loom work update --id <work-id> [--state working|waiting]
+ *   agent-loom work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]
+ *   agent-loom coordination list [--project <dir> | --all]
+ *   agent-loom coordination recover --id <coordination-id> [--authority <text> --reason <text>]
+ *   agent-loom obligations announce (--obligor <name-or-id> | --user |
  *                                  --system <name> | --component <name>)
  *                                  --kind <kind> --subject <text>
  *                                  [--description <text>]
  *                                  [--option <text> ...]
  *                                  [--marker <value> [--marker-kind path|label] [--marker-label <text>] ...]
- *   agent-mail obligations update --id <obligation-id>
+ *   agent-loom obligations update --id <obligation-id>
  *                                  [--description <text> | --clear-description]
  *                                  [--option <text> ... | --clear-options]
  *                                  [--marker <value> ... | --clear-markers]
- *   agent-mail obligations comment --id <obligation-id> --text <text> [--user]
- *   agent-mail obligations close|withdraw --id <obligation-id>
- *   agent-mail obligations contest --id <obligation-id> --reason <text> [--user]
- *   agent-mail obligations adopt --predecessor <id> (--resume-id <id> | --authority <text> --reason <text>)
- *   agent-mail obligations owed
- *   agent-mail issues watcher-token | event
+ *   agent-loom obligations comment --id <obligation-id> --text <text> [--user]
+ *   agent-loom obligations close|withdraw --id <obligation-id>
+ *   agent-loom obligations contest --id <obligation-id> --reason <text> [--user]
+ *   agent-loom obligations adopt --predecessor <id> (--resume-id <id> | --authority <text> --reason <text>)
+ *   agent-loom obligations owed
+ *   agent-loom issues watcher-token | event
  *
  * Dashboards:
- *   agent-mail dashboard [--port N] [--open] [--no-tui]
- *   agent-mail slack-dashboard [--watch <seconds>]
+ *   agent-loom dashboard [--port N] [--open] [--no-tui]
+ *   agent-loom slack-dashboard [--watch <seconds>]
  *
  * Status line:
- *   agent-mail status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
+ *   agent-loom status-line [--project <dir>] [--session <id>] [--fields] [--work] [--debug]
  *
  * Reminders (hook-driven, for pull-only harnesses):
- *   agent-mail remind --format agy|codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
- *   agent-mail hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
+ *   agent-loom remind --format agy|codex|kimi|gemini|pi [--event <name>] [--session <id>] [--project <dir>]
+ *   agent-loom hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]
  *
  * Daemon management (launchd-aware: uses launchctl when the LaunchAgent is
  * installed, bare pidfile mode otherwise):
- *   agent-mail start | stop | restart | graceful | status | logs [-f]
+ *   agent-loom start | stop | restart | graceful | status | logs [-f]
  *
  * Setup:
- *   agent-mail install     LaunchAgent (boot start) + installed-client MCP entries
- *   agent-mail uninstall
+ *   agent-loom install     LaunchAgent (boot start) + installed-client MCP entries
+ *   agent-loom uninstall
  */
 
+// First: adopts agent-mail's environment names and state directories (legacyName.ts).
+import "./legacyName.ts";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -114,7 +116,7 @@ import {
   codexEntrySubTables,
   codexRegistrationMatches,
   codexReminderHookEvents,
-  enabledAgentMailPlugin,
+  enabledAgentLoomPlugin,
   geminiReminderHookEvents,
   kimiReminderHookEvents,
   removeNativeAuditHook,
@@ -131,12 +133,16 @@ import {
 } from "./integrations.ts";
 import { issueWatcherSessions, parseIssueLedgerEvent } from "./issueEvents.ts";
 import {
-  AGENT_MAIL_WATCHER_PREFIX,
+  AGENT_LOOM_WATCHER_PREFIX,
   currentLedgerObligations,
   describeLedgerObligation,
   ledgerIssueOwnerRole,
   ledgerObligationRefusal,
 } from "./ledgerIssues.ts";
+import {
+  LEGACY_LAUNCHD_LABEL,
+  migrateLegacyDirectories,
+} from "./legacyName.ts";
 import { readSessionMailHistory } from "./mailHistory.ts";
 import { selectTriageCandidates } from "./mailTriage.ts";
 import { runMailTui } from "./mailTui.ts";
@@ -335,7 +341,7 @@ const OH_MY_PI_PLUGIN_DIR = join(
   dirname(SRC_DIR),
   "examples",
   "oh-my-pi",
-  "agent-mail-push",
+  "agent-loom-push",
 );
 /** The Claude Code plugin directory shipped inside this installation.
  *
@@ -344,7 +350,7 @@ const OH_MY_PI_PLUGIN_DIR = join(
  * sends an npm install's plugin at the author's working tree. `install`
  * generates it here instead, the same way every other registration is
  * generated from `runtimePath()` and the sibling entry points. */
-const CLAUDE_PLUGIN_DIR = join(dirname(SRC_DIR), "plugins", "agent-mail");
+const CLAUDE_PLUGIN_DIR = join(dirname(SRC_DIR), "plugins", "agent-loom");
 const CLAUDE_PLUGIN_MCP = join(CLAUDE_PLUGIN_DIR, ".mcp.json");
 const PLIST_PATH = join(
   homedir(),
@@ -373,7 +379,7 @@ function openCodeConfigPath(): string {
   return existsSync(json) ? json : jsonc;
 }
 
-/** The runtime binary to launch agent-mail's other entry points with.
+/** The runtime binary to launch agent-loom's other entry points with.
  *
  * Whichever interpreter is running this CLI: `node` for an npm install, `bun`
  * in a Bun checkout. Registrations and the launchd plist are written with it,
@@ -431,7 +437,7 @@ function writeClaudePluginMcp(): void {
   }
   const contents = {
     mcpServers: {
-      "agent-mail": {
+      "agent-loom": {
         command: runtimePath(),
         args: [CHANNEL_ENTRY],
         env: {},
@@ -659,7 +665,7 @@ function cmdLogs(args: string[]): void {
   const unknown = args.filter((arg) => !LOGS_ARGS.has(arg));
   if (unknown.length > 0) {
     console.error(`logs: unrecognized argument: ${unknown.join(" ")}`);
-    console.error("usage: agent-mail logs [-f] [--mcp|--lifecycle]");
+    console.error("usage: agent-loom logs [-f] [--mcp|--lifecycle]");
     process.exit(1);
   }
   if (args.includes("--mcp") && args.includes("--lifecycle")) {
@@ -812,7 +818,7 @@ async function cmdNotify(
   const message = flags.message;
   if (typeof project !== "string" || typeof message !== "string") {
     console.error(
-      "usage: agent-mail notify --project <dir> --message <text> [--from <label>] [--session <name-or-id> | --role owner] [--reply-to <id>] [--idempotency-key <key>] [--ttl <seconds>] [--no-slack]",
+      "usage: agent-loom notify --project <dir> --message <text> [--from <label>] [--session <name-or-id> | --role owner] [--reply-to <id>] [--idempotency-key <key>] [--ttl <seconds>] [--no-slack]",
     );
     process.exit(1);
   }
@@ -1038,7 +1044,7 @@ async function cmdNotify(
  * Only the CLI host-process proof can mint a token for that shell. */
 function cmdIssuesWatcherToken(): void {
   const caller = callingSession();
-  if (caller) console.log(`${AGENT_MAIL_WATCHER_PREFIX}${caller.sessionId}`);
+  if (caller) console.log(`${AGENT_LOOM_WATCHER_PREFIX}${caller.sessionId}`);
 }
 
 /** Keep issue-ledger messages on the same guarded daemon/direct-spool delivery
@@ -1320,7 +1326,7 @@ function cmdTriageCandidates(flags: Record<string, string | boolean>): void {
       : canonicalProject(process.cwd());
   const limit = typeof flags.limit === "string" ? Number(flags.limit) : 20;
   if (!Number.isInteger(limit) || limit < 0) {
-    console.error("agent-mail: --limit must be a non-negative integer");
+    console.error("agent-loom: --limit must be a non-negative integer");
     process.exit(1);
   }
   const generatedAt = new Date();
@@ -1384,11 +1390,11 @@ function cmdMarkRead(
   const ids = repeatedFlagValues(args, "id");
   const idFlagCount = args.filter((arg) => arg === "--id").length;
   if (flags.all === true && idFlagCount > 0) {
-    console.error("agent-mail: --all cannot be combined with --id");
+    console.error("agent-loom: --all cannot be combined with --id");
     process.exit(1);
   }
   if (ids.length !== idFlagCount) {
-    console.error("agent-mail: --id requires a message id");
+    console.error("agent-loom: --id requires a message id");
     process.exit(1);
   }
   if (flags.all === true) {
@@ -1397,7 +1403,7 @@ function cmdMarkRead(
   }
   if (ids.length === 0) {
     console.error(
-      "usage: agent-mail mark-read [--project <dir>] (--id <message-id>... | --all)",
+      "usage: agent-loom mark-read [--project <dir>] (--id <message-id>... | --all)",
     );
     process.exit(1);
   }
@@ -1432,18 +1438,18 @@ function cmdSessionAddress(flags: Record<string, string | boolean>): void {
     !statSync(flags.project).isDirectory()
   ) {
     console.error(
-      "agent-mail: --project must be an explicit absolute existing directory",
+      "agent-loom: --project must be an explicit absolute existing directory",
     );
     process.exit(1);
   }
   if (typeof flags.session !== "string" || !flags.session.trim()) {
     console.error(
-      "agent-mail: --session must be an explicit nonempty raw session ID",
+      "agent-loom: --session must be an explicit nonempty raw session ID",
     );
     process.exit(1);
   }
   if (flags.json !== true) {
-    console.error("agent-mail: session-address requires --json");
+    console.error("agent-loom: session-address requires --json");
     process.exit(1);
   }
   const project = canonicalProject(flags.project);
@@ -1542,7 +1548,7 @@ function cmdListeners(flags: Record<string, string | boolean>): void {
 /** Status-line and hook payload fields this command consumes.
  *
  * Claude Code supplies session_id plus workspace paths. Kimi supplies cwd;
- * its agent-mail identity comes from the launcher-minted AGENT_SESSION_ID,
+ * its agent-loom identity comes from the launcher-minted AGENT_SESSION_ID,
  * because Kimi's payload sessionId belongs to a different namespace. Agy
  * supplies workspacePaths and inherits the launcher identity in hook commands. */
 interface StatusLinePayload {
@@ -1601,7 +1607,7 @@ function weftJobsField(sessionId: string | undefined): string {
 
 /** Versioned execution-work document for status clients that opt into it.
  *
- * Work is read from agent-mail's own supported store here, not by the display
+ * Work is read from agent-loom's own supported store here, not by the display
  * scraping `work list` output or opening the store itself. An empty field means
  * the source could not be read; a successful read with no work is the explicit
  * `{version: 1, items: []}` document. */
@@ -1692,7 +1698,7 @@ async function cmdStatusLine(
     if (flags.fields === true) {
       // One spawn, every field the status line wants. A shell script that
       // wanted these separately would have to either call this command four
-      // times or reimplement agent-mail's semantics against the registry and
+      // times or reimplement agent-loom's semantics against the registry and
       // spool — the second is how a display layer starts owning facts it does
       // not compute.
       const peers = peersInProject(sessions, sessionId, names, now, hostPids);
@@ -1727,7 +1733,7 @@ async function cmdStatusLine(
         );
         console.error(
           cause === "unregistered"
-            ? "address: (none) — no channel server is registered for this session, so mail cannot reach it; restart the session to reattach (see agent-mail logs --lifecycle)"
+            ? "address: (none) — no channel server is registered for this session, so mail cannot reach it; restart the session to reattach (see agent-loom logs --lifecycle)"
             : cause === "stale"
               ? "address: (none) — this session's registration has been idle past the staleness threshold and is not counted as present; restart the session to reattach"
               : "address: (none) — several registrations share this session's host process, so none can be identified as this session's; restart the session to reattach",
@@ -1779,7 +1785,7 @@ async function cmdRemind(
     ) {
       // Operator error, not a hook event: stderr is safe, stdout stays clean.
       console.error(
-        "agent-mail remind: --format agy|codex|kimi|gemini|pi required",
+        "agent-loom remind: --format agy|codex|kimi|gemini|pi required",
       );
       return;
     }
@@ -1862,7 +1868,7 @@ async function cmdRemind(
   }
 }
 
-// --- harness hook installation (agent-mail hooks) ------------------------------
+// --- harness hook installation (agent-loom hooks) ------------------------------
 
 type HookHarness = "agy" | "codex" | "kimi" | "gemini";
 
@@ -2003,8 +2009,8 @@ function uninstallHooks(harness: HookHarness): void {
   console.log(`${harness}: removed reminder hooks from ${path}`);
 }
 
-/** agent-mail hooks install|uninstall|status — register the hook commands
- * that make pull-only harnesses run `agent-mail remind` per turn. */
+/** agent-loom hooks install|uninstall|status — register the hook commands
+ * that make pull-only harnesses run `agent-loom remind` per turn. */
 function cmdHooks(
   flags: Record<string, string | boolean>,
   args: string[],
@@ -2042,7 +2048,7 @@ function cmdHooks(
     return;
   }
   throw new Error(
-    "usage: agent-mail hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]",
+    "usage: agent-loom hooks install|uninstall|status [--agy] [--codex] [--kimi] [--gemini] [--gemini-after-tool]",
   );
 }
 
@@ -2247,7 +2253,7 @@ function cmdClaimPath(
   const paths = repeatedFlagValues(args, "path");
   if (paths.length === 0) {
     console.error(
-      "usage: agent-mail claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>] [--plan <stem> [--plan-project <dir>]]",
+      "usage: agent-loom claim-path --path <path> [--path <path> ...] [--directory] [--project <dir>] [--owner <label>] [--plan <stem> [--plan-project <dir>]]",
     );
     process.exit(1);
   }
@@ -2309,7 +2315,7 @@ function cmdReleaseClaim(flags: Record<string, string | boolean>): void {
     typeof flags.token === "string" ? flags.token : undefined;
   if ((claimId === undefined) === (releaseToken === undefined)) {
     console.error(
-      "usage: agent-mail release-claim (--id <claim-id> | --token <release-token>) [--project <dir>]",
+      "usage: agent-loom release-claim (--id <claim-id> | --token <release-token>) [--project <dir>]",
     );
     process.exit(1);
   }
@@ -2389,7 +2395,7 @@ function cmdCoordination(
   if (subcommand === "recover") {
     if (typeof flags.id !== "string") {
       throw new Error(
-        "usage: agent-mail coordination recover --id <coordination-id> [--authority <text> --reason <text>]",
+        "usage: agent-loom coordination recover --id <coordination-id> [--authority <text> --reason <text>]",
       );
     }
     const authority =
@@ -2410,7 +2416,7 @@ function cmdCoordination(
   if (subcommand === "request-transfer") {
     if (typeof flags.id !== "string") {
       throw new Error(
-        "usage: agent-mail coordination request-transfer --id <work-id> [--reason <text>] [--timeout <seconds>] [--owner <label>]",
+        "usage: agent-loom coordination request-transfer --id <work-id> [--reason <text>] [--timeout <seconds>] [--owner <label>]",
       );
     }
     const lease = findWorkLease(flags.id);
@@ -2436,7 +2442,7 @@ function cmdCoordination(
       (flags.decision !== "accept" && flags.decision !== "decline")
     ) {
       throw new Error(
-        "usage: agent-mail coordination respond-transfer --id <request-id> --decision accept|decline [--message <text>] [--owner <label>]",
+        "usage: agent-loom coordination respond-transfer --id <request-id> --decision accept|decline [--message <text>] [--owner <label>]",
       );
     }
     const request = transfers.get(flags.id);
@@ -2479,7 +2485,7 @@ function cmdCoordination(
     return;
   }
   throw new Error(
-    "usage: agent-mail coordination list|recover|request-transfer|respond-transfer|transfers [options]",
+    "usage: agent-loom coordination list|recover|request-transfer|respond-transfer|transfers [options]",
   );
 }
 
@@ -2495,7 +2501,7 @@ const SESSION_ID_SHAPE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function describeObligation(obligation: Obligation): string {
-  // Role obligors render their resolution provenance ("owner of agent-mail
+  // Role obligors render their resolution provenance ("owner of agent-loom
   // → <session>"); an unresolvable role renders as unresolvable, and a
   // session or human obligor renders as its label as before.
   const obligor = obligations.describeObligor(obligation);
@@ -2539,7 +2545,7 @@ function obligationNotice(
 ): Message {
   return {
     ts: new Date().toISOString(),
-    from: "agent-mail-obligations",
+    from: "agent-loom-obligations",
     project,
     message: `${obligation.obligee.label} announced obligation ${obligation.id}: you owe a ${obligation.kind} outcome — ${obligation.subject}. Contest it with obligations_contest if it is wrong; the obligee closes it.`,
     origin: {
@@ -2691,7 +2697,7 @@ function cmdObligations(
     } else if (flags.component !== undefined) {
       if (typeof flags.component !== "string" || !flags.component.trim()) {
         throw new Error(
-          "--component requires the component's name, e.g. agent-mail",
+          "--component requires the component's name, e.g. agent-loom",
         );
       }
       const component = flags.component.trim();
@@ -2769,7 +2775,7 @@ function cmdObligations(
   if (subcommand === "update") {
     if (typeof flags.id !== "string" || !flags.id.trim()) {
       throw new Error(
-        "usage: agent-mail obligations update --id <obligation-id> [--description <text> | --clear-description] [--option <text> ... | --clear-options] [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]",
+        "usage: agent-loom obligations update --id <obligation-id> [--description <text> | --clear-description] [--option <text> ... | --clear-options] [--marker <value> [--marker-kind path|label] [--marker-label <text>] ... | --clear-markers]",
       );
     }
     if (
@@ -2827,7 +2833,7 @@ function cmdObligations(
       !flags.text.trim()
     ) {
       throw new Error(
-        "usage: agent-mail obligations comment --id <obligation-id> --text <text> [--user]",
+        "usage: agent-loom obligations comment --id <obligation-id> --text <text> [--user]",
       );
     }
     const actor =
@@ -2845,7 +2851,7 @@ function cmdObligations(
   if (subcommand === "close") {
     if (typeof flags.id !== "string" || !flags.id.trim()) {
       throw new Error(
-        "usage: agent-mail obligations close --id <obligation-id> [--resolution <text>]",
+        "usage: agent-loom obligations close --id <obligation-id> [--resolution <text>]",
       );
     }
     const closeRefusal = ledgerObligationRefusal(flags.id.trim(), "close");
@@ -2863,7 +2869,7 @@ function cmdObligations(
   if (subcommand === "withdraw") {
     if (typeof flags.id !== "string" || !flags.id.trim()) {
       throw new Error(
-        "usage: agent-mail obligations withdraw --id <obligation-id>",
+        "usage: agent-loom obligations withdraw --id <obligation-id>",
       );
     }
     const withdrawRefusal = ledgerObligationRefusal(
@@ -2881,7 +2887,7 @@ function cmdObligations(
   if (subcommand === "contest") {
     if (typeof flags.id !== "string" || !flags.id.trim()) {
       throw new Error(
-        "usage: agent-mail obligations contest --id <obligation-id> --reason <text> [--user]",
+        "usage: agent-loom obligations contest --id <obligation-id> --reason <text> [--user]",
       );
     }
     if (typeof flags.reason !== "string" || !flags.reason.trim()) {
@@ -2985,7 +2991,7 @@ function cmdObligations(
       !flags.reason.trim()
     ) {
       throw new Error(
-        "usage: agent-mail obligations clear --id <obligation-id> --authority <text> --reason <text>",
+        "usage: agent-loom obligations clear --id <obligation-id> --authority <text> --reason <text>",
       );
     }
     const clearRefusal = ledgerObligationRefusal(flags.id.trim(), "clear");
@@ -3044,7 +3050,7 @@ function cmdObligations(
     return;
   }
   throw new Error(
-    "usage: agent-mail obligations announce|close|withdraw|contest|adopt|clear|list|owed [options]",
+    "usage: agent-loom obligations announce|close|withdraw|contest|adopt|clear|list|owed [options]",
   );
 }
 
@@ -3098,7 +3104,7 @@ function cmdOwner(
   const action = args[0]?.startsWith("-") ? "show" : (args[0] ?? "show");
   if (!["show", "claim", "release"].includes(action))
     throw new Error(
-      "usage: agent-mail owner [show|claim|release] [--project <dir>] [--json]",
+      "usage: agent-loom owner [show|claim|release] [--project <dir>] [--json]",
     );
   const project = claimProject(flags);
   if (action !== "show") {
@@ -3158,7 +3164,7 @@ function cmdMail(args: string[]): void {
     const command = args[0];
     if (command !== "history" && command !== "tui")
       throw new Error(
-        "usage: agent-mail mail history|tui --session ID --project ABS [--once]",
+        "usage: agent-loom mail history|tui --session ID --project ABS [--once]",
       );
     const options = workTuiOptions(args.slice(1), `mail ${command}`);
     if (command === "history") {
@@ -3218,7 +3224,7 @@ function cmdWork(
   if (subcommand === "acquire") {
     if (typeof flags.type !== "string" || typeof flags.key !== "string") {
       throw new Error(
-        "usage: agent-mail work acquire --type <type> --key <key> [--label <label>] [--source <path>] [--state working|waiting] [--activity <text>] [--project <dir>] [--owner <label>]",
+        "usage: agent-loom work acquire --type <type> --key <key> [--label <label>] [--source <path>] [--state working|waiting] [--activity <text>] [--project <dir>] [--owner <label>]",
       );
     }
     const project = claimProject(flags);
@@ -3264,7 +3270,7 @@ function cmdWork(
   if (subcommand === "update") {
     if (typeof flags.id !== "string") {
       throw new Error(
-        "usage: agent-mail work update --id <work-id> [--state working|waiting] [--activity <text>] [--project <dir>]",
+        "usage: agent-loom work update --id <work-id> [--state working|waiting] [--activity <text>] [--project <dir>]",
       );
     }
     const project = claimProject(flags);
@@ -3299,7 +3305,7 @@ function cmdWork(
   if (subcommand === "release") {
     if (typeof flags.id !== "string") {
       throw new Error(
-        "usage: agent-mail work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]",
+        "usage: agent-loom work release --id <work-id> [--project <dir>] [--outcome completed|abandoned]",
       );
     }
     const outcome =
@@ -3323,7 +3329,7 @@ function cmdWork(
   }
 
   throw new Error(
-    "usage: agent-mail work list|tui|acquire|update|release [options]",
+    "usage: agent-loom work list|tui|acquire|update|release [options]",
   );
 }
 
@@ -3358,7 +3364,7 @@ function cmdSetMuted(
 ): void {
   const targets = resolveSessionTargets(
     flags,
-    "usage: agent-mail mute|unmute (--session <name-or-id> | --project <dir>)",
+    "usage: agent-loom mute|unmute (--session <name-or-id> | --project <dir>)",
   );
   const names = claudeSessions();
   if (targets.length === 0) {
@@ -3382,13 +3388,13 @@ function cmdSetInboundPolicy(flags: Record<string, string | boolean>): void {
   const policy = typeof flags.policy === "string" ? flags.policy : undefined;
   if (policy !== "accept" && policy !== "hold" && policy !== "refuse") {
     console.error(
-      "usage: agent-mail inbound --policy accept|hold|refuse (--session <name-or-id> | --project <dir>)",
+      "usage: agent-loom inbound --policy accept|hold|refuse (--session <name-or-id> | --project <dir>)",
     );
     process.exit(1);
   }
   const targets = resolveSessionTargets(
     flags,
-    "usage: agent-mail inbound --policy accept|hold|refuse (--session <name-or-id> | --project <dir>)",
+    "usage: agent-loom inbound --policy accept|hold|refuse (--session <name-or-id> | --project <dir>)",
   );
   if (targets.length === 0) {
     console.error("no matching live session");
@@ -3436,31 +3442,31 @@ function registerMcpServer(replace: boolean): void {
     unknown
   >;
   const servers = (doc.mcpServers ?? {}) as Record<string, unknown>;
-  const existing = servers["agent-mail"];
+  const existing = servers["agent-loom"];
   // The plugin already provides this server. Adding a user-scope entry under
   // the same name wins Claude's dedup and demotes the channel identity from
-  // plugin:agent-mail@<marketplace> to server:agent-mail, which the channels
+  // plugin:agent-loom@<marketplace> to server:agent-loom, which the channels
   // allowlist does not cover — push then fails silently. Withdraw instead, and
   // take our own stale entry with us.
-  const plugin = enabledAgentMailPlugin(readClaudeSettings());
+  const plugin = enabledAgentLoomPlugin(readClaudeSettings());
   if (plugin) {
     if (!existing) {
       console.log(
-        `plugin ${plugin} is enabled and provides agent-mail; skipping user-scope mcpServers entry`,
+        `plugin ${plugin} is enabled and provides agent-loom; skipping user-scope mcpServers entry`,
       );
       return;
     }
     if (claudeRegistrationMatches(existing, runtimePath(), CHANNEL_ENTRY)) {
-      const { "agent-mail": _removed, ...rest } = servers;
+      const { "agent-loom": _removed, ...rest } = servers;
       doc.mcpServers = rest;
       writeFileSync(CLAUDE_JSON, JSON.stringify(doc, null, 2));
       console.log(
-        `plugin ${plugin} is enabled; removed the redundant user-scope agent-mail entry (it shadowed the plugin and silently broke channel push). Restart Claude sessions to pick this up.`,
+        `plugin ${plugin} is enabled; removed the redundant user-scope agent-loom entry (it shadowed the plugin and silently broke channel push). Restart Claude sessions to pick this up.`,
       );
       return;
     }
     console.error(
-      `plugin ${plugin} is enabled, but ${CLAUDE_JSON} has a different agent-mail mcpServers entry that shadows it and silently breaks channel push. Remove that entry by hand, or run \`claude mcp remove agent-mail\`.`,
+      `plugin ${plugin} is enabled, but ${CLAUDE_JSON} has a different agent-loom mcpServers entry that shadows it and silently breaks channel push. Remove that entry by hand, or run \`claude mcp remove agent-loom\`.`,
     );
     return;
   }
@@ -3471,13 +3477,13 @@ function registerMcpServer(replace: boolean): void {
     }
     if (!replace) {
       console.error(
-        "Claude already has a different agent-mail MCP entry; leaving it unchanged " +
+        "Claude already has a different agent-loom MCP entry; leaving it unchanged " +
           "(pass --replace-claude to replace it)",
       );
       return;
     }
   }
-  servers["agent-mail"] = {
+  servers["agent-loom"] = {
     type: "stdio",
     command: runtimePath(),
     args: [CHANNEL_ENTRY],
@@ -3485,11 +3491,11 @@ function registerMcpServer(replace: boolean): void {
   };
   doc.mcpServers = servers;
   writeFileSync(CLAUDE_JSON, JSON.stringify(doc, null, 2));
-  console.log(`registered agent-mail in ${CLAUDE_JSON} mcpServers`);
+  console.log(`registered agent-loom in ${CLAUDE_JSON} mcpServers`);
 }
 
 function codexRegistration(): CodexRegistrationProbe {
-  const result = spawnSync("codex", ["mcp", "get", "agent-mail", "--json"], {
+  const result = spawnSync("codex", ["mcp", "get", "agent-loom", "--json"], {
     encoding: "utf8",
   });
   return classifyCodexRegistrationProbe(
@@ -3499,7 +3505,7 @@ function codexRegistration(): CodexRegistrationProbe {
       stderr: result.stderr ?? "",
       ...(result.error ? { error: result.error } : {}),
     },
-    "agent-mail",
+    "agent-loom",
   );
 }
 
@@ -3530,7 +3536,7 @@ function registerCodex(replace: boolean): void {
   }
   if (registration.status === "invalid" || registration.status === "failed") {
     console.error(
-      `could not inspect the Codex agent-mail entry: ${registration.detail}`,
+      `could not inspect the Codex agent-loom entry: ${registration.detail}`,
     );
     return;
   }
@@ -3543,14 +3549,14 @@ function registerCodex(replace: boolean): void {
     }
     if (!replace) {
       console.error(
-        "Codex already has a different agent-mail MCP entry; leaving it unchanged " +
+        "Codex already has a different agent-loom MCP entry; leaving it unchanged " +
           "(pass --replace-codex to replace it)",
       );
       return;
     }
     if (!existsSync(CODEX_CONFIG_PATH)) {
       console.error(
-        `cannot safely replace the Codex agent-mail entry: ${CODEX_CONFIG_PATH} is unavailable for rollback`,
+        `cannot safely replace the Codex agent-loom entry: ${CODEX_CONFIG_PATH} is unavailable for rollback`,
       );
       return;
     }
@@ -3558,29 +3564,29 @@ function registerCodex(replace: boolean): void {
     preserved = codexEntrySubTables(configSnapshot);
     const replacement = replaceCodexRegistrationTransaction(
       configSnapshot,
-      () => runCodexMcp(["remove", "agent-mail"]),
+      () => runCodexMcp(["remove", "agent-loom"]),
       () =>
-        runCodexMcp(["add", "agent-mail", "--", runtimePath(), CHANNEL_ENTRY]),
+        runCodexMcp(["add", "agent-loom", "--", runtimePath(), CHANNEL_ENTRY]),
       (snapshot) => writeFileSync(CODEX_CONFIG_PATH, snapshot),
     );
     if (replacement !== "replaced") {
       if (replacement === "add-failed-restored") {
         console.error(
-          "Codex MCP replacement failed; restored the previous agent-mail registration",
+          "Codex MCP replacement failed; restored the previous agent-loom registration",
         );
       }
       return;
     }
   } else if (
-    !runCodexMcp(["add", "agent-mail", "--", runtimePath(), CHANNEL_ENTRY])
+    !runCodexMcp(["add", "agent-loom", "--", runtimePath(), CHANNEL_ENTRY])
   ) {
     return;
   }
-  console.log("registered agent-mail with Codex");
+  console.log("registered agent-loom with Codex");
   restoreCodexSubTables(preserved);
 }
 
-/** Codex's agent-mail sub-tables as they stand on disk, or none. */
+/** Codex's agent-loom sub-tables as they stand on disk, or none. */
 function readCodexEntrySubTables(): string[] {
   if (!existsSync(CODEX_CONFIG_PATH)) return [];
   return codexEntrySubTables(readFileSync(CODEX_CONFIG_PATH, "utf8"));
@@ -3597,7 +3603,7 @@ function restoreCodexSubTables(blocks: string[]): void {
   if (restored.length === 0) return;
   writeFileSync(CODEX_CONFIG_PATH, document);
   console.log(
-    `restored ${restored.length} Codex agent-mail sub-table(s) that the rewrite dropped`,
+    `restored ${restored.length} Codex agent-loom sub-table(s) that the rewrite dropped`,
   );
 }
 
@@ -3606,7 +3612,7 @@ function unregisterCodex(): void {
   if (registration.status === "unavailable") return;
   if (registration.status === "invalid" || registration.status === "failed") {
     console.error(
-      `could not inspect the Codex agent-mail entry: ${registration.detail}`,
+      `could not inspect the Codex agent-loom entry: ${registration.detail}`,
     );
     return;
   }
@@ -3615,12 +3621,12 @@ function unregisterCodex(): void {
     !codexRegistrationMatches(registration.value, runtimePath(), CHANNEL_ENTRY)
   ) {
     console.error(
-      "Codex agent-mail entry belongs to a different checkout; leaving it unchanged",
+      "Codex agent-loom entry belongs to a different checkout; leaving it unchanged",
     );
     return;
   }
-  if (runCodexMcp(["remove", "agent-mail"])) {
-    console.log("removed agent-mail from Codex MCP servers");
+  if (runCodexMcp(["remove", "agent-loom"])) {
+    console.log("removed agent-loom from Codex MCP servers");
   }
 }
 
@@ -3642,14 +3648,14 @@ function diagnoseGeminiMcpPolicy(document: Record<string, unknown>): void {
     return;
   }
   const mcp = document.mcp as Record<string, unknown>;
-  if (Array.isArray(mcp.allowed) && !mcp.allowed.includes("agent-mail")) {
+  if (Array.isArray(mcp.allowed) && !mcp.allowed.includes("agent-loom")) {
     console.error(
-      `Gemini MCP registration is present, but mcp.allowed in ${GEMINI_SETTINGS_PATH} does not include agent-mail`,
+      `Gemini MCP registration is present, but mcp.allowed in ${GEMINI_SETTINGS_PATH} does not include agent-loom`,
     );
   }
-  if (Array.isArray(mcp.excluded) && mcp.excluded.includes("agent-mail")) {
+  if (Array.isArray(mcp.excluded) && mcp.excluded.includes("agent-loom")) {
     console.error(
-      `Gemini MCP registration is present, but mcp.excluded in ${GEMINI_SETTINGS_PATH} contains agent-mail`,
+      `Gemini MCP registration is present, but mcp.excluded in ${GEMINI_SETTINGS_PATH} contains agent-loom`,
     );
   }
 }
@@ -3681,7 +3687,7 @@ function registerJsonMcpClient(
   }
   if (result.status === "conflict") {
     console.error(
-      `${client} already has a different agent-mail MCP entry; leaving it unchanged ` +
+      `${client} already has a different agent-loom MCP entry; leaving it unchanged ` +
         `(pass --replace-${client.toLocaleLowerCase()} to replace it)`,
     );
     return;
@@ -3690,7 +3696,7 @@ function registerJsonMcpClient(
     console.log(`${client} MCP registration already matches this checkout`);
   } else {
     writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
-    console.log(`registered agent-mail in ${path} mcpServers`);
+    console.log(`registered agent-loom in ${path} mcpServers`);
   }
   if (client === "Gemini") diagnoseGeminiMcpPolicy(result.document);
 }
@@ -3715,13 +3721,13 @@ function unregisterJsonMcpClient(client: JsonMcpClient, path: string): void {
   }
   if (result.status === "foreign") {
     console.error(
-      `${client} agent-mail entry belongs to a different checkout; leaving it unchanged`,
+      `${client} agent-loom entry belongs to a different checkout; leaving it unchanged`,
     );
     return;
   }
   if (result.status !== "removed") return;
   writeFileSync(path, `${JSON.stringify(result.document, null, 2)}\n`);
-  console.log(`removed agent-mail from ${client} MCP servers`);
+  console.log(`removed agent-loom from ${client} MCP servers`);
 }
 
 function readJsoncDocument(path: string): {
@@ -3762,7 +3768,7 @@ function registerOpenCode(replace: boolean): void {
     );
     if (result.status === "conflict") {
       console.error(
-        "OpenCode already has a different agent-mail MCP entry; leaving it unchanged " +
+        "OpenCode already has a different agent-loom MCP entry; leaving it unchanged " +
           "(pass --replace-opencode to replace it)",
       );
       return;
@@ -3775,7 +3781,7 @@ function registerOpenCode(replace: boolean): void {
       formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
     });
     writeFileSync(configPath, applyEdits(text, edits));
-    console.log(`registered agent-mail in ${configPath}`);
+    console.log(`registered agent-loom in ${configPath}`);
   } catch (error) {
     if (!(error instanceof SyntaxError) && !(error instanceof TypeError)) {
       throw error;
@@ -3798,7 +3804,7 @@ function unregisterOpenCode(): void {
     );
     if (result.status === "foreign") {
       console.error(
-        "OpenCode agent-mail entry belongs to a different checkout; leaving it unchanged",
+        "OpenCode agent-loom entry belongs to a different checkout; leaving it unchanged",
       );
       return;
     }
@@ -3807,7 +3813,7 @@ function unregisterOpenCode(): void {
       formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
     });
     writeFileSync(configPath, applyEdits(text, edits));
-    console.log("removed agent-mail from OpenCode MCP servers");
+    console.log("removed agent-loom from OpenCode MCP servers");
   } catch (error) {
     if (!(error instanceof SyntaxError) && !(error instanceof TypeError)) {
       throw error;
@@ -3859,21 +3865,53 @@ function uninstallNativeAuditHook(): void {
   console.log(`removed native SendMessage audit hook from ${CLAUDE_SETTINGS}`);
 }
 
+/** Unload and remove the LaunchAgent installed under the pre-rename label, so
+ * two daemons never contend for one port. */
+function retireLegacyLaunchAgent(): void {
+  const legacyPlist = join(
+    homedir(),
+    "Library",
+    "LaunchAgents",
+    `${LEGACY_LAUNCHD_LABEL}.plist`,
+  );
+  if (!existsSync(legacyPlist)) return;
+  try {
+    launchctl("bootout", `${guiDomain()}/${LEGACY_LAUNCHD_LABEL}`);
+  } catch {
+    // not loaded
+  }
+  rmSync(legacyPlist);
+  console.log(`removed ${legacyPlist}`);
+}
+
 function cmdInstall(flags: Record<string, string | boolean>): void {
   if (flags["dry-run"] === true) {
     console.log(JSON.stringify(installPlan(), null, 2));
     return;
   }
+  // Platform-neutral: a Linux upgrade must adopt the old store too.
+  for (const migration of migrateLegacyDirectories()) {
+    if (migration.outcome === "moved") {
+      console.log(
+        `moved ${migration.from} to ${migration.to} (old path is a symlink)`,
+      );
+    } else if (migration.outcome === "conflict") {
+      console.error(
+        `both ${migration.from} and ${migration.to} exist; merge them by hand, then remove ${migration.from}`,
+      );
+      process.exit(1);
+    }
+  }
   if (process.platform !== "darwin") {
     console.error(
-      "agent-mail install configures a macOS launchd service. On Linux, register the MCP server as shown in the README and run `agent-mail start` for a bare daemon.",
+      "agent-loom install configures a macOS launchd service. On Linux, register the MCP server as shown in the README and run `agent-loom start` for a bare daemon.",
     );
     process.exit(1);
   }
   ensureDirs();
   if (!existsSync(CONFIG_PATH)) {
     const configTemplate = [
-      "# agent-mail config",
+      "# agent-loom config",
       `port = ${loadConfig().port}`,
       '# slack_webhook = "https://hooks.slack.com/services/..."',
       '# slack_echo = "all"  # or "none"',
@@ -3887,7 +3925,7 @@ function cmdInstall(flags: Record<string, string | boolean>): void {
       "# Serve the HTTP dashboard. Off by default: it renders every project's",
       "# sessions, and the daemon port is reachable by any local process.",
       "# dashboard = true",
-      "# Editable Slack dashboard (agent-mail slack-dashboard) needs a bot token:",
+      "# Editable Slack dashboard (agent-loom slack-dashboard) needs a bot token:",
       '# slack_bot_token = "xoxb-..."  # chat:write scope; invite the bot to the channel',
       '# slack_channel = "C0123ABCD"',
       "",
@@ -3895,6 +3933,7 @@ function cmdInstall(flags: Record<string, string | boolean>): void {
     writeFileSync(CONFIG_PATH, configTemplate);
     console.log(`wrote ${CONFIG_PATH}`);
   }
+  retireLegacyLaunchAgent();
   writeFileSync(PLIST_PATH, plistContents());
   console.log(`wrote ${PLIST_PATH}`);
   writeClaudePluginMcp();
@@ -3952,18 +3991,18 @@ function cmdUninstall(): void {
     if (
       servers &&
       claudeRegistrationMatches(
-        servers["agent-mail"],
+        servers["agent-loom"],
         runtimePath(),
         CHANNEL_ENTRY,
       )
     ) {
-      const { "agent-mail": _removed, ...rest } = servers;
+      const { "agent-loom": _removed, ...rest } = servers;
       doc.mcpServers = rest;
       writeFileSync(CLAUDE_JSON, JSON.stringify(doc, null, 2));
-      console.log("removed agent-mail from mcpServers");
-    } else if (servers && "agent-mail" in servers) {
+      console.log("removed agent-loom from mcpServers");
+    } else if (servers && "agent-loom" in servers) {
       console.error(
-        "Claude agent-mail entry belongs to a different checkout; leaving it unchanged",
+        "Claude agent-loom entry belongs to a different checkout; leaving it unchanged",
       );
     }
   }
@@ -3985,7 +4024,7 @@ async function cmdDashboard(
     // setting only documents half the feature. The env form turns it on for
     // one invocation without editing config.
     console.error(
-      `agent-mail dashboard is off. Enable it with \`dashboard = true\` in ${CONFIG_PATH}, or for this run only:\n  AGENT_MAIL_DASHBOARD=1 agent-mail dashboard`,
+      `agent-loom dashboard is off. Enable it with \`dashboard = true\` in ${CONFIG_PATH}, or for this run only:\n  AGENT_LOOM_DASHBOARD=1 agent-loom dashboard`,
     );
     process.exitCode = 1;
     return;
@@ -3997,7 +4036,7 @@ async function cmdDashboard(
         signal: AbortSignal.timeout(750),
       });
       if (response.ok) {
-        console.log(`agent-mail dashboard → ${url} (persistent daemon)`);
+        console.log(`agent-loom dashboard → ${url} (persistent daemon)`);
         if (flags.open === true) openBrowser(url);
         return;
       }
@@ -4010,7 +4049,7 @@ async function cmdDashboard(
     typeof flags.port === "string" ? Number(flags.port) : config.port + 1;
   const server = await serveDashboard(port);
   const url = `http://127.0.0.1:${server.port}/`;
-  console.log(`agent-mail dashboard → ${url}`);
+  console.log(`agent-loom dashboard → ${url}`);
   if (flags.open === true) openBrowser(url);
 
   // Single cleanup, idempotent, run on every exit path so the terminal never
@@ -4117,9 +4156,9 @@ channel, then add to ${CONFIG_PATH}:
   }
 }
 
-const HELP = `agent-mail — durable coordination between coding-agent sessions
+const HELP = `agent-loom — durable coordination between coding-agent sessions
 
-Usage: agent-mail <command> [options]
+Usage: agent-loom <command> [options]
 
 Messaging:
   notify --project <dir> --message <text> [--from <label>] [--reply-to <id>]
@@ -4277,7 +4316,7 @@ Coordination:
                         every project — what you owe, in one place
 
 Issue-ledger hooks:
-  issues watcher-token    Print the caller's agent-mail: watcher token, or
+  issues watcher-token    Print the caller's agent-loom: watcher token, or
                           nothing without a proved host-process match
   issues event            Read one issue-ledger-event/v1 JSON document from
                           stdin, notify exact recipients, and refresh the daemon
@@ -4315,7 +4354,7 @@ Reminders (hook-driven, for pull-only harnesses):
   hooks uninstall [--agy] [--codex] [--kimi] [--gemini]
   hooks status [--agy] [--codex] [--kimi] [--gemini]
                         Register, remove, or inspect the harness hooks that
-                        run "agent-mail remind". With no harness flag, targets
+                        run "agent-loom remind". With no harness flag, targets
                         every harness whose config directory exists
                         (~/.gemini/config, ~/.codex, ~/.kimi-code, ~/.gemini).
                         Gemini's AfterTool hook is synchronous, so it installs
@@ -4345,7 +4384,7 @@ Setup:
                         --dry-run prints the versioned install plan anywhere.
   uninstall             Remove integrations owned by this checkout
 
-Config: ~/.config/agent-mail/config.toml  (port, Slack webhook/bot token)`;
+Config: ~/.config/agent-loom/config.toml  (port, Slack webhook/bot token)`;
 
 function printHelp(stream: "out" | "err" = "out"): void {
   (stream === "err" ? console.error : console.log)(HELP);
@@ -4365,7 +4404,7 @@ function cmdUnregistered(flags: Record<string, string | boolean>): void {
   const windowMinutes =
     typeof flags.window === "string" ? Number(flags.window) : 60;
   if (!Number.isFinite(windowMinutes) || windowMinutes <= 0) {
-    console.error("agent-mail: --window must be a positive number of minutes");
+    console.error("agent-loom: --window must be a positive number of minutes");
     process.exit(1);
   }
   const live = new Set(
@@ -4518,7 +4557,7 @@ switch (cmd) {
     } else if (rest.length === 1 && rest[0] === "event") {
       await cmdIssuesEvent();
     } else {
-      console.error("usage: agent-mail issues watcher-token | event");
+      console.error("usage: agent-loom issues watcher-token | event");
       process.exitCode = 1;
     }
     break;
@@ -4574,7 +4613,7 @@ switch (cmd) {
     printHelp();
     break;
   default:
-    console.error(`agent-mail: unknown command "${cmd}"\n`);
+    console.error(`agent-loom: unknown command "${cmd}"\n`);
     printHelp("err");
     process.exit(1);
 }

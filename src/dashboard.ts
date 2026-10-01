@@ -29,7 +29,7 @@ const PAGE = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>agent-mail dashboard</title>
+<title>agent-loom dashboard</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -69,7 +69,7 @@ const PAGE = String.raw`<!doctype html>
 </head>
 <body>
 <header>
-  <h1>&#x1F4EC; agent-mail</h1>
+  <h1>&#x1F4EC; agent-loom</h1>
   <span class="stat"><b id="t-msgs">&ndash;</b> messages</span>
   <span class="stat"><b id="t-projects">&ndash;</b> projects</span>
   <span class="stat"><b id="t-threads">&ndash;</b> threads</span>

@@ -46,7 +46,7 @@ export function addNativeAuditHook(
   return { document: output, changed: true };
 }
 
-/** Remove only handlers installed by agent-mail, retaining neighboring hooks. */
+/** Remove only handlers installed by agent-loom, retaining neighboring hooks. */
 export function removeNativeAuditHook(
   document: Record<string, unknown>,
   scriptPath: string,
@@ -76,12 +76,12 @@ export function removeNativeAuditHook(
 // --- reminder hooks (pull-only harnesses) -------------------------------------
 //
 // Agy, Codex, Kimi, and Gemini never learn about unread mail unless they ask,
-// so `agent-mail hooks install` registers harness hooks that run `agent-mail
+// so `agent-loom hooks install` registers harness hooks that run `agent-loom
 // remind` on turn activity and, where supported, Stop. Every transform keys on
 // the command string (the hook's routing identity), preserves neighbor hooks,
 // and returns {document, changed} like the native-audit transforms above.
 
-/** Match a hook handler installed by `agent-mail hooks install`. */
+/** Match a hook handler installed by `agent-loom hooks install`. */
 function isReminderHookHandler(value: unknown, command: string): boolean {
   if (!isObject(value) || value.type !== "command") return false;
   return typeof value.command === "string" && value.command.includes(command);
@@ -166,7 +166,7 @@ function agyEventHasReminderHook(
   return false;
 }
 
-export const AGY_REMINDER_HOOK = "agent-mail-reminder";
+export const AGY_REMINDER_HOOK = "agent-loom-reminder";
 export const AGY_REMINDER_EVENTS = ["PreInvocation", "Stop"] as const;
 
 /** Add Agy's direct PreInvocation and Stop command handlers. */
@@ -312,7 +312,7 @@ export function addReminderHookGemini(
     addReminderGroup(output, hooks, "BeforeAgent", {
       hooks: [
         {
-          name: "agent-mail-remind",
+          name: "agent-loom-remind",
           type: "command",
           command: `${command} --event BeforeAgent`,
           timeout: 5000,
@@ -329,7 +329,7 @@ export function addReminderHookGemini(
       matcher: "*",
       hooks: [
         {
-          name: "agent-mail-remind",
+          name: "agent-loom-remind",
           type: "command",
           command: `${command} --event AfterTool`,
           timeout: 5000,
@@ -365,9 +365,9 @@ export function geminiReminderHookEvents(
   );
 }
 
-/** Markers delimiting the agent-mail block in ~/.kimi-code/config.toml. */
-export const KIMI_REMIND_BEGIN_MARKER = "# agent-mail-remind-begin";
-export const KIMI_REMIND_END_MARKER = "# agent-mail-remind-end";
+/** Markers delimiting the agent-loom block in ~/.kimi-code/config.toml. */
+export const KIMI_REMIND_BEGIN_MARKER = "# agent-loom-remind-begin";
+export const KIMI_REMIND_END_MARKER = "# agent-loom-remind-end";
 export const KIMI_REMINDER_EVENTS = ["UserPromptSubmit", "Stop"] as const;
 
 function kimiReminderBlock(command: string): string {
@@ -392,7 +392,7 @@ function kimiReminderBlock(command: string): string {
   ].join("\n");
 }
 
-/** Events present inside agent-mail's owned Kimi marker block. */
+/** Events present inside agent-loom's owned Kimi marker block. */
 export function kimiReminderHookEvents(text: string): string[] {
   const begin = text.indexOf(KIMI_REMIND_BEGIN_MARKER);
   if (begin === -1) return [];
@@ -548,7 +548,7 @@ export type McpRegistrationUpdateStatus =
   | "matching"
   | "conflict";
 
-/** Add or inspect an agent-mail entry in a standard JSON `mcpServers` map.
+/** Add or inspect an agent-loom entry in a standard JSON `mcpServers` map.
  * Neighboring servers and top-level client settings are preserved. */
 export function upsertStdioMcpRegistration(
   document: Record<string, unknown>,
@@ -564,14 +564,14 @@ export function upsertStdioMcpRegistration(
     throw new TypeError("mcpServers must be an object");
   }
   const servers = isObject(output.mcpServers) ? output.mcpServers : {};
-  const existing = servers["agent-mail"];
+  const existing = servers["agent-loom"];
   if (stdioRegistrationMatches(existing, command, channelPath)) {
     return { document: output, status: "matching" };
   }
   if (existing !== undefined && !replace) {
     return { document: output, status: "conflict" };
   }
-  servers["agent-mail"] = { command, args: [channelPath] };
+  servers["agent-loom"] = { command, args: [channelPath] };
   output.mcpServers = servers;
   return {
     document: output,
@@ -581,7 +581,7 @@ export function upsertStdioMcpRegistration(
 
 export type McpRegistrationRemovalStatus = "removed" | "absent" | "foreign";
 
-/** Remove only an agent-mail registration owned by this checkout. */
+/** Remove only an agent-loom registration owned by this checkout. */
 export function removeStdioMcpRegistration(
   document: Record<string, unknown>,
   command: string,
@@ -597,12 +597,12 @@ export function removeStdioMcpRegistration(
   if (!isObject(output.mcpServers)) {
     return { document: output, status: "absent" };
   }
-  const existing = output.mcpServers["agent-mail"];
+  const existing = output.mcpServers["agent-loom"];
   if (existing === undefined) return { document: output, status: "absent" };
   if (!stdioRegistrationMatches(existing, command, channelPath)) {
     return { document: output, status: "foreign" };
   }
-  const { "agent-mail": _removed, ...rest } = output.mcpServers;
+  const { "agent-loom": _removed, ...rest } = output.mcpServers;
   output.mcpServers = rest;
   return { document: output, status: "removed" };
 }
@@ -652,8 +652,8 @@ export function upsertOpenCodeMcpRegistration(
   document: Record<string, unknown>;
   status: McpRegistrationUpdateStatus;
   path:
-    | readonly ["mcp", "agent-mail"]
-    | readonly ["mcp", "servers", "agent-mail"];
+    | readonly ["mcp", "agent-loom"]
+    | readonly ["mcp", "servers", "agent-loom"];
   value: Record<string, unknown>;
 } {
   const output = structuredClone(document);
@@ -661,7 +661,7 @@ export function upsertOpenCodeMcpRegistration(
   const mcp = isObject(output.mcp) ? output.mcp : {};
   const servers =
     serversPath.length === 2 && isObject(mcp.servers) ? mcp.servers : mcp;
-  const existing = servers["agent-mail"];
+  const existing = servers["agent-loom"];
   const value: Record<string, unknown> = {
     type: "local",
     command: [command, channelPath],
@@ -673,14 +673,14 @@ export function upsertOpenCodeMcpRegistration(
     (serversPath.length === 2
       ? (existing as Record<string, unknown>).disabled !== true
       : (existing as Record<string, unknown>).enabled !== false);
-  const path = [...serversPath, "agent-mail"] as
-    | readonly ["mcp", "agent-mail"]
-    | readonly ["mcp", "servers", "agent-mail"];
+  const path = [...serversPath, "agent-loom"] as
+    | readonly ["mcp", "agent-loom"]
+    | readonly ["mcp", "servers", "agent-loom"];
   if (active) return { document: output, status: "matching", path, value };
   if (existing !== undefined && !owned && !replace) {
     return { document: output, status: "conflict", path, value };
   }
-  servers["agent-mail"] = value;
+  servers["agent-loom"] = value;
   if (serversPath.length === 2) {
     mcp.servers = servers;
   }
@@ -702,24 +702,24 @@ export function removeOpenCodeMcpRegistration(
   document: Record<string, unknown>;
   status: McpRegistrationRemovalStatus;
   path:
-    | readonly ["mcp", "agent-mail"]
-    | readonly ["mcp", "servers", "agent-mail"];
+    | readonly ["mcp", "agent-loom"]
+    | readonly ["mcp", "servers", "agent-loom"];
 } {
   const output = structuredClone(document);
   const serversPath = openCodeMcpServersPath(output);
   const mcp = isObject(output.mcp) ? output.mcp : {};
   const servers =
     serversPath.length === 2 && isObject(mcp.servers) ? mcp.servers : mcp;
-  const path = [...serversPath, "agent-mail"] as
-    | readonly ["mcp", "agent-mail"]
-    | readonly ["mcp", "servers", "agent-mail"];
-  const existing = servers["agent-mail"];
+  const path = [...serversPath, "agent-loom"] as
+    | readonly ["mcp", "agent-loom"]
+    | readonly ["mcp", "servers", "agent-loom"];
+  const existing = servers["agent-loom"];
   if (existing === undefined)
     return { document: output, status: "absent", path };
   if (!openCodeRegistrationOwned(existing, command, channelPath)) {
     return { document: output, status: "foreign", path };
   }
-  const { "agent-mail": _removed, ...rest } = servers;
+  const { "agent-loom": _removed, ...rest } = servers;
   if (serversPath.length === 2) {
     mcp.servers = rest;
     output.mcp = mcp;
@@ -729,20 +729,20 @@ export function removeOpenCodeMcpRegistration(
   return { document: output, status: "removed", path };
 }
 
-/** The enabled `agent-mail@<marketplace>` plugin key, if any.
+/** The enabled `agent-loom@<marketplace>` plugin key, if any.
  *
  * A user-scope `mcpServers` entry and the plugin register the same server name,
  * so Claude dedupes them and the user-scope entry wins. That instance's channel
- * identity is `server:agent-mail`, which the channels allowlist does not cover,
+ * identity is `server:agent-loom`, which the channels allowlist does not cover,
  * so its pushes are dropped without an error. Installing the user-scope entry
  * alongside an enabled plugin therefore breaks push — check for the plugin
  * first. */
-export function enabledAgentMailPlugin(settings: unknown): string | undefined {
+export function enabledAgentLoomPlugin(settings: unknown): string | undefined {
   if (!isObject(settings)) return undefined;
   const plugins = settings.enabledPlugins;
   if (!isObject(plugins)) return undefined;
   return Object.keys(plugins).find(
-    (key) => plugins[key] === true && key.split("@", 1)[0] === "agent-mail",
+    (key) => plugins[key] === true && key.split("@", 1)[0] === "agent-loom",
   );
 }
 
@@ -762,14 +762,14 @@ export function claudeRegistrationMatches(
   );
 }
 
-/** The prefix of every sub-table belonging to Codex's agent-mail entry. */
-const CODEX_ENTRY_SUBTABLE_PREFIX = "[mcp_servers.agent-mail.";
+/** The prefix of every sub-table belonging to Codex's agent-loom entry. */
+const CODEX_ENTRY_SUBTABLE_PREFIX = "[mcp_servers.agent-loom.";
 
-/** Sub-tables of Codex's agent-mail entry, verbatim.
+/** Sub-tables of Codex's agent-loom entry, verbatim.
  *
- * `codex mcp add` can only write a transport, so agent-mail registers by
+ * `codex mcp add` can only write a transport, so agent-loom registers by
  * `remove` then `add` -- and `remove` takes the whole subtree with it,
- * including the `[mcp_servers.agent-mail.tools.<name>]` tables that carry
+ * including the `[mcp_servers.agent-loom.tools.<name>]` tables that carry
  * `approval_mode`. Dropping those silently un-gates every tool the user had
  * asked to approve, so they are captured before the rewrite and restored
  * after it. `codex mcp get --json` cannot serve as the snapshot: it reports

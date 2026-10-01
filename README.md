@@ -1,4 +1,4 @@
-# agent-mail
+# agent-loom
 
 Durable local mail and advisory coordination between coding-agent sessions.
 
@@ -6,13 +6,13 @@ You are running several coding agents at once, in different projects and
 different tools. One of them finishes something another is waiting on. You
 copy text from one session and paste it into another.
 
-agent-mail is a local message bus for those sessions. A message lands in a
+agent-loom is a local message bus for those sessions. A message lands in a
 project's on-disk inbox (its spool) whether or not anyone is listening. A
 running session can receive it in context when its push integration is
 enabled.
 
 The same sessions also need to stay out of each other's way and keep track of
-what they are waiting for. agent-mail records that too: who is editing which
+what they are waiting for. agent-loom records that too: who is editing which
 files, who is responsible for which piece of work, and who owes whom a decision,
 a fix, or a finished job.
 
@@ -31,7 +31,7 @@ Sessions address each other by stable names across project directories.
   running session with push enabled can receive it automatically.
   Receipts distinguish spooled, pending, held, pushed, push-unreachable, read,
   refused, and expired mail.
-- **Any endpoint.** agent-mail speaks standard MCP over stdio, so any MCP
+- **Any endpoint.** agent-loom speaks standard MCP over stdio, so any MCP
   client can use the same tools and inboxes. Setup is tested with Claude Code,
   Antigravity CLI, and Codex; the CLI, an HTTP client, or a tool such as
   [weft](https://github.com/osteele/weft) reporting a finished job can send
@@ -58,17 +58,17 @@ maps the boundary.
 
 ## Quick start
 
-Register agent-mail with the agents you use, in one command:
+Register agent-loom with the agents you use, in one command:
 
 ```bash
-npx add-mcp github:osteele/agent-mail --args mcp --name agent-mail --global \
+npx add-mcp github:osteele/agent-loom --args mcp --name agent-loom --global \
   --agent claude-code --agent codex
 ```
 
 Sessions can then send mail, read their inbox, and take claims. The command's
 only effect is the config entry:
 [`add-mcp`](https://github.com/neon-solutions/add-mcp) writes each agent's
-config file, and `npx` fetches agent-mail when a session starts it, so there
+config file, and `npx` fetches agent-loom when a session starts it, so there
 is no repository to clone and no background process to run.
 
 Pass `mcp` through `--args`: add-mcp does not split a quoted command string
@@ -89,12 +89,12 @@ Requires Node 22.18 or later. Restart existing sessions afterward.
 The MCP tools are enough for a complete exchange. In one registered session,
 ask the agent:
 
-> Use agent-mail to send "ping" to the project
+> Use agent-loom to send "ping" to the project
 > `/absolute/path/to/the/receiving/project`.
 
 In a session working in that receiving project, ask:
 
-> Check agent-mail for unread messages, then mark the ping as read.
+> Check agent-loom for unread messages, then mark the ping as read.
 
 That sends a project broadcast. To reach one session when several share the
 project, use `list_sessions` to find its full name and pass that name to
@@ -109,7 +109,7 @@ multiple sessions make it ambiguous and owner-addressed mail is refused.
 See [project owner commands](docs/cli.md#project-owner) for assignment and handoff.
 
 Generated addresses use a credited 256 × 256 subset of Glitch's
-[`friendly-words`](https://github.com/glitchdotcom/friendly-words). Agent-mail
+[`friendly-words`](https://github.com/glitchdotcom/friendly-words). Agent-loom
 does not reuse a noun held by another registered session and normally waits 30
 days before reusing a noun, so a human can usually address an established agent
 by its noun alone. Names may eventually recycle; session IDs remain the durable
@@ -118,9 +118,9 @@ and [the third-party notice](THIRD_PARTY_NOTICES.md).
 
 ### Mail vocabulary
 
-Use **mail** for agent-mail across harnesses. “Check mail,” “read mail,” and an
-unqualified “check the inbox” read the agent-mail inbox. “Send mail” uses
-agent-mail's durable delivery. Name a harness, Hub, teammate, or subagent when
+Use **mail** for agent-loom across harnesses. “Check mail,” “read mail,” and an
+unqualified “check the inbox” read the agent-loom inbox. “Send mail” uses
+agent-loom's durable delivery. Name a harness, Hub, teammate, or subagent when
 you want that harness's native peer messaging instead.
 
 An attached recipient with push support starts a turn when mail arrives. Mail
@@ -132,11 +132,11 @@ session resumes or checks its inbox.
 | Component | What it adds | Setup |
 | --- | --- | --- |
 | MCP registration | `send_mail`, `check_inbox`, session discovery, and coordination | The `npx add-mcp` command above |
-| Local CLI | Shell automation, status commands, daemon management, and dashboards | `npm install -g github:osteele/agent-mail` |
-| Daemon | Slack echo, fast presence status, automatic dead-session cleanup, later-arrival reminder data, and a persistent dashboard | `agent-mail install` on macOS; `agent-mail start` on Linux |
+| Local CLI | Shell automation, status commands, daemon management, and dashboards | `npm install -g github:osteele/agent-loom` |
+| Daemon | Slack echo, fast presence status, automatic dead-session cleanup, later-arrival reminder data, and a persistent dashboard | `agent-loom install` on macOS; `agent-loom start` on Linux |
 | Claude Code channel | Automatic message push into a running Claude session | Add and configure the plugin below |
-| Oh My Pi extension | Automatic exact-session push plus agent-mail and Weft state in OMP's native status line | Link the bundled extension; see [Oh My Pi](docs/oh-my-pi.md) |
-| Reminder hooks | Unread counts on later turns in pull-only clients | `agent-mail hooks install` |
+| Oh My Pi extension | Automatic exact-session push plus agent-loom and Weft state in OMP's native status line | Link the bundled extension; see [Oh My Pi](docs/oh-my-pi.md) |
+| Reminder hooks | Unread counts on later turns in pull-only clients | `agent-loom hooks install` |
 | Web dashboard | Local read-only traffic and coordination view | Set `dashboard = true`; requires the local CLI |
 
 ### Adding the daemon on macOS
@@ -147,9 +147,9 @@ dead sessions. It also supplies later-arrival reminder data and serves the
 persistent dashboard when that dashboard is enabled:
 
 ```bash
-npm install -g github:osteele/agent-mail
-agent-mail install
-agent-mail status
+npm install -g github:osteele/agent-loom
+agent-loom install
+agent-loom status
 ```
 
 Mail is delivered with or without it: when no daemon answers, a session writes
@@ -159,13 +159,13 @@ Nothing about delivery depends on it.
 The LaunchAgent uses the `Interactive` process class for latency-sensitive
 HTTP status requests and push connections.
 
-`agent-mail install` also registers agent-mail with Claude Code and Codex. If
+`agent-loom install` also registers agent-loom with Claude Code and Codex. If
 Antigravity CLI (`agy`), Kimi Code, Gemini CLI, or OpenCode has a user config
 directory, it registers with those clients too. Running both setup paths is
 harmless: a matching entry is a no-op, and a different entry is left alone.
 
-On Linux, the CLI and MCP server work, and `agent-mail start` starts a detached
-bare-mode daemon; agent-mail does not install a Linux boot service.
+On Linux, the CLI and MCP server work, and `agent-loom start` starts a detached
+bare-mode daemon; agent-loom does not install a Linux boot service.
 
 **Platforms.** The CLI and MCP server are tested on macOS and Linux. The
 daemon installer is macOS-only. Windows is unsupported:
@@ -181,12 +181,12 @@ Channel push is a separate opt-in with three parts, all of which must line up.
 The marketplace lives in this repository and can be added directly from
 GitHub. A clone is only needed for local development or testing.
 
-1. **The marketplace added and the plugin installed**, which `agent-mail
+1. **The marketplace added and the plugin installed**, which `agent-loom
    install` does not do for you:
 
    ```bash
-   claude plugin marketplace add osteele/agent-mail
-   claude plugin install agent-mail@osteele-local
+   claude plugin marketplace add osteele/agent-loom
+   claude plugin install agent-loom@osteele-local
    ```
 
 2. **Channels enabled and this plugin allowed**, in managed settings
@@ -196,7 +196,7 @@ GitHub. A clone is only needed for local development or testing.
    {
      "channelsEnabled": true,
      "allowedChannelPlugins": [
-       { "marketplace": "osteele-local", "plugin": "agent-mail" }
+       { "marketplace": "osteele-local", "plugin": "agent-loom" }
      ]
    }
    ```
@@ -204,7 +204,7 @@ GitHub. A clone is only needed for local development or testing.
 3. **Each session launched with the channel loaded:**
 
    ```bash
-   claude --channels=plugin:agent-mail@osteele-local
+   claude --channels=plugin:agent-loom@osteele-local
    ```
 
    This is a per-launch decision, so set it once for every session instead of
@@ -212,7 +212,7 @@ GitHub. A clone is only needed for local development or testing.
    `extra_args`; scoping it to some paths leaves whole directories silently
    without push.
 
-Run `agent-mail status` to see what is actually in place, and `agent-mail
+Run `agent-loom status` to see what is actually in place, and `agent-loom
 listeners` to see which live sessions were launched with the channel: one whose
 host was not is tagged `{channel:host-not-loaded}`.
 
@@ -220,19 +220,19 @@ To test from another registered agent, use the `send_mail` exchange above. If
 you installed the local CLI, the equivalent shell smoke test is:
 
 ```bash
-agent-mail notify --project "$PWD" --from cli --message "agent-mail is ready"
-agent-mail inbox --project "$PWD"
+agent-loom notify --project "$PWD" --from cli --message "agent-loom is ready"
+agent-loom inbox --project "$PWD"
 ```
 
 `inbox` prints the project-wide spool. A verified session acknowledges only the
 returned messages visible to that session; direct mail addressed to a sibling
 session stays unread. Pass `--peek` to read without acknowledging, or `--json`
 for versioned output with structured sender project, name, and session fields.
-Attribution depends on agent-mail proving that the registered session's host
+Attribution depends on agent-loom proving that the registered session's host
 process is an ancestor of the CLI process. An unattributed read reports the
 condition on stderr and leaves the mail unread.
 
-For project-level cleanup, run `agent-mail triage-candidates --project <dir>`
+For project-level cleanup, run `agent-loom triage-candidates --project <dir>`
 with optional `--limit N`. It returns unread broadcasts, direct mail whose
 recipient has no current or recent delivery activity, and direct mail its
 live recipient refused. It excludes direct mail owned by a registered live
@@ -240,16 +240,16 @@ session and conservatively protects a recipient that stamped any delivery
 receipt during the previous hour despite a missing registry entry. The default
 response contains the oldest 20 candidates, reports the total candidate count,
 and sets `truncated` when more remain. After handling the returned messages,
-pass their exact ids as repeated `--id` flags to `agent-mail mark-read`.
+pass their exact ids as repeated `--id` flags to `agent-loom mark-read`.
 Marking a broadcast read removes it from every session's unread view, including
 a live pull-only session that never received it, so this workflow assigns
 project broadcasts to the triaging agent. `--all` would also consume the
 excluded live-session mail.
 
-The local Claude plugin includes the `agent-mail-triage` skill for requests to
+The local Claude plugin includes the `agent-loom-triage` skill for requests to
 process unattended mail or mail for terminated sessions. Other harnesses can
 load the same skill from
-`plugins/agent-mail/skills/agent-mail-triage/`.
+`plugins/agent-loom/skills/agent-loom-triage/`.
 
 Sending has the mirror rule: `notify` stamps a resolvable sender identity when
 it can prove one, and otherwise sends with `--from` as a free-form label. A
@@ -259,9 +259,9 @@ replying to it by name will not resolve.
 ### Read-only session mail history
 
 ```bash
-agent-mail mail tui --session EXACT_ID --project /absolute/project
-agent-mail mail tui --session EXACT_ID --project /absolute/project --once
-agent-mail mail history --session EXACT_ID --project /absolute/project
+agent-loom mail tui --session EXACT_ID --project /absolute/project
+agent-loom mail tui --session EXACT_ID --project /absolute/project --once
+agent-loom mail history --session EXACT_ID --project /absolute/project
 ```
 
 The timeline shows incoming and outgoing mail, newest first, including sends
@@ -301,10 +301,10 @@ never inferred. Invalid selectors or unreadable history exit nonzero.
 
 ### Unread-mail reminders for pull-only clients
 
-Every agent-mail MCP server reports an existing unread backlog in its initial
+Every agent-loom MCP server reports an existing unread backlog in its initial
 instructions. Antigravity CLI (`agy`), Codex, Kimi Code, and Gemini CLI have no
 channel push for mail that arrives afterward. Reminder hooks close that gap:
-the harness runs `agent-mail remind` on turn events, and unread counts enter
+the harness runs `agent-loom remind` on turn events, and unread counts enter
 the model's context when mail is waiting. Agy, Codex, and Kimi also check once
 at Stop. A newly unannounced mail edge requests one follow-up turn; unchanged
 unread mail allows the session to stop. The later-arrival reminders need the
@@ -312,8 +312,8 @@ daemon, which computes the per-session unread summary. Reminder text never
 includes a sender, subject, topic, preview, or body.
 
 ```bash
-agent-mail hooks install
-agent-mail hooks status
+agent-loom hooks install
+agent-loom hooks status
 ```
 
 With no flag, install covers every harness whose config directory exists;
@@ -324,13 +324,13 @@ per-harness details, and verifying that hook output reaches the model.
 
 ### Updating and restarting
 
-Installing the package puts the `agent-mail` command on `PATH`;
-`agent-mail install` is the separate step that creates the launchd service and
-registers agent-mail with Claude Code and Codex, plus Antigravity CLI, Kimi
+Installing the package puts the `agent-loom` command on `PATH`;
+`agent-loom install` is the separate step that creates the launchd service and
+registers agent-loom with Claude Code and Codex, plus Antigravity CLI, Kimi
 Code, Gemini CLI, and OpenCode when their user config directories exist. It
 registers whichever copy you ran it from, and with whichever runtime ran it,
 so the same command works from an installed package and from a development
-checkout. `agent-mail uninstall` unloads and removes the launchd service, then
+checkout. `agent-loom uninstall` unloads and removes the launchd service, then
 removes the audit hook and MCP registrations that belong to this installation.
 
 [docs/install.md](docs/install.md) covers the installer's edge cases: when an
@@ -338,17 +338,50 @@ existing entry is preserved, replaced, or left alone, and the plugin versus
 user-scope registration conflict that silently discards channel pushes.
 
 Restart every existing agent session after an integration change or an
-agent-mail code update. Each session owns a long-running MCP process, so it
+agent-loom code update. Each session owns a long-running MCP process, so it
 does not load new tool schemas or server code automatically.
 Restart the daemon after changing daemon code:
 
 ```bash
-agent-mail restart
+agent-loom restart
 ```
 
-Most daemon configuration changes can be reloaded with `agent-mail graceful`.
-Changing the port requires `agent-mail restart` because the listening socket is
+Most daemon configuration changes can be reloaded with `agent-loom graceful`.
+Changing the port requires `agent-loom restart` because the listening socket is
 bound when the process starts.
+
+### Upgrading from agent-mail
+
+agent-loom was called agent-mail until October 2026. The first time any
+agent-loom command, session, or daemon starts, it moves `~/.claude/agent-mail`
+and `~/.config/agent-mail` to their `agent-loom` names and leaves the old paths
+as symlinks, so a session still running the old build shares the same store.
+If both an old and a new directory already hold data, nothing is moved and
+`agent-loom install` reports the conflict for you to merge by hand.
+Watcher tokens already stored on issues as `agent-mail:<session>` are still
+read; new ones are minted as `agent-loom:<session>`. Two wire identifiers keep
+the old name because other tools match on them: the state-revision `kind`
+(`agent_mail_state_revision`) and the OMP context message type
+(`customType: "agent-mail"`).
+
+Reminder hooks are matched by the exact command they run, so remove the old
+ones with the old build before upgrading (`agent-mail hooks uninstall`), then
+run `agent-loom hooks install`. Otherwise both sets of hooks fire. It also unloads and removes the
+`com.osteele.agent-mail` LaunchAgent before installing
+`com.osteele.agent-loom`, so two daemons never contend for one port.
+`AGENT_MAIL_*` environment variables are still read when the matching
+`AGENT_LOOM_*` variable is unset, the package also installs an `agent-mail`
+command, and the daemon sends the `X-Agent-Mail-Protocol` push header
+alongside `X-Agent-Loom-Protocol`.
+
+The installer registers a server named `agent-loom` and does not remove an
+`agent-mail` entry from a client's config. Remove it yourself, or every
+session runs both servers: `codex mcp remove agent-mail`, the `agent-mail` key
+in the Kimi, Gemini, Antigravity, OMP and OpenCode MCP maps, and, for Claude
+Code, the `agent-mail@osteele-local` plugin (`claude plugin uninstall`). Tool
+names are unchanged, but their MCP prefixes change with the server name, so
+update any permission allowlist that names `mcp__agent-mail__*` or
+`mcp__plugin_agent-mail_agent-mail__*`.
 
 ## How delivery works
 
@@ -395,12 +428,12 @@ instead.
 `list_coordination` shows all four together, with owners and conditions.
 `recover_coordination` releases a record after revalidating its lifecycle.
 Forced recovery requires user-supplied `authority` and `reason` values;
-agent-mail records both in an audit log.
+agent-loom records both in an audit log.
 [docs/architecture.md](docs/architecture.md#coordination-claims) specifies
 conflicts, ownership, release, recovery, and work-lease transfer.
 
 Inspect one session's work and full plan files with
-`agent-mail work tui --session ID --project /absolute/project`.
+`agent-loom work tui --session ID --project /absolute/project`.
 Both selectors are explicit: the view matches the exact originating session ID
 and canonical project, including leases retained across restarts. It reads
 without starting a daemon, pruning records, or changing claims. `--once` emits
@@ -445,7 +478,7 @@ settles it rather than anyone's say-so:
 | Kind | Settles when |
 |---|---|
 | `claim_release` | the referenced claim releases, inside the release transaction |
-| `job_completion` | weft reports the job finished, through `agent-mail notify` |
+| `job_completion` | weft reports the job finished, through `agent-loom notify` |
 | `decision`, `review`, `external_fix` | the obligee closes it with the outcome |
 
 Open issue-ledger issues need no announce: every open issue already **is** an
@@ -454,17 +487,17 @@ obligation, owed by the owner of the issue's component. The daemon snapshots
 open issues from it as read-only `issue:<id>` rows tagged `[issue-ledger]` —
 `obligations list`, `coordination list --all`, the dashboards, and the
 per-session `waiting`/`owed` counts all include them. A session named by an
-`agent-mail:<session-id>` watcher token on the issue is its obligee; an
+`agent-loom:<session-id>` watcher token on the issue is its obligee; an
 unwatched issue is still owed, with no watcher. The rows settle when the
 issue leaves the ledger's open listing, and the mutating verbs refuse them —
 close, note, or unwatch the issue with `issues` instead. The rows are as
 fresh as the last daemon refresh and absent (with a diagnostic line) when the
 daemon or `issues` is unavailable.
 
-Configure issue-ledger's watcher hook with `issues hook set watcher 'agent-mail issues watcher-token'` to record the reporting session when its host identity is proved.
-Configure its event hook with `issues hook set event 'agent-mail issues event'` to notify the component owner and watchers and request an early daemon snapshot refresh.
+Configure issue-ledger's watcher hook with `issues hook set watcher 'agent-loom issues watcher-token'` to record the reporting session when its host identity is proved.
+Configure its event hook with `issues hook set event 'agent-loom issues event'` to notify the component owner and watchers and request an early daemon snapshot refresh.
 
-The `obligations_*` MCP tools and the `agent-mail obligations` subcommands
+The `obligations_*` MCP tools and the `agent-loom obligations` subcommands
 share one store. `announce` creates a record with a short subject; a
 Markdown `--description` carries the context, `--option` declares the choices
 for a decision, and `--marker` points at evidence (a path, or a label resolved
@@ -473,7 +506,7 @@ and `comment` appends a note from either end. `close` and `withdraw` end a
 record as its obligee; `contest` tags it as its obligor.
 
 ```bash
-agent-mail obligations announce --user --kind decision \
+agent-loom obligations announce --user --kind decision \
   --subject "Review packet format" \
   --description '**Finding:** A PDF export drops table labels.' \
   --option 'Tagged **PDF**' --option 'Structured export (`.json`)'
@@ -492,7 +525,7 @@ agent-mail obligations announce --user --kind decision \
 
 ## Configuration
 
-`~/.config/agent-mail/config.toml` holds the port, the Slack echo and
+`~/.config/agent-loom/config.toml` holds the port, the Slack echo and
 dashboard settings, session aliases, the inbound policy, and the rate,
 deduplication, and expiry limits.
 [docs/configuration.md](docs/configuration.md) is the reference.
@@ -503,23 +536,23 @@ An incoming webhook can mirror messages into a Slack channel. Create a Slack
 app and enable [Incoming
 Webhooks](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks).
 Then select **Add New Webhook to Workspace**. Choose the channel that should
-receive agent-mail traffic, then copy the generated webhook URL. Treat this
+receive agent-loom traffic, then copy the generated webhook URL. Treat this
 URL as a secret. Message Markdown is translated to Slack's `mrkdwn`, including
 headings, emphasis, lists, code, and links.
 
-Add the URL to `~/.config/agent-mail/config.toml`:
+Add the URL to `~/.config/agent-loom/config.toml`:
 
 ```toml
 slack_webhook = "https://hooks.slack.com/services/..."
 slack_echo = "all"
 ```
 
-`AGENT_MAIL_SLACK_WEBHOOK` can supply the URL instead. Reload the daemon and
+`AGENT_LOOM_SLACK_WEBHOOK` can supply the URL instead. Reload the daemon and
 send a test message:
 
 ```bash
-agent-mail graceful
-agent-mail notify --project "$PWD" --from cli --message "Slack connection test"
+agent-loom graceful
+agent-loom notify --project "$PWD" --from cli --message "Slack connection test"
 ```
 
 The webhook is enough for per-message echoes. The editable Slack dashboard
@@ -533,16 +566,16 @@ slack_bot_token = "xoxb-..."
 slack_channel = "C0123ABCD"
 ```
 
-Environment-variable equivalents are `AGENT_MAIL_SLACK_BOT_TOKEN` and
-`AGENT_MAIL_SLACK_CHANNEL`. Post or refresh the dashboard with:
+Environment-variable equivalents are `AGENT_LOOM_SLACK_BOT_TOKEN` and
+`AGENT_LOOM_SLACK_CHANNEL`. Post or refresh the dashboard with:
 
 ```bash
-agent-mail slack-dashboard
+agent-loom slack-dashboard
 ```
 
 ### Status lines
 
-`agent-mail status-line` prints this session's display name, whether or not
+`agent-loom status-line` prints this session's display name, whether or not
 anyone else is in the project. Agents can use the display name as an address
 when it is unique in the target project; `list_sessions` also reports the full
 name and session ID for unambiguous routing. The command prints the name this
@@ -551,7 +584,7 @@ session is actually registered and reachable under — see
 why the two can differ. It prints nothing when it cannot resolve a session ID,
 when the session has no registered channel server (so peers could not reach it),
 or when it cannot tell which registration in the project is its own. `--debug`
-says which, and `agent-mail logs --lifecycle` shows when channel servers attach
+says which, and `agent-loom logs --lifecycle` shows when channel servers attach
 and go away.
 
 `--json` returns the version-1
@@ -566,13 +599,13 @@ and `--fields` modes retain their existing behavior.
 messages, delivery mode, and unprocessed weft jobs this session submitted. The
 delivery field is `push`, `pull`, `unknown`, or empty when no registered session
 can be identified. A status line can then show all five from a single
-invocation, rather than reimplementing agent-mail's registry and spool
+invocation, rather than reimplementing agent-loom's registry and spool
 semantics in shell. Fields are only ever appended, so a consuming script can
 split positionally.
 
 `--fields --work` opts into a sixth, versioned JSON field containing the
 resolved session's logical-work leases. Status widgets can use it to show an
-executing research plan or autonomous loop without reading agent-mail's private
+executing research plan or autonomous loop without reading agent-loom's private
 state or parsing human-readable coordination output.
 
 #### Claude Code
@@ -592,8 +625,8 @@ cwd=$(printf '%s' "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 
 # Forward the payload already captured because stdin was consumed above.
 session=""
-if [ -n "$input" ] && command -v agent-mail >/dev/null 2>&1; then
-    session=$(printf '%s' "$input" | agent-mail status-line 2>/dev/null)
+if [ -n "$input" ] && command -v agent-loom >/dev/null 2>&1; then
+    session=$(printf '%s' "$input" | agent-loom status-line 2>/dev/null)
     [ -n "$session" ] && session=" · $session"
 fi
 
@@ -601,7 +634,7 @@ printf '%s%s\n' "${cwd/#$HOME/\~}" "$session"
 ```
 
 ```
-~/code/agent-tools/agent-mail · Quiet Lantern
+~/code/agent-tools/agent-loom · Quiet Lantern
 ```
 
 Then point `statusLine` at it in `~/.claude/settings.json`:
@@ -614,9 +647,9 @@ Then point `statusLine` at it in `~/.claude/settings.json`:
 
 Kimi Code supports an external status-line command through `[status_line]` in
 `~/.kimi-code/tui.toml`. Its native `sessionId` is not the identity registered
-by the agent-mail MCP process. Launch Kimi through a wrapper that exports a
+by the agent-loom MCP process. Launch Kimi through a wrapper that exports a
 fresh `AGENT_SESSION_ID`; the MCP server and status-line command inherit that
-same value. Without it, the example omits agent-mail identity and mailbox
+same value. Without it, the example omits agent-loom identity and mailbox
 fields instead of joining unrelated IDs.
 
 Copy the checked-in formatter from a clone of this repository:
@@ -632,7 +665,7 @@ Then configure Kimi:
 command = "bash ~/.kimi-code/statusline.sh"
 ```
 
-Run `/reload-tui` or restart Kimi. The formatter shows the agent-mail name,
+Run `/reload-tui` or restart Kimi. The formatter shows the agent-loom name,
 delivery mode, unread messages, unprocessed weft jobs, and peers:
 
 ```
@@ -645,13 +678,13 @@ external process.
 
 #### Clients without an external status command
 
-OpenCode, Codex, and Gemini can run the agent-mail MCP server, but their native
-footers do not currently accept an external command or custom agent-mail field.
+OpenCode, Codex, and Gemini can run the agent-loom MCP server, but their native
+footers do not currently accept an external command or custom agent-loom field.
 Gemini and Codex can show their own session identifiers; those identifiers are
-not substitutes for the agent-mail display name or mailbox fields.
+not substitutes for the agent-loom display name or mailbox fields.
 
 Agy, Codex, and Gemini (and Kimi, alongside its status line) can still learn
-about unread mail without polling: `agent-mail hooks install` registers a
+about unread mail without polling: `agent-loom hooks install` registers a
 per-turn hook that injects unread counts into the model's context.
 [docs/reminders.md](docs/reminders.md) covers setup.
 
@@ -663,12 +696,12 @@ the separate Claude Code and Kimi Code payload and rendering constraints.
 The read-only dashboard is off by default because it exposes every project's
 session and message metadata to local processes. Both dashboard forms require
 the local CLI and `dashboard = true` in
-`~/.config/agent-mail/config.toml`. Run `agent-mail graceful` if the daemon is
+`~/.config/agent-loom/config.toml`. Run `agent-loom graceful` if the daemon is
 already running so it picks up that setting. The daemon then serves the
 dashboard at `http://127.0.0.1:8377/`, showing live sessions, coordination
-health, sender-to-recipient traffic, and a flight log. `agent-mail dashboard
+health, sender-to-recipient traffic, and a flight log. `agent-loom dashboard
 --open` opens it; when the daemon is down, the same command starts a
-filesystem-backed fallback server. `agent-mail slack-dashboard` posts the same
+filesystem-backed fallback server. `agent-loom slack-dashboard` posts the same
 summary into Slack and edits that message in place on later runs, which needs
 the bot token rather than the webhook.
 [docs/dashboards.md](docs/dashboards.md) covers both.
@@ -678,18 +711,18 @@ the bot token rather than the webhook.
 The daemon binds 127.0.0.1, so any process running as the local user can submit
 text. All inbound mail is explicitly marked untrusted and cannot approve
 permissions or override the receiving session's rules. Use `hold` or `refuse`
-for sessions that should not accept agent-mail automatically, and do not expose
+for sessions that should not accept agent-loom automatically, and do not expose
 the port.
 
 ## When to use Claude Code's built-ins
 
-Claude Code ships two things that overlap with agent-mail.
+Claude Code ships two things that overlap with agent-loom.
 
 **[Cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging)**
 (`ListAgents` and `SendMessage`, Claude Code 2.1.224) sends a message to a
 named, running Claude session on the same machine. It needs no daemon and no
 configuration. For a direct message to a live Claude session, use it with the
-name or id returned by `ListAgents`. Agent-mail display names such as `Quiet
+name or id returned by `ListAgents`. Agent-loom display names such as `Quiet
 Lantern` are a separate namespace and resolve through `list_sessions` and
 `send_mail`, not native `SendMessage`.
 
@@ -699,10 +732,10 @@ message each other through per-agent mailboxes, with file locking on task
 claims. For parallel work you are launching now, under one lead, in one
 project, use it.
 
-Use agent-mail when the shape is different in one of these ways:
+Use agent-loom when the shape is different in one of these ways:
 
 - **You started the sessions yourself.** Agent teams have a
-  lead and teammates for the lead's lifetime, one team per session. agent-mail
+  lead and teammates for the lead's lifetime, one team per session. agent-loom
   addresses peers that started independently, in their own projects, with no
   hierarchy and nothing to promote or transfer.
 - **Not every endpoint is Claude Code.** Antigravity CLI, Codex, Kimi Code,
@@ -716,10 +749,10 @@ Use agent-mail when the shape is different in one of these ways:
 - **The unit of coordination is a file or a plan, not a task.** Path
   claims express edit exclusion, work leases express who is responsible for a
   logical unit, and the two are deliberately separate.
-- **The traffic is inspectable.** agent-mail keeps unread state,
+- **The traffic is inspectable.** agent-loom keeps unread state,
   threads, and receipts, echoes to Slack, and serves dashboards.
 
-Where Claude Code's built-ins overlap with agent-mail, they are the better
+Where Claude Code's built-ins overlap with agent-loom, they are the better
 choice: they need no daemon, no channel flag, and no second inbox to reason
 about. If your sessions are all Claude Code, all spawned together, and all
 still running, you probably do not need this.
@@ -727,11 +760,11 @@ still running, you probably do not need this.
 ### Auditing native SendMessage
 
 The transports coexist: by default a native `SendMessage` does not pass
-through agent-mail, so it does not appear in the spool, Slack, or dashboards.
-Install the optional audit hook with `agent-mail install --native-audit` to
+through agent-loom, so it does not appear in the spool, Slack, or dashboards.
+Install the optional audit hook with `agent-loom install --native-audit` to
 record successful native `SendMessage` calls in the sender's
-agent-mail log and Slack echo. Audit records are never delivered through an
-agent-mail inbox, which prevents the hook from creating a second delivery or a
+agent-loom log and Slack echo. Audit records are never delivered through an
+agent-loom inbox, which prevents the hook from creating a second delivery or a
 message loop. The hook observes all `SendMessage` calls, including subagent and
 agent-team messages, and records the destination exactly as Claude supplies it.
 It is added to `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`)
@@ -739,7 +772,7 @@ without replacing other hooks.
 
 ## Reference
 
-- [docs/cli.md](docs/cli.md) — every subcommand and flag. `agent-mail help`
+- [docs/cli.md](docs/cli.md) — every subcommand and flag. `agent-loom help`
   prints a compact version of the same listing.
 - [docs/configuration.md](docs/configuration.md) — every config key.
 - [docs/status-line.md](docs/status-line.md) — status-line client adapters,
@@ -750,7 +783,7 @@ without replacing other hooks.
   state outputs.
 - [docs/install.md](docs/install.md) — what the installer preserves, replaces,
   and leaves alone.
-- [docs/architecture.md](docs/architecture.md) — how agent-mail works
+- [docs/architecture.md](docs/architecture.md) — how agent-loom works
   underneath.
 - [docs/decisions/](docs/decisions/README.md) — why it works that way.
 
@@ -758,7 +791,7 @@ without replacing other hooks.
 
 Development setup, the Bun/Node runtime split, and the build are in
 [DEVELOPMENT.md](DEVELOPMENT.md).
-[docs/architecture.md](docs/architecture.md) covers how agent-mail works
+[docs/architecture.md](docs/architecture.md) covers how agent-loom works
 underneath.
 
 ## Related projects
