@@ -7,11 +7,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   decideHeldSettlements,
   decideNewMessageDelivery,
   pendingHeldIds,
+  settled,
 } from "./delivery.ts";
 import { canonicalProject, spoolPath } from "./paths.ts";
 import {
@@ -36,6 +37,7 @@ import {
   markMessagesRead,
   readMessages,
   readReceiptTail,
+  readReceipts,
 } from "./spool.ts";
 
 export const SESSION_PUSH_PROTOCOL_VERSION = 3;
@@ -185,6 +187,46 @@ function verifiedProcessStart(pid: number): string | undefined {
   return scan.processes.get(pid)?.start;
 }
 
+/** Byte offset of the oldest unread message this session was an intended live
+ * recipient of and never settled. Mail spooled while the transport was offline
+ * lies before the end of file at reconnect; the in-memory resume offset does not
+ * survive a daemon restart, so without this such mail is skipped for good. */
+function owedOffset(
+  project: string,
+  sessionId: string,
+  path: string,
+): number | undefined {
+  const receipts = readReceipts(project);
+  const held = new Set(pendingHeldIds(receipts, sessionId));
+  const intended = new Set(
+    receipts
+      .filter((r) => r.status === "pending" && r.sessionId === sessionId)
+      .map((r) => r.messageId),
+  );
+  const owed = new Set(
+    readMessages(project, { limit: 0, unreadOnly: true })
+      .map((message) => message.id)
+      .filter(
+        (id) =>
+          intended.has(id) &&
+          !held.has(id) &&
+          !settled(receipts, id, sessionId),
+      ),
+  );
+  if (owed.size === 0) return undefined;
+  let offset = 0;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    try {
+      if (owed.has((JSON.parse(line) as { id?: string }).id as string))
+        return offset;
+    } catch {
+      // A torn or blank line owes nothing.
+    }
+    offset += Buffer.byteLength(line) + 1;
+  }
+  return undefined;
+}
+
 /** Long-lived exact-session push connections owned by one daemon process. */
 export class SessionPushBridge {
   readonly #connections = new Map<string, SessionPushConnection>();
@@ -291,7 +333,10 @@ export class SessionPushBridge {
     }
     const path = spoolPath(project);
     const currentSize = existsSync(path) ? statSync(path).size : 0;
-    const offset = this.#resumeOffsets.get(key) ?? currentSize;
+    const offset =
+      this.#resumeOffsets.get(key) ??
+      owedOffset(project, sessionId, path) ??
+      currentSize;
     this.#resumeOffsets.delete(key);
     const state: { connection?: SessionPushConnection } = {};
     let streamController:

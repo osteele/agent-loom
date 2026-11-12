@@ -439,7 +439,7 @@ test("OMP invalidates a changed route and rejects status from an earlier visit t
 
     host.connections[1].close();
     await settleStatus();
-    host.tick(2_000);
+    host.tick(1_000); // a dropped online stream retries on a fresh backoff
     await settleStatus();
     host.connections[2].connect("route-a", "project-quiet-lantern");
     await settleStatus();
