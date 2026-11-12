@@ -33,6 +33,8 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { delimiter, join, resolve } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
@@ -302,7 +304,14 @@ export async function serve(options: {
       response.headers.forEach((value, name) =>
         outgoing.setHeader(name, value),
       );
-      outgoing.end(Buffer.from(await response.arrayBuffer()));
+      if (!response.body) return void outgoing.end();
+      // Stream, never buffer: push endpoints keep the body open for the life of
+      // the connection. A client disconnect destroys the source, which cancels
+      // the web stream so the daemon retires that connection.
+      outgoing.flushHeaders();
+      await pipeline(Readable.fromWeb(response.body as never), outgoing).catch(
+        () => {},
+      );
     })().catch(() => {
       // A handler that throws must not take the daemon down; the request fails
       // and the server keeps serving, matching Bun's behavior.
