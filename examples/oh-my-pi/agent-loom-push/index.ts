@@ -529,6 +529,8 @@ export default function agentLoomExtension(pi: ExtensionAPI): void {
           retryDelay = 1_000;
         } catch (error) {
           if (signal.aborted) return;
+          // A stream that came online then dropped starts a fresh backoff.
+          if (state.push === "online") retryDelay = 1_000;
           state.push = "offline";
           ctx.ui.setStatus(STATUS_KEY, renderStatus(state));
           pi.logger.warn(`Agent Mail Push: ${String(error)}`);

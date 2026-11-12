@@ -580,3 +580,42 @@ test("a host with several registered sessions is refused, not guessed at", async
     bridge.close();
   }
 });
+
+test("mail spooled while the transport was offline is delivered after a daemon restart", async () => {
+  const project = projectDirectory();
+  registerHostSession(project, "omp-offline");
+  const input = {
+    project,
+    protocolVersion: SESSION_PUSH_PROTOCOL_VERSION,
+    sessionId: "omp-offline",
+    pid: process.pid,
+    defaultInboundPolicy: "accept" as const,
+    heldMessageLimit: 100,
+  };
+  const before = new OhMyPiPushBridge(() => "test process start");
+  expect(before.connect(input).status).toBe(200);
+  before.close();
+  // A crashed daemon keeps no resume offsets; the client is in its retry delay.
+  appendMessage({
+    id: "while-offline",
+    ts: new Date().toISOString(),
+    from: "Red Rain",
+    project,
+    message: "sent during the outage",
+  });
+  const after = new OhMyPiPushBridge(() => "test process start");
+  const response = after.connect(input);
+  if (!response.body) throw new Error("OMP push response has no body");
+  const reader = response.body.getReader();
+  const buffered = { text: "" };
+  expect(await nextEvent(reader, buffered)).toMatchObject({
+    type: "connected",
+  });
+  await after.poll();
+  expect(await nextEvent(reader, buffered)).toMatchObject({
+    type: "mail",
+    id: "while-offline",
+  });
+  await reader.cancel();
+  after.close();
+});
